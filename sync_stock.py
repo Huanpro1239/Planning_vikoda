@@ -17,10 +17,17 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 HOSTNAME = "vikodacomvn.sharepoint.com"
 SITE_PATH = "/sites/Planning"
 
-SOURCE_PATH = (
+SOURCE_ACTUAL_PATH = (
     "Tinh san xuat Mua hang 2027/"
     "Ton thuc te/"
     "Bao cao ton thuc te hien tai.xlsx"
+)
+
+SOURCE_FACTORY_PATH = (
+    "Tinh san xuat Mua hang 2027/"
+    "Ton He thong/"
+    "Ton Nha May/"
+    "NXT_Vikoda.xlsm"
 )
 
 DEST_PATH = "Tinh san xuat Mua hang 2027/Sắp kế hoạch.xlsx"
@@ -144,15 +151,24 @@ def load_state():
         return {}
 
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
+    if "sources" not in data and data.get("source_etag"):
+        return {
+            "sources": {
+                "actual_stock": data["source_etag"],
+            }
+        }
 
-def save_state(source_etag):
+    return data
+
+
+def save_state(source_etags):
     STATE_FILE.write_text(
         json.dumps(
-            {"source_etag": source_etag},
+            {"sources": source_etags},
             ensure_ascii=False,
             indent=2,
         )
@@ -197,7 +213,7 @@ def clean_number(value):
     return value
 
 
-def read_source_stock(source_bytes):
+def read_actual_stock(source_bytes):
     workbook = load_workbook(
         BytesIO(source_bytes),
         data_only=True,
@@ -205,9 +221,9 @@ def read_source_stock(source_bytes):
     )
 
     worksheet = workbook.worksheets[0]
-    print(f"Sheet nguồn: {worksheet.title}")
+    print(f"[Tồn thực tế] Sheet nguồn: {worksheet.title}")
 
-    stock = {}
+    result = {}
 
     for row in range(1, worksheet.max_row + 1):
         code = normalize_code(
@@ -216,9 +232,9 @@ def read_source_stock(source_bytes):
         if not code:
             continue
 
-        if code in stock:
+        if code in result:
             raise RuntimeError(
-                f"Mã {code} bị lặp trong cột C file nguồn."
+                f"[Tồn thực tế] Mã {code} bị lặp trong cột C."
             )
 
         value_n = to_number(
@@ -230,15 +246,67 @@ def read_source_stock(source_bytes):
             f"O{row}",
         )
 
-        stock[code] = clean_number(value_n + value_o)
+        result[code] = clean_number(value_n + value_o)
 
-    if not stock:
+    if not result:
         raise RuntimeError(
-            "Không đọc được mã sản phẩm nào từ cột C file nguồn."
+            "[Tồn thực tế] Không đọc được mã sản phẩm nào từ cột C."
         )
 
-    print(f"Đọc được {len(stock)} mã sản phẩm từ file nguồn.")
-    return stock
+    print(
+        f"[Tồn thực tế] Đọc được {len(result)} mã, "
+        "đích Ton_kho cột D = N + O."
+    )
+    return result
+
+
+def read_factory_stock(source_bytes):
+    workbook = load_workbook(
+        BytesIO(source_bytes),
+        data_only=True,
+        read_only=True,
+        keep_vba=True,
+    )
+
+    if "Sheet1" not in workbook.sheetnames:
+        raise RuntimeError(
+            "[Tồn nhà máy] Không tìm thấy Sheet1 trong NXT_Vikoda.xlsm."
+        )
+
+    worksheet = workbook["Sheet1"]
+    print("[Tồn nhà máy] Sheet nguồn: Sheet1")
+
+    result = {}
+
+    for row in range(1, worksheet.max_row + 1):
+        code = normalize_code(
+            worksheet.cell(row=row, column=2).value
+        )
+        if not code:
+            continue
+
+        if code in result:
+            raise RuntimeError(
+                f"[Tồn nhà máy] Mã {code} bị lặp trong cột B."
+            )
+
+        value_l = to_number(
+            worksheet.cell(row=row, column=12).value,
+            f"L{row}",
+        )
+
+        result[code] = clean_number(value_l)
+
+    if not result:
+        raise RuntimeError(
+            "[Tồn nhà máy] Không đọc được mã sản phẩm nào từ cột B."
+        )
+
+    print(
+        f"[Tồn nhà máy] Đọc được {len(result)} mã, "
+        "đích Ton_kho cột E = L."
+    )
+    return result
 
 
 def load_shared_strings(archive):
@@ -387,7 +455,7 @@ def set_numeric_cell(row_element, row_number, column_letter, value):
         value_node.text = format(float(value), ".15g")
 
 
-def patch_destination_workbook(dest_bytes, stock):
+def patch_destination_workbook(dest_bytes, column_sources):
     source_buffer = BytesIO(dest_bytes)
     output_buffer = BytesIO()
 
@@ -403,8 +471,12 @@ def patch_destination_workbook(dest_bytes, stock):
             source_zip.read(sheet_path)
         )
 
-        matched = 0
-        missing = []
+        matched = {
+            column: 0 for column in column_sources
+        }
+        missing = {
+            column: [] for column in column_sources
+        }
         seen_dest_codes = set()
 
         rows = sheet_root.xpath(
@@ -440,36 +512,43 @@ def patch_destination_workbook(dest_bytes, stock):
                 )
             seen_dest_codes.add(code)
 
-            if code not in stock:
-                missing.append(code)
-                continue
+            for column, source in column_sources.items():
+                values = source["values"]
+                if code not in values:
+                    missing[column].append(code)
+                    continue
 
-            value = stock[code]
-            set_numeric_cell(
-                row_element,
-                row_number,
-                "D",
-                value,
-            )
+                value = values[code]
+                set_numeric_cell(
+                    row_element,
+                    row_number,
+                    column,
+                    value,
+                )
+                matched[column] += 1
+                print(
+                    f"{code}: {DEST_SHEET}!{column}{row_number} = {value} "
+                    f"({source['label']})"
+                )
 
-            matched += 1
+        for column, source in column_sources.items():
+            if matched[column] == 0:
+                raise RuntimeError(
+                    f"[{source['label']}] Không có mã nào khớp "
+                    f"với cột A sheet {DEST_SHEET}."
+                )
+
             print(
-                f"{code}: {DEST_SHEET}!D{row_number} = {value}"
+                f"[{source['label']}] Đã cập nhật {matched[column]} mã "
+                f"vào cột {column}."
             )
 
-        if matched == 0:
-            raise RuntimeError(
-                "Không có mã sản phẩm nào khớp giữa file nguồn "
-                f"và sheet {DEST_SHEET}."
-            )
-
-        print(f"Đã cập nhật {matched} mã trên sheet {DEST_SHEET}.")
-
-        if missing:
-            print(
-                "Không tìm thấy trong nguồn, giữ nguyên giá trị cũ: "
-                + ", ".join(missing)
-            )
+            if missing[column]:
+                print(
+                    f"[{source['label']}] Không tìm thấy trong nguồn, "
+                    "giữ nguyên giá trị cũ: "
+                    + ", ".join(missing[column])
+                )
 
         new_sheet_xml = etree.tostring(
             sheet_root,
@@ -503,44 +582,79 @@ def main():
 
     print("Đã kết nối site SharePoint Planning.")
 
-    source_item = graph.get_item_by_path(
+    source_actual_item = graph.get_item_by_path(
         drive_id,
-        SOURCE_PATH,
+        SOURCE_ACTUAL_PATH,
+    )
+    source_factory_item = graph.get_item_by_path(
+        drive_id,
+        SOURCE_FACTORY_PATH,
     )
 
-    current_etag = source_item["eTag"]
-    old_etag = load_state().get("source_etag")
+    current_etags = {
+        "actual_stock": source_actual_item["eTag"],
+        "factory_stock": source_factory_item["eTag"],
+    }
+
+    old_etags = load_state().get("sources", {})
+
+    changed_sources = [
+        key
+        for key, etag in current_etags.items()
+        if old_etags.get(key) != etag
+    ]
 
     print(
-        "File nguồn sửa lần cuối:",
-        source_item.get("lastModifiedDateTime"),
+        "[Tồn thực tế] Sửa lần cuối:",
+        source_actual_item.get("lastModifiedDateTime"),
+    )
+    print(
+        "[Tồn nhà máy] Sửa lần cuối:",
+        source_factory_item.get("lastModifiedDateTime"),
     )
 
-    if old_etag == current_etag:
-        print("File nguồn không thay đổi. Kết thúc.")
+    if not changed_sources:
+        print("Không có file nguồn nào thay đổi. Kết thúc.")
         return
 
-    print("Phát hiện file nguồn mới hoặc đã thay đổi.")
+    print(
+        "Nguồn thay đổi:",
+        ", ".join(changed_sources),
+    )
 
     dest_item = graph.get_item_by_path(
         drive_id,
         DEST_PATH,
     )
 
-    source_bytes = graph.download_file(
+    actual_bytes = graph.download_file(
         drive_id,
-        source_item["id"],
+        source_actual_item["id"],
+    )
+    factory_bytes = graph.download_file(
+        drive_id,
+        source_factory_item["id"],
     )
     dest_bytes = graph.download_file(
         drive_id,
         dest_item["id"],
     )
 
-    stock = read_source_stock(source_bytes)
+    actual_stock = read_actual_stock(actual_bytes)
+    factory_stock = read_factory_stock(factory_bytes)
 
     updated_dest_bytes = patch_destination_workbook(
         dest_bytes,
-        stock,
+        {
+            "D": {
+                "label": "Tồn thực tế",
+                "values": actual_stock,
+            },
+            "E": {
+                "label": "Tồn nhà máy",
+                "values": factory_stock,
+            },
+        },
     )
 
     result = graph.upload_file(
@@ -555,7 +669,7 @@ def main():
         result.get("name", "Sắp kế hoạch.xlsx"),
     )
 
-    save_state(current_etag)
+    save_state(current_etags)
     print("SYNC THÀNH CÔNG.")
 
 
