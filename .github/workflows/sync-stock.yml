@@ -2,6 +2,9 @@ name: Sync SharePoint Stock
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types:
+      - sharepoint_stock_updated
   schedule:
     - cron: "*/15 * * * *"
 
