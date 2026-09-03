@@ -21,18 +21,35 @@ SOURCE_ACTUAL_PATH = (
     "Ton thuc te/"
     "Bao cao ton thuc te hien tai.xlsx"
 )
-SOURCE_VIKODA_PATH = (
+
+SOURCE_FACTORY_VIKODA_PATH = (
     "Tinh san xuat Mua hang 2027/"
     "Ton He thong/"
     "Ton Nha May/"
     "NXT_Vikoda.xlsm"
 )
-SOURCE_VKD_PATH = (
+
+SOURCE_FACTORY_VKD_PATH = (
     "Tinh san xuat Mua hang 2027/"
     "Ton He thong/"
     "Ton Nha May/"
     "NXT_VKD.xlsm"
 )
+
+SOURCE_ACCOUNTING_VIKODA_PATH = (
+    "Tinh san xuat Mua hang 2027/"
+    "Ton He thong/"
+    "Ton Ke Toan/"
+    "XNT_ketoan_Vikoda.xlsm"
+)
+
+SOURCE_ACCOUNTING_VKD_PATH = (
+    "Tinh san xuat Mua hang 2027/"
+    "Ton He thong/"
+    "Ton Ke Toan/"
+    "XNT_ketoan_VKD.xlsm"
+)
+
 DEST_PATH = "Tinh san xuat Mua hang 2027/Sắp kế hoạch.xlsx"
 DEST_SHEET = "Ton_kho"
 
@@ -49,15 +66,18 @@ def get_access_token():
         ),
         client_credential=os.environ["MS_CLIENT_SECRET"],
     )
+
     result = app.acquire_token_for_client(
         scopes=["https://graph.microsoft.com/.default"]
     )
+
     token = result.get("access_token")
     if not token:
         raise RuntimeError(
             "Không lấy được Microsoft Graph access token: "
             + json.dumps(result, ensure_ascii=False)
         )
+
     return token
 
 
@@ -72,16 +92,22 @@ class GraphClient:
     def _raise(response):
         if response.ok:
             return
+
         try:
             detail = response.json()
         except Exception:
             detail = response.text
+
         raise RuntimeError(
             f"Microsoft Graph lỗi {response.status_code}: {detail}"
         )
 
     def get_json(self, url, params=None):
-        response = self.session.get(url, params=params, timeout=60)
+        response = self.session.get(
+            url,
+            params=params,
+            timeout=60,
+        )
         self._raise(response)
         return response.json()
 
@@ -98,11 +124,19 @@ class GraphClient:
         url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}"
         return self.get_json(
             url,
-            {"$select": "id,name,eTag,size,lastModifiedDateTime"},
+            {
+                "$select": (
+                    "id,name,eTag,size,lastModifiedDateTime"
+                )
+            },
         )
 
     def download_file(self, drive_id, item_id):
-        url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
+        url = (
+            f"{GRAPH}/drives/{drive_id}"
+            f"/items/{item_id}/content"
+        )
+
         response = self.session.get(
             url,
             timeout=120,
@@ -111,8 +145,18 @@ class GraphClient:
         self._raise(response)
         return response.content
 
-    def upload_file(self, drive_id, item_id, content, expected_etag):
-        url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
+    def upload_file(
+        self,
+        drive_id,
+        item_id,
+        content,
+        expected_etag,
+    ):
+        url = (
+            f"{GRAPH}/drives/{drive_id}"
+            f"/items/{item_id}/content"
+        )
+
         headers = {
             "Content-Type": (
                 "application/vnd.openxmlformats-officedocument."
@@ -120,17 +164,20 @@ class GraphClient:
             ),
             "If-Match": expected_etag,
         }
+
         response = self.session.put(
             url,
             headers=headers,
             data=content,
             timeout=180,
         )
+
         if response.status_code == 412:
             raise RuntimeError(
-                "File đích vừa thay đổi trong lúc workflow đang chạy. "
-                "Dừng để tránh ghi đè dữ liệu mới của người dùng."
+                "File đích vừa thay đổi trong lúc workflow chạy. "
+                "Dừng để tránh ghi đè thay đổi mới."
             )
+
         self._raise(response)
         return response.json()
 
@@ -138,18 +185,21 @@ class GraphClient:
 def load_state():
     if not STATE_FILE.exists():
         return {}
+
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(
+            STATE_FILE.read_text(encoding="utf-8")
+        )
     except Exception:
         return {}
 
-    # Tương thích state cũ chỉ có source_etag.
     if "sources" not in data and data.get("source_etag"):
         return {
             "sources": {
                 "actual_stock": data["source_etag"],
             }
         }
+
     return data
 
 
@@ -165,32 +215,35 @@ def save_state(source_etags):
     )
 
 
-def normalize_code(value):
+def normalize_code(value, vkd_to_vikoda=False):
     if value is None:
         return None
+
     if isinstance(value, float) and value.is_integer():
         value = int(value)
+
     text = str(value).strip()
-    return text if CODE_PATTERN.fullmatch(text) else None
-
-
-def normalize_vkd_code(value):
-    """Chuẩn hóa mã VKD 2xxxxxxxx thành mã Vikoda 1xxxxxxxx."""
-    code = normalize_code(value)
-    if not code:
+    if not CODE_PATTERN.fullmatch(text):
         return None
-    if code.startswith("2"):
-        return "1" + code[1:]
-    return code
+
+    if vkd_to_vikoda and text.startswith("2"):
+        text = "1" + text[1:]
+
+    return text
 
 
 def to_number(value, cell_name):
     if value is None or value == "":
         return 0
+
     if isinstance(value, bool):
-        raise ValueError(f"{cell_name} chứa TRUE/FALSE, không phải số.")
+        raise ValueError(
+            f"{cell_name} chứa TRUE/FALSE, không phải số."
+        )
+
     if isinstance(value, (int, float)):
         return value
+
     text = str(value).strip().replace(",", "")
     try:
         return float(text)
@@ -212,18 +265,26 @@ def read_actual_stock(source_bytes):
         data_only=True,
         read_only=True,
     )
+
     worksheet = workbook.worksheets[0]
-    print(f"[Tồn thực tế] Sheet nguồn: {worksheet.title}")
+    print(
+        f"[Tồn thực tế] Sheet nguồn: {worksheet.title}"
+    )
 
     result = {}
+
     for row in range(1, worksheet.max_row + 1):
-        code = normalize_code(worksheet.cell(row=row, column=3).value)
+        code = normalize_code(
+            worksheet.cell(row=row, column=3).value
+        )
         if not code:
             continue
+
         if code in result:
             raise RuntimeError(
                 f"[Tồn thực tế] Mã {code} bị lặp trong cột C."
             )
+
         value_n = to_number(
             worksheet.cell(row=row, column=14).value,
             f"N{row}",
@@ -232,24 +293,31 @@ def read_actual_stock(source_bytes):
             worksheet.cell(row=row, column=15).value,
             f"O{row}",
         )
+
         result[code] = clean_number(value_n + value_o)
 
     if not result:
         raise RuntimeError(
-            "[Tồn thực tế] Không đọc được mã sản phẩm nào từ cột C."
+            "[Tồn thực tế] Không đọc được mã từ cột C."
         )
+
     print(
-        f"[Tồn thực tế] Đọc được {len(result)} mã, "
-        "đích Ton_kho cột D = N + O."
+        f"[Tồn thực tế] Đọc {len(result)} mã; "
+        "Ton_kho!D = N + O."
     )
     return result
 
 
-def read_factory_stock(
+def read_single_value_source(
     source_bytes,
+    *,
     label,
-    file_name,
-    normalize_source_code=normalize_code,
+    source_name,
+    sheet_name,
+    code_column,
+    value_column,
+    value_column_letter,
+    vkd_to_vikoda=False,
 ):
     workbook = load_workbook(
         BytesIO(source_bytes),
@@ -257,36 +325,62 @@ def read_factory_stock(
         read_only=True,
         keep_vba=True,
     )
-    if "Sheet1" not in workbook.sheetnames:
+
+    if sheet_name not in workbook.sheetnames:
         raise RuntimeError(
-            f"[{label}] Không tìm thấy Sheet1 trong {file_name}."
+            f"[{label}] Không tìm thấy {sheet_name} "
+            f"trong {source_name}."
         )
 
-    worksheet = workbook["Sheet1"]
+    worksheet = workbook[sheet_name]
     result = {}
+
     for row in range(1, worksheet.max_row + 1):
-        raw_code = worksheet.cell(row=row, column=2).value
-        code = normalize_source_code(raw_code)
+        raw_code = worksheet.cell(
+            row=row,
+            column=code_column,
+        ).value
+
+        code = normalize_code(
+            raw_code,
+            vkd_to_vikoda=vkd_to_vikoda,
+        )
+
         if not code:
             continue
+
         if code in result:
             raise RuntimeError(
-                f"[{label}] Mã {code} bị lặp sau chuẩn hóa cột B."
+                f"[{label}] Mã {code} bị lặp sau chuẩn hóa."
             )
-        value_l = to_number(
-            worksheet.cell(row=row, column=12).value,
-            f"{file_name}!L{row}",
+
+        value = to_number(
+            worksheet.cell(
+                row=row,
+                column=value_column,
+            ).value,
+            f"{value_column_letter}{row}",
         )
-        result[code] = clean_number(value_l)
+
+        result[code] = clean_number(value)
 
     if not result:
         raise RuntimeError(
-            f"[{label}] Không đọc được mã sản phẩm nào từ cột B."
+            f"[{label}] Không đọc được mã sản phẩm."
         )
-    print(
-        f"[{label}] Đọc được {len(result)} mã từ Sheet1; "
-        "dữ liệu lấy từ cột L."
+
+    mode = (
+        " (chuẩn hóa 2xxxxxxxx → 1xxxxxxxx)"
+        if vkd_to_vikoda
+        else ""
     )
+
+    print(
+        f"[{label}] Đọc {len(result)} mã từ "
+        f"{source_name}!{sheet_name}"
+        f"{mode}."
+    )
+
     return result
 
 
@@ -294,181 +388,368 @@ def load_shared_strings(archive):
     path = "xl/sharedStrings.xml"
     if path not in archive.namelist():
         return []
+
     root = etree.fromstring(archive.read(path))
-    return [
-        "".join(si.itertext())
-        for si in root.xpath('//*[local-name()="si"]')
-    ]
+    result = []
+
+    for si in root.xpath(
+        '//*[local-name()="si"]'
+    ):
+        result.append("".join(si.itertext()))
+
+    return result
 
 
 def read_cell_text(cell, shared_strings):
     cell_type = cell.get("t")
+
     if cell_type == "inlineStr":
         return "".join(cell.itertext()).strip()
 
-    value_nodes = cell.xpath('./*[local-name()="v"]')
+    value_nodes = cell.xpath(
+        './*[local-name()="v"]'
+    )
     if not value_nodes:
         return ""
+
     raw = value_nodes[0].text or ""
+
     if cell_type == "s":
         try:
             return shared_strings[int(raw)]
         except Exception:
             return ""
+
     return raw
 
 
 def find_sheet_xml_path(archive, sheet_name):
-    workbook_root = etree.fromstring(archive.read("xl/workbook.xml"))
+    workbook_root = etree.fromstring(
+        archive.read("xl/workbook.xml")
+    )
+
     relationship_ns = (
         "http://schemas.openxmlformats.org/"
         "officeDocument/2006/relationships"
     )
 
     relationship_id = None
-    for sheet in workbook_root.xpath('//*[local-name()="sheet"]'):
+
+    for sheet in workbook_root.xpath(
+        '//*[local-name()="sheet"]'
+    ):
         if sheet.get("name") == sheet_name:
-            relationship_id = sheet.get(f"{{{relationship_ns}}}id")
+            relationship_id = sheet.get(
+                f"{{{relationship_ns}}}id"
+            )
             break
+
     if not relationship_id:
         raise RuntimeError(
-            f"Không tìm thấy sheet {sheet_name!r} trong file đích."
+            f"Không tìm thấy sheet {sheet_name!r} "
+            "trong file đích."
         )
 
     rels_root = etree.fromstring(
-        archive.read("xl/_rels/workbook.xml.rels")
+        archive.read(
+            "xl/_rels/workbook.xml.rels"
+        )
     )
+
     target = None
-    for rel in rels_root.xpath('//*[local-name()="Relationship"]'):
+
+    for rel in rels_root.xpath(
+        '//*[local-name()="Relationship"]'
+    ):
         if rel.get("Id") == relationship_id:
             target = rel.get("Target")
             break
+
     if not target:
         raise RuntimeError(
-            f"Không xác định được XML của sheet {sheet_name!r}."
+            f"Không xác định được XML của "
+            f"sheet {sheet_name!r}."
         )
+
     if target.startswith("/"):
         return target.lstrip("/")
-    return posixpath.normpath(posixpath.join("xl", target))
+
+    return posixpath.normpath(
+        posixpath.join("xl", target)
+    )
 
 
 def column_number(cell_reference):
-    letters = re.match(r"([A-Z]+)", cell_reference)
+    letters = re.match(
+        r"([A-Z]+)",
+        cell_reference,
+    )
+
     if not letters:
         return 10**9
+
     number = 0
+
     for char in letters.group(1):
-        number = number * 26 + (ord(char) - 64)
+        number = number * 26 + (
+            ord(char) - 64
+        )
+
     return number
 
 
-def set_numeric_cell(row_element, row_number, column_letter, value):
+def set_numeric_cell(
+    row_element,
+    row_number,
+    column_letter,
+    value,
+):
     target_ref = f"{column_letter}{row_number}"
-    cells = row_element.xpath('./*[local-name()="c"]')
-    target_cell = next(
-        (cell for cell in cells if cell.get("r") == target_ref),
-        None,
+    target_cell = None
+
+    cells = row_element.xpath(
+        './*[local-name()="c"]'
     )
 
+    for cell in cells:
+        if cell.get("r") == target_ref:
+            target_cell = cell
+            break
+
     if target_cell is None:
-        namespace = etree.QName(row_element).namespace
+        namespace = etree.QName(
+            row_element
+        ).namespace
+
         target_cell = etree.Element(
             f"{{{namespace}}}c",
             r=target_ref,
         )
-        target_col = column_number(target_ref)
+
+        target_col = column_number(
+            target_ref
+        )
+
         inserted = False
+
         for existing in cells:
-            if column_number(existing.get("r", "")) > target_col:
-                existing.addprevious(target_cell)
+            if column_number(
+                existing.get("r", "")
+            ) > target_col:
+                existing.addprevious(
+                    target_cell
+                )
                 inserted = True
                 break
+
         if not inserted:
-            row_element.append(target_cell)
+            row_element.append(
+                target_cell
+            )
 
     for child in list(target_cell):
         target_cell.remove(child)
+
     target_cell.attrib.pop("t", None)
 
-    namespace = etree.QName(target_cell).namespace
-    value_node = etree.SubElement(target_cell, f"{{{namespace}}}v")
+    namespace = etree.QName(
+        target_cell
+    ).namespace
+
+    value_node = etree.SubElement(
+        target_cell,
+        f"{{{namespace}}}v",
+    )
+
+    value = clean_number(value)
+
     if isinstance(value, int):
         value_node.text = str(value)
     else:
-        value_node.text = format(float(value), ".15g")
+        value_node.text = format(
+            float(value),
+            ".15g",
+        )
 
 
-def patch_destination_workbook(dest_bytes, column_sources):
+def patch_destination_workbook(
+    dest_bytes,
+    *,
+    actual_stock,
+    factory_vikoda,
+    factory_vkd,
+    accounting_vikoda,
+    accounting_vkd,
+):
     source_buffer = BytesIO(dest_bytes)
     output_buffer = BytesIO()
 
-    with zipfile.ZipFile(source_buffer, "r") as source_zip:
-        sheet_path = find_sheet_xml_path(source_zip, DEST_SHEET)
-        shared_strings = load_shared_strings(source_zip)
-        sheet_root = etree.fromstring(source_zip.read(sheet_path))
+    counters = {
+        "D": 0,
+        "E": 0,
+        "F": 0,
+        "G": 0,
+        "H": 0,
+    }
 
-        matched = {column: 0 for column in column_sources}
-        missing = {column: [] for column in column_sources}
+    with zipfile.ZipFile(
+        source_buffer,
+        "r",
+    ) as source_zip:
+        sheet_path = find_sheet_xml_path(
+            source_zip,
+            DEST_SHEET,
+        )
+
+        shared_strings = load_shared_strings(
+            source_zip
+        )
+
+        sheet_root = etree.fromstring(
+            source_zip.read(sheet_path)
+        )
+
         seen_dest_codes = set()
 
         rows = sheet_root.xpath(
-            '//*[local-name()="sheetData"]/*[local-name()="row"]'
+            '//*[local-name()="sheetData"]'
+            '/*[local-name()="row"]'
         )
+
         for row_element in rows:
             row_number_text = row_element.get("r")
             if not row_number_text:
                 continue
-            row_number = int(row_number_text)
 
+            row_number = int(row_number_text)
             code = None
-            for cell in row_element.xpath('./*[local-name()="c"]'):
-                if cell.get("r") == f"A{row_number}":
+
+            for cell in row_element.xpath(
+                './*[local-name()="c"]'
+            ):
+                if cell.get("r") == (
+                    f"A{row_number}"
+                ):
                     code = normalize_code(
-                        read_cell_text(cell, shared_strings)
+                        read_cell_text(
+                            cell,
+                            shared_strings,
+                        )
                     )
                     break
+
             if not code:
                 continue
+
             if code in seen_dest_codes:
                 raise RuntimeError(
-                    f"Mã {code} bị lặp trong cột A sheet {DEST_SHEET}."
+                    f"Mã {code} bị lặp trong "
+                    f"Ton_kho!A."
                 )
+
             seen_dest_codes.add(code)
 
-            for column, source in column_sources.items():
-                values = source["values"]
-                if code not in values:
-                    missing[column].append(code)
-                    continue
-                value = values[code]
+            if code in actual_stock:
+                value_d = actual_stock[code]
                 set_numeric_cell(
                     row_element,
                     row_number,
-                    column,
-                    value,
+                    "D",
+                    value_d,
                 )
-                matched[column] += 1
-                print(
-                    f"{code}: {DEST_SHEET}!{column}{row_number} = "
-                    f"{value} ({source['label']})"
+                counters["D"] += 1
+
+            value_e = factory_vikoda.get(
+                code,
+                0,
+            )
+            set_numeric_cell(
+                row_element,
+                row_number,
+                "E",
+                value_e,
+            )
+            counters["E"] += 1
+
+            value_f = factory_vkd.get(
+                code,
+                0,
+            )
+            set_numeric_cell(
+                row_element,
+                row_number,
+                "F",
+                value_f,
+            )
+            counters["F"] += 1
+
+            if code in accounting_vikoda:
+                value_g = clean_number(
+                    accounting_vikoda[code]
+                    - value_e
+                )
+                set_numeric_cell(
+                    row_element,
+                    row_number,
+                    "G",
+                    value_g,
+                )
+                counters["G"] += 1
+
+            if code in accounting_vkd:
+                value_h = clean_number(
+                    accounting_vkd[code]
+                    - value_f
+                )
+                set_numeric_cell(
+                    row_element,
+                    row_number,
+                    "H",
+                    value_h,
+                )
+                counters["H"] += 1
+
+            g_log = (
+                accounting_vikoda[code] - value_e
+                if code in accounting_vikoda
+                else "giữ cũ"
+            )
+            h_log = (
+                accounting_vkd[code] - value_f
+                if code in accounting_vkd
+                else "giữ cũ"
+            )
+
+            print(
+                f"{code}: "
+                f"D={actual_stock.get(code, 'giữ cũ')}; "
+                f"E={value_e}; "
+                f"F={value_f}; "
+                f"G={g_log}; "
+                f"H={h_log}"
+            )
+
+        if not seen_dest_codes:
+            raise RuntimeError(
+                "Không đọc được mã sản phẩm "
+                "trong Ton_kho!A."
+            )
+
+        for column in ("D", "E", "F", "G", "H"):
+            if counters[column] == 0:
+                raise RuntimeError(
+                    f"Không cập nhật được cột "
+                    f"{column} của Ton_kho."
                 )
 
-        for column, source in column_sources.items():
-            if matched[column] == 0:
-                raise RuntimeError(
-                    f"[{source['label']}] Không có mã nào khớp "
-                    f"với cột A sheet {DEST_SHEET}."
-                )
-            print(
-                f"[{source['label']}] Đã cập nhật {matched[column]} mã "
-                f"vào cột {column}."
+        print(
+            "[Ton_kho] Số dòng cập nhật: "
+            + ", ".join(
+                f"{col}={count}"
+                for col, count
+                in counters.items()
             )
-            if missing[column]:
-                print(
-                    f"[{source['label']}] Không tìm thấy trong nguồn, "
-                    "giữ nguyên giá trị cũ: "
-                    + ", ".join(missing[column])
-                )
+        )
 
         new_sheet_xml = etree.tostring(
             sheet_root,
@@ -476,6 +757,7 @@ def patch_destination_workbook(dest_bytes, column_sources):
             encoding="UTF-8",
             standalone=True,
         )
+
         with zipfile.ZipFile(
             output_buffer,
             "w",
@@ -485,99 +767,169 @@ def patch_destination_workbook(dest_bytes, column_sources):
                 data = (
                     new_sheet_xml
                     if item.filename == sheet_path
-                    else source_zip.read(item.filename)
+                    else source_zip.read(
+                        item.filename
+                    )
                 )
-                output_zip.writestr(item, data)
+
+                output_zip.writestr(
+                    item,
+                    data,
+                )
 
     return output_buffer.getvalue()
 
 
 def main():
-    graph = GraphClient(get_access_token())
-    site_id = graph.get_site_id()
-    drive_id = graph.get_default_drive_id(site_id)
-    print("Đã kết nối site SharePoint Planning.")
+    token = get_access_token()
+    graph = GraphClient(token)
 
-    actual_item = graph.get_item_by_path(
-        drive_id,
-        SOURCE_ACTUAL_PATH,
+    site_id = graph.get_site_id()
+    drive_id = graph.get_default_drive_id(
+        site_id
     )
-    vikoda_item = graph.get_item_by_path(
-        drive_id,
-        SOURCE_VIKODA_PATH,
+
+    print(
+        "Đã kết nối SharePoint Planning."
     )
-    vkd_item = graph.get_item_by_path(
-        drive_id,
-        SOURCE_VKD_PATH,
-    )
+
+    sources = {
+        "actual_stock": {
+            "path": SOURCE_ACTUAL_PATH,
+            "label": "Tồn thực tế",
+        },
+        "factory_vikoda": {
+            "path": SOURCE_FACTORY_VIKODA_PATH,
+            "label": "Tồn nhà máy Vikoda",
+        },
+        "factory_vkd": {
+            "path": SOURCE_FACTORY_VKD_PATH,
+            "label": "Tồn nhà máy VKD",
+        },
+        "accounting_vikoda": {
+            "path": SOURCE_ACCOUNTING_VIKODA_PATH,
+            "label": "Tồn kế toán Vikoda",
+        },
+        "accounting_vkd": {
+            "path": SOURCE_ACCOUNTING_VKD_PATH,
+            "label": "Tồn kế toán VKD",
+        },
+    }
+
+    for source in sources.values():
+        source["item"] = graph.get_item_by_path(
+            drive_id,
+            source["path"],
+        )
 
     current_etags = {
-        "actual_stock": actual_item["eTag"],
-        "factory_vikoda": vikoda_item["eTag"],
-        "factory_vkd": vkd_item["eTag"],
+        key: source["item"]["eTag"]
+        for key, source in sources.items()
     }
-    old_etags = load_state().get("sources", {})
+
+    old_etags = load_state().get(
+        "sources",
+        {},
+    )
+
     changed_sources = [
         key
-        for key, etag in current_etags.items()
+        for key, etag
+        in current_etags.items()
         if old_etags.get(key) != etag
     ]
 
-    print(
-        "[Tồn thực tế] Sửa lần cuối:",
-        actual_item.get("lastModifiedDateTime"),
-    )
-    print(
-        "[NXT_Vikoda] Sửa lần cuối:",
-        vikoda_item.get("lastModifiedDateTime"),
-    )
-    print(
-        "[NXT_VKD] Sửa lần cuối:",
-        vkd_item.get("lastModifiedDateTime"),
-    )
+    for source in sources.values():
+        print(
+            f"[{source['label']}] sửa lần cuối:",
+            source["item"].get(
+                "lastModifiedDateTime"
+            ),
+        )
 
     if not changed_sources:
-        print("Không có file nguồn nào thay đổi. Kết thúc.")
+        print(
+            "Không có file nguồn nào thay đổi. "
+            "Kết thúc."
+        )
         return
-    print("Nguồn thay đổi:", ", ".join(changed_sources))
 
-    dest_item = graph.get_item_by_path(drive_id, DEST_PATH)
-
-    actual_bytes = graph.download_file(drive_id, actual_item["id"])
-    vikoda_bytes = graph.download_file(drive_id, vikoda_item["id"])
-    vkd_bytes = graph.download_file(drive_id, vkd_item["id"])
-    dest_bytes = graph.download_file(drive_id, dest_item["id"])
-
-    actual_stock = read_actual_stock(actual_bytes)
-    vikoda_stock = read_factory_stock(
-        vikoda_bytes,
-        label="Tồn hệ thống nhà máy Vikoda",
-        file_name="NXT_Vikoda.xlsm",
-        normalize_source_code=normalize_code,
+    print(
+        "Nguồn thay đổi: "
+        + ", ".join(changed_sources)
     )
-    vkd_stock = read_factory_stock(
-        vkd_bytes,
-        label="Tồn hệ thống nhà máy VKD",
-        file_name="NXT_VKD.xlsm",
-        normalize_source_code=normalize_vkd_code,
+
+    source_bytes = {
+        key: graph.download_file(
+            drive_id,
+            source["item"]["id"],
+        )
+        for key, source in sources.items()
+    }
+
+    dest_item = graph.get_item_by_path(
+        drive_id,
+        DEST_PATH,
+    )
+
+    dest_bytes = graph.download_file(
+        drive_id,
+        dest_item["id"],
+    )
+
+    actual_stock = read_actual_stock(
+        source_bytes["actual_stock"]
+    )
+
+    factory_vikoda = read_single_value_source(
+        source_bytes["factory_vikoda"],
+        label="Tồn nhà máy Vikoda",
+        source_name="NXT_Vikoda.xlsm",
+        sheet_name="Sheet1",
+        code_column=2,
+        value_column=12,
+        value_column_letter="L",
+    )
+
+    factory_vkd = read_single_value_source(
+        source_bytes["factory_vkd"],
+        label="Tồn nhà máy VKD",
+        source_name="NXT_VKD.xlsm",
+        sheet_name="Sheet1",
+        code_column=2,
+        value_column=12,
+        value_column_letter="L",
+        vkd_to_vikoda=True,
+    )
+
+    accounting_vikoda = read_single_value_source(
+        source_bytes["accounting_vikoda"],
+        label="Tồn kế toán Vikoda",
+        source_name="XNT_ketoan_Vikoda.xlsm",
+        sheet_name="Sheet1",
+        code_column=2,
+        value_column=13,
+        value_column_letter="M",
+    )
+
+    accounting_vkd = read_single_value_source(
+        source_bytes["accounting_vkd"],
+        label="Tồn kế toán VKD",
+        source_name="XNT_ketoan_VKD.xlsm",
+        sheet_name="Sheet1",
+        code_column=2,
+        value_column=13,
+        value_column_letter="M",
+        vkd_to_vikoda=True,
     )
 
     updated_dest_bytes = patch_destination_workbook(
         dest_bytes,
-        {
-            "D": {
-                "label": "Tồn thực tế",
-                "values": actual_stock,
-            },
-            "E": {
-                "label": "Tồn hệ thống nhà máy Vikoda",
-                "values": vikoda_stock,
-            },
-            "F": {
-                "label": "Tồn hệ thống nhà máy VKD",
-                "values": vkd_stock,
-            },
-        },
+        actual_stock=actual_stock,
+        factory_vikoda=factory_vikoda,
+        factory_vkd=factory_vkd,
+        accounting_vikoda=accounting_vikoda,
+        accounting_vkd=accounting_vkd,
     )
 
     result = graph.upload_file(
@@ -586,9 +938,13 @@ def main():
         updated_dest_bytes,
         expected_etag=dest_item["eTag"],
     )
+
     print(
         "Upload thành công:",
-        result.get("name", "Sắp kế hoạch.xlsx"),
+        result.get(
+            "name",
+            "Sắp kế hoạch.xlsx",
+        ),
     )
 
     save_state(current_etags)
