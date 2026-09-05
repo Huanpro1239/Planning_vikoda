@@ -1,7 +1,7 @@
 from planning_cleanup import remove_sheet_formulas
 from sync_stock import DEST_PATH, GraphClient, get_access_token
 
-PLANNING_SHEET = "Ke hoach SX"
+PLANNING_SHEET = "Ke_hoach_SX"
 
 
 def main():
