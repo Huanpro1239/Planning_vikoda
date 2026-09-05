@@ -44,7 +44,7 @@ jobs:
         run: python sync_stock_compat.py
 
       - name: Sync FC to Ke hoach SX
-        run: python sync_planning_fc.py
+        run: python sync_planning_fc_compat.py
 
       - name: Calculate Ke hoach SX M to R directly
         run: python sync_planning_metrics_compat.py
