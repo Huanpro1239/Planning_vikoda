@@ -1,4 +1,4 @@
-name: Cleanup Ke hoach SX Once
+name: Verify Ke hoach SX Cleanup
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  cleanup:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -32,5 +32,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Remove Ke_hoach_SX formulas with retry
-        run: python cleanup_planning.py
+      - name: Verify Ke_hoach_SX has no formulas
+        run: |
+          python - <<'PY'
+          import zipfile
+          from io import BytesIO
+          from lxml import etree
+          from planning_cleanup import _find_sheet_xml_path
+          from sync_stock import DEST_PATH, GraphClient, get_access_token
+
+          graph = GraphClient(get_access_token())
+          site_id = graph.get_site_id()
+          drive_id = graph.get_default_drive_id(site_id)
+          item = graph.get_item_by_path(drive_id, DEST_PATH)
+          data = graph.download_file(drive_id, item['id'])
+
+          with zipfile.ZipFile(BytesIO(data), 'r') as archive:
+              path = _find_sheet_xml_path(archive, 'Ke_hoach_SX')
+              root = etree.fromstring(archive.read(path))
+              count = len(root.xpath('//*[local-name()="f"]'))
+
+          print(f'KE_HOACH_SX_FORMULAS={count}')
+          if count != 0:
+              raise SystemExit(f'Expected 0 formulas, found {count}')
+          PY
