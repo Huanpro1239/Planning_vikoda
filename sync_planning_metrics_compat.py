@@ -3,6 +3,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 import sync_planning_metrics as metrics
+from sync_stock_compat import read_conversion_factors_robust
 
 
 def read_planning_rows_robust(dest_bytes):
@@ -89,6 +90,7 @@ def read_planning_rows_robust(dest_bytes):
 
 
 metrics.read_planning_rows = read_planning_rows_robust
+metrics.read_conversion_factors = read_conversion_factors_robust
 
 
 if __name__ == "__main__":
