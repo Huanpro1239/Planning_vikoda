@@ -1,3 +1,4 @@
+import time
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -170,10 +171,37 @@ def read_conversion_factors_and_leadtime(dest_bytes):
     return conversion_factors, conversion_hash
 
 
+def main_with_retry(
+    *,
+    sleep_func=time.sleep,
+    max_attempts=6,
+    retry_delay_seconds=10,
+):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            metrics.main()
+            return
+        except RuntimeError as exc:
+            message = str(exc)
+            retryable = (
+                "423" in message
+                or "resourceLocked" in message
+                or "412" in message
+            )
+            if not retryable or attempt == max_attempts:
+                raise
+
+            print(
+                f"[{metrics.PLANNING_SHEET}] File đang khóa/thay đổi; "
+                f"tải lại và thử lại ({attempt}/{max_attempts})."
+            )
+            sleep_func(retry_delay_seconds)
+
+
 metrics.read_planning_rows = read_planning_rows_robust
 metrics.read_conversion_factors = read_conversion_factors_and_leadtime
 metrics.LEADTIME_BY_CODE = {}
 
 
 if __name__ == "__main__":
-    metrics.main()
+    main_with_retry()
