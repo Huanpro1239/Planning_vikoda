@@ -43,6 +43,9 @@ jobs:
       - name: Sync FC to Ke hoach SX
         run: python sync_planning_fc_compat.py
 
+      - name: Generate Ke hoach SX date headers
+        run: python sync_planning_calendar.py
+
       - name: Calculate Ke hoach SX M to R directly
         run: python sync_planning_metrics_direct.py
 
