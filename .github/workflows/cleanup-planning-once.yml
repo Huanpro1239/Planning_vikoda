@@ -32,56 +32,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Map sheet names to worksheet XML
-        run: |
-          python - <<'PY'
-          import posixpath
-          import zipfile
-          from io import BytesIO
-          from lxml import etree
-          from planning_cleanup import _find_sheet_xml_path
-          from sync_stock import DEST_PATH, GraphClient, get_access_token
-
-          graph = GraphClient(get_access_token())
-          site_id = graph.get_site_id()
-          drive_id = graph.get_default_drive_id(site_id)
-          item = graph.get_item_by_path(drive_id, DEST_PATH)
-          data = graph.download_file(drive_id, item['id'])
-
-          rel_ns = (
-              'http://schemas.openxmlformats.org/'
-              'officeDocument/2006/relationships'
-          )
-
-          with zipfile.ZipFile(BytesIO(data), 'r') as z:
-              wb = etree.fromstring(z.read('xl/workbook.xml'))
-              rels = etree.fromstring(z.read('xl/_rels/workbook.xml.rels'))
-              rel_map = {
-                  rel.get('Id'): rel.get('Target')
-                  for rel in rels.xpath('//*[local-name()="Relationship"]')
-              }
-
-              for sheet in wb.xpath('//*[local-name()="sheet"]'):
-                  name = sheet.get('name')
-                  rid = sheet.get(f'{{{rel_ns}}}id')
-                  target = rel_map.get(rid)
-                  if target.startswith('/'):
-                      resolved = target.lstrip('/')
-                  else:
-                      resolved = posixpath.normpath(posixpath.join('xl', target))
-                  root = etree.fromstring(z.read(resolved))
-                  formulas = root.xpath('//*[local-name()="f"]')
-                  print(
-                      'SHEET_MAP=',
-                      repr(name), rid, repr(target), repr(resolved),
-                      'FORMULAS=', len(formulas),
-                  )
-
-              helper_path = _find_sheet_xml_path(z, 'Ke_hoach_SX')
-              helper_root = etree.fromstring(z.read(helper_path))
-              print(
-                  'HELPER_PATH=', repr(helper_path),
-                  'FORMULAS=',
-                  len(helper_root.xpath('//*[local-name()="f"]')),
-              )
-          PY
+      - name: Remove Ke_hoach_SX formulas
+        run: python cleanup_planning.py
