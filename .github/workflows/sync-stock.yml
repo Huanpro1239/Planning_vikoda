@@ -41,13 +41,13 @@ jobs:
           pip install -r requirements.txt
 
       - name: Sync stock to SharePoint
-        run: python sync_stock.py
+        run: python sync_stock_compat.py
 
       - name: Sync FC to Ke hoach SX
         run: python sync_planning_fc.py
 
       - name: Calculate Ke hoach SX M to R directly
-        run: python sync_planning_metrics.py
+        run: python sync_planning_metrics_compat.py
 
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
