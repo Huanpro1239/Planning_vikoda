@@ -32,23 +32,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Inspect workbook sheet names
-        run: |
-          python - <<'PY'
-          from io import BytesIO
-          import zipfile
-          from lxml import etree
-          from sync_stock import DEST_PATH, GraphClient, get_access_token
-
-          graph = GraphClient(get_access_token())
-          site_id = graph.get_site_id()
-          drive_id = graph.get_default_drive_id(site_id)
-          item = graph.get_item_by_path(drive_id, DEST_PATH)
-          data = graph.download_file(drive_id, item['id'])
-
-          with zipfile.ZipFile(BytesIO(data), 'r') as archive:
-              root = etree.fromstring(archive.read('xl/workbook.xml'))
-              names = [sheet.get('name') for sheet in root.xpath('//*[local-name()="sheet"]')]
-
-          print('WORKBOOK_SHEETS=' + repr(names))
-          PY
+      - name: Remove Ke_hoach_SX formulas
+        run: python cleanup_planning.py
