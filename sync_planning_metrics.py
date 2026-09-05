@@ -230,16 +230,21 @@ def read_system_receipts(source_bytes, conversion_factors):
             if not code:
                 continue
 
+            # NXT có nhiều mã ngoài 20 mã đang lập kế hoạch. Chỉ đọc
+            # những mã đã có trong Danh_muc/conversion_factors.
+            if code not in conversion_factors:
+                continue
+
             if code in receipts:
                 raise RuntimeError(
                     f"[NXT_Vikoda] Mã {code} bị lặp trong cột B."
                 )
 
-            factor = conversion_factors.get(code)
-            if factor is None or factor <= 0:
+            factor = conversion_factors[code]
+            if factor <= 0:
                 raise RuntimeError(
-                    f"Không có quy cách hợp lệ cho mã {code} "
-                    "để quy đổi Nhập trong kỳ."
+                    f"Quy cách của mã {code} phải > 0 để quy đổi "
+                    "Nhập trong kỳ."
                 )
 
             raw_value = to_number(
@@ -253,7 +258,7 @@ def read_system_receipts(source_bytes, conversion_factors):
 
         if not receipts:
             raise RuntimeError(
-                "[NXT_Vikoda] Không đọc được Nhập trong kỳ."
+                "[NXT_Vikoda] Không đọc được Nhập trong kỳ cho các mã kế hoạch."
             )
 
         return receipts
