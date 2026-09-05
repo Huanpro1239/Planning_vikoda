@@ -32,5 +32,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Remove Ke_hoach_SX formulas
+      - name: Remove Ke_hoach_SX formulas with retry
         run: python cleanup_planning.py
