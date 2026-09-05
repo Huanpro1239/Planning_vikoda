@@ -49,6 +49,9 @@ jobs:
       - name: Calculate Ke hoach SX M to R directly
         run: python sync_planning_metrics_direct.py
 
+      - name: Schedule daily production S onward
+        run: python sync_planning_schedule.py
+
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
 
