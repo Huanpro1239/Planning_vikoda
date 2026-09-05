@@ -57,13 +57,22 @@ def main():
             target_formulas = []
             if TARGET_SHEET in sheet_names:
                 ws = workbook[TARGET_SHEET]
-                for row in range(1, ws.max_row + 1):
-                    for col in range(TARGET_MIN_COL, TARGET_MAX_COL + 1):
-                        value = ws.cell(row=row, column=col).value
-                        if isinstance(value, str) and value.startswith("="):
-                            target_formulas.append(
-                                f"{ws.cell(row=row, column=col).coordinate}:{value}"
-                            )
+                try:
+                    rows = ws.iter_rows(
+                        min_col=TARGET_MIN_COL,
+                        max_col=TARGET_MAX_COL,
+                    )
+                    for row_cells in rows:
+                        for cell in row_cells:
+                            value = cell.value
+                            if isinstance(value, str) and value.startswith("="):
+                                target_formulas.append(
+                                    f"{cell.coordinate}:{value}"
+                                )
+                except Exception as exc:
+                    print(
+                        f"VERSION {version_id}: cannot scan M:R: {exc}"
+                    )
 
             weekly_present = "Ke hoach SX tuan" in sheet_names
             print(
