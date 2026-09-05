@@ -36,7 +36,7 @@ class PlanningFormulaRemovalTests(unittest.TestCase):
         self.assertEqual(workbook["Ton_kho"]["A1"].value, "=2+2")
 
     def test_missing_sheet_raises_clear_error(self):
-        with self.assertRaisesRegex(RuntimeError, "Ke hoach SX"):
+        with self.assertRaisesRegex(RuntimeError, "Khong ton tai"):
             remove_sheet_formulas(self.make_workbook(), "Khong ton tai")
 
 
