@@ -6,6 +6,9 @@ import sync_planning_metrics as metrics
 from sync_stock_compat import read_conversion_factors_robust
 
 
+MASTER_LEADTIME_COL = 10  # J - Leadtime
+
+
 def read_planning_rows_robust(dest_bytes):
     workbook = load_workbook(
         BytesIO(dest_bytes),
@@ -89,8 +92,86 @@ def read_planning_rows_robust(dest_bytes):
         workbook.close()
 
 
+def read_leadtime_from_master(dest_bytes):
+    workbook = load_workbook(
+        BytesIO(dest_bytes),
+        data_only=True,
+        read_only=True,
+    )
+
+    try:
+        if metrics.MASTER_SHEET not in workbook.sheetnames:
+            raise RuntimeError(
+                f"Không tìm thấy sheet {metrics.MASTER_SHEET!r}."
+            )
+
+        worksheet = workbook[metrics.MASTER_SHEET]
+        header = worksheet.cell(row=1, column=MASTER_LEADTIME_COL).value
+        if str(header or "").strip().casefold() != "leadtime":
+            raise RuntimeError(
+                f"{metrics.MASTER_SHEET}!J1 phải là 'Leadtime', hiện là "
+                f"{header!r}."
+            )
+
+        leadtimes = {}
+        for row_number, values in enumerate(
+            worksheet.iter_rows(min_row=2, max_col=MASTER_LEADTIME_COL, values_only=True),
+            start=2,
+        ):
+            code = metrics.normalize_code(values[0] if values else None)
+            if not code:
+                continue
+
+            if code in leadtimes:
+                raise RuntimeError(
+                    f"Mã {code} bị lặp trong {metrics.MASTER_SHEET}!A."
+                )
+
+            raw_leadtime = values[MASTER_LEADTIME_COL - 1]
+            if raw_leadtime in (None, ""):
+                continue
+
+            leadtime = metrics.to_number(
+                raw_leadtime,
+                f"{metrics.MASTER_SHEET}!J{row_number}",
+            )
+            if leadtime < 0:
+                raise RuntimeError(
+                    f"{metrics.MASTER_SHEET}!J{row_number} của mã {code} "
+                    f"phải >= 0, hiện là {leadtime!r}."
+                )
+
+            leadtimes[code] = metrics.clean_number(leadtime)
+
+        if not leadtimes:
+            raise RuntimeError(
+                f"Không đọc được Leadtime từ {metrics.MASTER_SHEET}!J:J."
+            )
+
+        print(
+            f"[{metrics.MASTER_SHEET}] Đọc {len(leadtimes)} Leadtime từ cột J."
+        )
+        return leadtimes
+    finally:
+        workbook.close()
+
+
+def read_conversion_factors_and_leadtime(dest_bytes):
+    conversion_factors, conversion_hash = read_conversion_factors_robust(
+        dest_bytes
+    )
+    leadtimes = read_leadtime_from_master(dest_bytes)
+
+    # Không cho runtime dùng mapping hardcode cũ. Từ đây Leadtime chỉ có
+    # một nguồn sự thật: Danh_muc!J theo mã sản phẩm.
+    metrics.LEADTIME_BY_CODE = leadtimes
+
+    return conversion_factors, conversion_hash
+
+
 metrics.read_planning_rows = read_planning_rows_robust
-metrics.read_conversion_factors = read_conversion_factors_robust
+metrics.read_conversion_factors = read_conversion_factors_and_leadtime
+metrics.LEADTIME_BY_CODE = {}
 
 
 if __name__ == "__main__":
