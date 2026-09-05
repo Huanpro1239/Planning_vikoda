@@ -17,8 +17,13 @@ class PlanningScheduleTests(unittest.TestCase):
         classification="Không đường",
         earliest=date(2026, 9, 1),
         debt=0,
-        risk=date(2026, 9, 10),
+        actual_stock=1000,
+        fc=0,
+        target_stock=0,
     ):
+        headers = [date(2026, 9, day) for day in range(1, 31)]
+        demand_days = sum(1 for day in headers if day.weekday() != 6)
+        daily = fc / demand_days if demand_days and fc else 0
         item = {
             "code": code,
             "line": line,
@@ -30,7 +35,13 @@ class PlanningScheduleTests(unittest.TestCase):
             "is_sugar": classification.casefold() == "có đường".casefold(),
             "earliest_date": earliest,
             "debt": float(debt),
-            "risk_date": risk,
+            "actual_stock": float(actual_stock),
+            "fc": float(fc),
+            "target_stock": float(target_stock),
+            "demand_by_day": {
+                day: (0.0 if day.weekday() == 6 else daily)
+                for day in headers
+            },
         }
         _validate_quantum(item)
         return item
@@ -39,8 +50,9 @@ class PlanningScheduleTests(unittest.TestCase):
         sunday = date(2026, 9, 6)
         headers = [sunday, date(2026, 9, 7)]
         product = self.product(code="A", earliest=sunday)
+        product["demand_by_day"] = {day: 0 for day in headers}
 
-        schedule, _, _, carryover = build_schedule(headers, [product])
+        schedule, _, _, carryover, _ = build_schedule(headers, [product])
 
         self.assertEqual(schedule["A"][sunday], 100)
         self.assertEqual(carryover, {})
@@ -48,8 +60,9 @@ class PlanningScheduleTests(unittest.TestCase):
     def test_never_schedules_before_R(self):
         headers = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
         product = self.product(code="A", earliest=date(2026, 9, 3))
+        product["demand_by_day"] = {day: 0 for day in headers}
 
-        schedule, _, _, _ = build_schedule(headers, [product])
+        schedule, _, _, _, _ = build_schedule(headers, [product])
 
         self.assertEqual(schedule["A"][date(2026, 9, 1)], 0)
         self.assertEqual(schedule["A"][date(2026, 9, 2)], 0)
@@ -59,8 +72,10 @@ class PlanningScheduleTests(unittest.TestCase):
         headers = [date(2026, 9, day) for day in range(1, 5)]
         a = self.product(code="A", planned_qty=200, shifts_per_day=1)
         b = self.product(code="B", planned_qty=200, shifts_per_day=1)
+        for product in (a, b):
+            product["demand_by_day"] = {day: 0 for day in headers}
 
-        schedule, line_capacity, line_usage, carryover = build_schedule(headers, [a, b])
+        schedule, line_capacity, line_usage, carryover, _ = build_schedule(headers, [a, b])
 
         self.assertEqual(line_capacity["KHS"], 1)
         for day in headers:
@@ -81,20 +96,46 @@ class PlanningScheduleTests(unittest.TestCase):
             classification="Có đường",
             earliest=date(2026, 9, 14),
         )
+        sumo["demand_by_day"] = {day: 0 for day in headers}
 
-        schedule, _, line_usage, carryover = build_schedule(headers, [sumo])
+        schedule, _, line_usage, carryover, _ = build_schedule(headers, [sumo])
 
         self.assertEqual(schedule["130200026"][date(2026, 9, 14)], 10400)
         self.assertEqual(schedule["130200026"][date(2026, 9, 15)], 10400)
         self.assertAlmostEqual(line_usage["PET 9000"][date(2026, 9, 14)], 2.6)
         self.assertEqual(carryover, {})
 
-    def test_debt_has_priority_when_capacity_is_tight(self):
+    def test_stockout_risk_has_priority_over_debt(self):
         headers = [date(2026, 9, 1)]
-        normal = self.product(code="A", debt=0, risk=date(2026, 9, 1))
-        debt = self.product(code="B", debt=10, risk=date(2026, 9, 20))
+        urgent = self.product(
+            code="A",
+            actual_stock=0,
+            fc=100,
+            debt=0,
+        )
+        debt = self.product(
+            code="B",
+            actual_stock=1000,
+            fc=0,
+            debt=10,
+        )
+        urgent["demand_by_day"] = {headers[0]: 100}
+        debt["demand_by_day"] = {headers[0]: 0}
 
-        schedule, _, _, carryover = build_schedule(headers, [normal, debt])
+        schedule, _, _, carryover, _ = build_schedule(headers, [urgent, debt])
+
+        self.assertEqual(schedule["A"][headers[0]], 100)
+        self.assertEqual(schedule["B"][headers[0]], 0)
+        self.assertEqual(carryover["B"], 100)
+
+    def test_debt_breaks_tie_when_inventory_risk_is_equal(self):
+        headers = [date(2026, 9, 1)]
+        normal = self.product(code="A", debt=0)
+        debt = self.product(code="B", debt=10)
+        for product in (normal, debt):
+            product["demand_by_day"] = {headers[0]: 0}
+
+        schedule, _, _, carryover, _ = build_schedule(headers, [normal, debt])
 
         self.assertEqual(schedule["B"][headers[0]], 100)
         self.assertEqual(schedule["A"][headers[0]], 0)
@@ -103,12 +144,28 @@ class PlanningScheduleTests(unittest.TestCase):
     def test_reports_carryover_instead_of_overbooking(self):
         headers = [date(2026, 9, 1)]
         product = self.product(code="A", planned_qty=200, shifts_per_day=1)
+        product["demand_by_day"] = {headers[0]: 0}
 
-        schedule, _, line_usage, carryover = build_schedule(headers, [product])
+        schedule, _, line_usage, carryover, _ = build_schedule(headers, [product])
 
         self.assertEqual(schedule["A"][headers[0]], 100)
         self.assertEqual(line_usage["KHS"][headers[0]], 1)
         self.assertEqual(carryover["A"], 100)
+
+    def test_inventory_simulation_reports_plan_quantity_shortfall(self):
+        headers = [date(2026, 9, 1), date(2026, 9, 2)]
+        product = self.product(
+            code="A",
+            planned_qty=0,
+            actual_stock=50,
+            fc=100,
+        )
+        product["demand_by_day"] = {headers[0]: 50, headers[1]: 50}
+
+        _, _, _, _, inventory = build_schedule(headers, [product])
+
+        self.assertEqual(inventory["A"]["ending_stock"], -50)
+        self.assertEqual(inventory["A"]["first_stockout"], date(2026, 9, 2))
 
 
 if __name__ == "__main__":
