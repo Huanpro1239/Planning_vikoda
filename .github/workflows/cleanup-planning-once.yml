@@ -32,5 +32,55 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Remove Ke_hoach_SX formulas
-        run: python cleanup_planning.py
+      - name: Inspect planning calculation sources
+        run: |
+          python - <<'PY'
+          from io import BytesIO
+          import zipfile
+          from lxml import etree
+          from sync_stock import DEST_PATH, GraphClient, get_access_token
+
+          graph = GraphClient(get_access_token())
+          site_id = graph.get_site_id()
+          drive_id = graph.get_default_drive_id(site_id)
+          item = graph.get_item_by_path(drive_id, DEST_PATH)
+          data = graph.download_file(drive_id, item['id'])
+
+          with zipfile.ZipFile(BytesIO(data), 'r') as z:
+              names = z.namelist()
+              print('ZIP_CALC_RELATED=', [n for n in names if ('table' in n.lower() or 'connection' in n.lower() or 'query' in n.lower() or 'customxml' in n.lower())])
+
+              wb = etree.fromstring(z.read('xl/workbook.xml'))
+              defined = []
+              for node in wb.xpath('//*[local-name()="definedName"]'):
+                  text = node.text or ''
+                  if 'Ke_hoach_SX' in text or 'hoach' in text.lower():
+                      defined.append((node.get('name'), text))
+              print('DEFINED_NAMES=', defined)
+
+              table_formulas = []
+              for path in names:
+                  if not path.startswith('xl/tables/') or not path.endswith('.xml'):
+                      continue
+                  root = etree.fromstring(z.read(path))
+                  for node in root.xpath('//*[local-name()="calculatedColumnFormula"]'):
+                      table_formulas.append((path, ''.join(node.itertext())))
+              print('TABLE_FORMULAS=', table_formulas)
+
+              formula_refs = []
+              for path in names:
+                  if not path.startswith('xl/worksheets/sheet') or not path.endswith('.xml'):
+                      continue
+                  root = etree.fromstring(z.read(path))
+                  formulas = [''.join(n.itertext()) for n in root.xpath('//*[local-name()="f"]')]
+                  if formulas:
+                      formula_refs.append((path, len(formulas), formulas[:20]))
+              print('CELL_FORMULAS_BY_SHEET_XML=', formula_refs)
+
+              connections = []
+              for path in names:
+                  if 'connection' in path.lower() and path.endswith('.xml'):
+                      text = z.read(path).decode('utf-8', errors='replace')
+                      connections.append((path, text[:6000]))
+              print('CONNECTIONS=', connections)
+          PY
