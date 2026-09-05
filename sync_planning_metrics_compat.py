@@ -3,6 +3,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 import sync_planning_metrics as metrics
+from sync_stock import MASTER_SHEET
 from sync_stock_compat import read_conversion_factors_robust
 
 
@@ -100,16 +101,16 @@ def read_leadtime_from_master(dest_bytes):
     )
 
     try:
-        if metrics.MASTER_SHEET not in workbook.sheetnames:
+        if MASTER_SHEET not in workbook.sheetnames:
             raise RuntimeError(
-                f"Không tìm thấy sheet {metrics.MASTER_SHEET!r}."
+                f"Không tìm thấy sheet {MASTER_SHEET!r}."
             )
 
-        worksheet = workbook[metrics.MASTER_SHEET]
+        worksheet = workbook[MASTER_SHEET]
         header = worksheet.cell(row=1, column=MASTER_LEADTIME_COL).value
         if str(header or "").strip().casefold() != "leadtime":
             raise RuntimeError(
-                f"{metrics.MASTER_SHEET}!J1 phải là 'Leadtime', hiện là "
+                f"{MASTER_SHEET}!J1 phải là 'Leadtime', hiện là "
                 f"{header!r}."
             )
 
@@ -124,7 +125,7 @@ def read_leadtime_from_master(dest_bytes):
 
             if code in leadtimes:
                 raise RuntimeError(
-                    f"Mã {code} bị lặp trong {metrics.MASTER_SHEET}!A."
+                    f"Mã {code} bị lặp trong {MASTER_SHEET}!A."
                 )
 
             raw_leadtime = values[MASTER_LEADTIME_COL - 1]
@@ -133,11 +134,11 @@ def read_leadtime_from_master(dest_bytes):
 
             leadtime = metrics.to_number(
                 raw_leadtime,
-                f"{metrics.MASTER_SHEET}!J{row_number}",
+                f"{MASTER_SHEET}!J{row_number}",
             )
             if leadtime < 0:
                 raise RuntimeError(
-                    f"{metrics.MASTER_SHEET}!J{row_number} của mã {code} "
+                    f"{MASTER_SHEET}!J{row_number} của mã {code} "
                     f"phải >= 0, hiện là {leadtime!r}."
                 )
 
@@ -145,11 +146,11 @@ def read_leadtime_from_master(dest_bytes):
 
         if not leadtimes:
             raise RuntimeError(
-                f"Không đọc được Leadtime từ {metrics.MASTER_SHEET}!J:J."
+                f"Không đọc được Leadtime từ {MASTER_SHEET}!J:J."
             )
 
         print(
-            f"[{metrics.MASTER_SHEET}] Đọc {len(leadtimes)} Leadtime từ cột J."
+            f"[{MASTER_SHEET}] Đọc {len(leadtimes)} Leadtime từ cột J."
         )
         return leadtimes
     finally:
