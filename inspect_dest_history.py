@@ -23,8 +23,14 @@ def main():
     print(f"Destination: {DEST_PATH}")
     print(f"Found {len(versions)} versions")
 
+    current_version_id = versions[0]["id"] if versions else None
+
     for version in versions:
         version_id = version["id"]
+        if version_id == current_version_id:
+            print(f"VERSION {version_id}: current version, skip history content endpoint")
+            continue
+
         content_url = (
             f"{GRAPH}/drives/{drive_id}/items/{item['id']}"
             f"/versions/{version_id}/content"
