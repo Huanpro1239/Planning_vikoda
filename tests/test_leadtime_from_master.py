@@ -5,6 +5,7 @@ from openpyxl import Workbook
 
 import sync_planning_metrics as metrics
 from sync_planning_metrics_compat import (
+    MASTER_SHEET,
     read_conversion_factors_and_leadtime,
     read_leadtime_from_master,
 )
@@ -14,7 +15,7 @@ class LeadtimeFromMasterTests(unittest.TestCase):
     def make_workbook(self, leadtime=4, header="Leadtime"):
         workbook = Workbook()
         worksheet = workbook.active
-        worksheet.title = metrics.MASTER_SHEET
+        worksheet.title = MASTER_SHEET
         worksheet.append(
             [
                 "Mã Sản Phẩm",
