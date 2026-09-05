@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 from lxml import etree
 from openpyxl import load_workbook
-from ortools.sat.python import cp_model
 
 from sync_planning_fc import (
     _find_sheet_xml_path,
@@ -24,9 +23,13 @@ START_COLUMN_NUMBER = 19  # S
 MAX_DAYS = 31
 TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 EPSILON = 1e-9
-SHIFT_SCALE = 10000
-QTY_SCALE = 1000
-MAX_SOLVE_SECONDS = 8.0
+
+# File mẫu đang dùng 0,5 ca khi đổi mã/khuôn trên KHS/PET.
+SETUP_SHIFTS = 0.5
+CONTINUOUS_LINES = {"KHS", "PET 9000"}
+WEEKLY_LINES = {"RGB"}
+GALON_LINE = "Galon"
+GALON_SPREAD_CODE = "130100006"
 
 
 def _column_letter(number):
@@ -52,13 +55,9 @@ def _clean_number(value):
     value = float(value)
     if abs(value) < EPSILON:
         return 0
-    if math.isclose(value, round(value), rel_tol=1e-12, abs_tol=1e-9):
+    if math.isclose(value, round(value), rel_tol=1e-12, abs_tol=1e-8):
         return int(round(value))
     return value
-
-
-def _scale(value, scale):
-    return int(round(float(value) * scale))
 
 
 def _as_date(value):
@@ -88,7 +87,7 @@ def _is_sugar(classification):
 
 
 def _demand_profile(headers, fc):
-    """Giữ convention FC/26: nhu cầu T2-T7, CN vẫn là ngày sản xuất bình thường."""
+    """Giữ convention FC/26: nhu cầu T2-T7, CN vẫn có thể sản xuất."""
     demand_days = sum(1 for current_day in headers if current_day.weekday() != 6)
     if fc <= 0 or demand_days <= 0:
         return {current_day: 0.0 for current_day in headers}
@@ -220,172 +219,587 @@ def read_schedule_inputs(workbook_bytes, *, plan_year=None):
         workbook.close()
 
 
-def _new_solver():
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = MAX_SOLVE_SECONDS
-    solver.parameters.num_search_workers = 8
-    solver.parameters.random_seed = 17
-    return solver
+def _earliest_index(headers, product):
+    earliest = product["earliest_date"]
+    if earliest is None or earliest <= headers[0]:
+        return 0
+    for index, current_day in enumerate(headers):
+        if current_day >= earliest:
+            return index
+    return len(headers)
 
 
-def _solve_phase(model, objective, label):
-    model.Minimize(objective)
-    solver = _new_solver()
-    status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError(f"Scheduler CP-SAT không tìm được nghiệm ở phase {label}.")
-    return solver, int(round(solver.ObjectiveValue()))
-
-
-def _optimize_line(headers, line_products, line_capacity):
-    model = cp_model.CpModel()
-    day_index = {current_day: index for index, current_day in enumerate(headers)}
-    capacity_scaled = _scale(line_capacity, SHIFT_SCALE)
-
-    x = {}
-    active = {}
-    unscheduled = {}
-    product_by_code = {product["code"]: product for product in line_products}
-
-    for product in line_products:
-        code = product["code"]
-        required = product["required_units"]
-        unscheduled[code] = model.NewIntVar(0, required, f"unscheduled_{code}")
-        vars_for_product = []
-
-        quantum_shift_scaled = _scale(product["quantum_shift"], SHIFT_SCALE)
-        sku_daily_capacity_scaled = _scale(product["max_shifts_per_day"], SHIFT_SCALE)
-        max_units_day = min(
-            required,
-            sku_daily_capacity_scaled // quantum_shift_scaled,
-        )
-
-        for current_day in headers:
-            eligible = (
-                product["earliest_date"] is None
-                or current_day >= product["earliest_date"]
-            )
-            upper = max_units_day if eligible else 0
-            variable = model.NewIntVar(0, upper, f"x_{code}_{day_index[current_day]}")
-            x[(code, current_day)] = variable
-            vars_for_product.append(variable)
-
-            used = model.NewBoolVar(f"active_{code}_{day_index[current_day]}")
-            active[(code, current_day)] = used
-            if upper == 0:
-                model.Add(used == 0)
-            else:
-                model.Add(variable <= upper * used)
-                model.Add(variable >= used)
-
-        model.Add(sum(vars_for_product) + unscheduled[code] == required)
-
-    for current_day in headers:
-        terms = []
-        for product in line_products:
-            shift_scaled = _scale(product["quantum_shift"], SHIFT_SCALE)
-            terms.append(x[(product["code"], current_day)] * shift_scaled)
-        model.Add(sum(terms) <= capacity_scaled)
-
-    stockout_vars = []
-    safety_vars = []
-    for product in line_products:
-        code = product["code"]
-        quantum_qty_scaled = _scale(product["quantum_qty"], QTY_SCALE)
-        opening_scaled = _scale(product["actual_stock"], QTY_SCALE)
-        target_scaled = _scale(product["target_stock"], QTY_SCALE)
-        cumulative_demand = 0
-        cumulative_prod_terms = []
-
-        for current_day in headers:
-            cumulative_demand += _scale(product["demand_by_day"][current_day], QTY_SCALE)
-            cumulative_prod_terms.append(x[(code, current_day)] * quantum_qty_scaled)
-            stock_expr = opening_scaled + sum(cumulative_prod_terms) - cumulative_demand
-
-            stockout = model.NewIntVar(0, 10**12, f"stockout_{code}_{day_index[current_day]}")
-            model.Add(stockout >= -stock_expr)
-            stockout_vars.append(stockout)
-
-            safety = model.NewIntVar(0, 10**12, f"safety_{code}_{day_index[current_day]}")
-            model.Add(safety >= target_scaled - stock_expr)
-            safety_vars.append(safety)
-
-    unscheduled_qty_expr = sum(
-        unscheduled[product["code"]] * _scale(product["quantum_qty"], QTY_SCALE)
-        for product in line_products
-    )
-    solver, best_unscheduled = _solve_phase(model, unscheduled_qty_expr, "P-completion")
-    model.Add(unscheduled_qty_expr == best_unscheduled)
-
-    stockout_expr = sum(stockout_vars)
-    solver, best_stockout = _solve_phase(model, stockout_expr, "stockout")
-    model.Add(stockout_expr == best_stockout)
-
-    safety_expr = sum(safety_vars)
-    solver, best_safety = _solve_phase(model, safety_expr, "safety-stock")
-    model.Add(safety_expr == best_safety)
-
-    active_days_expr = sum(active.values())
-    timing_terms = []
-    last_index = len(headers) - 1
-    for product in line_products:
-        code = product["code"]
-        for current_day in headers:
-            index = day_index[current_day]
-            # Nợ kho ưu tiên về sớm; SKU khác sau khi đã bảo vệ inventory
-            # thì xếp gần nhu cầu hơn để giảm tồn trung gian.
-            timing_weight = index if product["debt"] > 0 else last_index - index
-            timing_terms.append(x[(code, current_day)] * timing_weight)
-
-    final_expr = active_days_expr * 10000 + sum(timing_terms)
-    solver, _ = _solve_phase(model, final_expr, "compact-schedule")
-
-    assignments = defaultdict(dict)
-    carryover = {}
-    usage = defaultdict(float)
-    for product in line_products:
-        code = product["code"]
-        for current_day in headers:
-            units = solver.Value(x[(code, current_day)])
-            assignments[code][current_day] = units
-            usage[current_day] += units * product["quantum_shift"]
-        missing_units = solver.Value(unscheduled[code])
-        if missing_units > 0:
-            carryover[code] = _clean_number(missing_units * product["quantum_qty"])
-
-    return assignments, usage, carryover, {
-        "unscheduled_scaled": best_unscheduled,
-        "stockout_scaled_days": best_stockout,
-        "safety_scaled_days": best_safety,
-    }
-
-
-def build_schedule(headers, products):
-    schedule = {
+def _empty_schedule(headers, products):
+    return {
         product["code"]: {current_day: 0.0 for current_day in headers}
         for product in products
     }
+
+
+def _add_interval_usage(usage, headers, start_shift, duration, capacity):
+    end_shift = start_shift + duration
+    for index, current_day in enumerate(headers):
+        day_start = index * capacity
+        day_end = day_start + capacity
+        overlap = max(0.0, min(end_shift, day_end) - max(start_shift, day_start))
+        if overlap > EPSILON:
+            usage[current_day] += overlap
+
+
+def _add_production_interval(schedule, usage, headers, product, start_shift, duration, capacity):
+    end_shift = start_shift + duration
+    produced = 0.0
+    for index, current_day in enumerate(headers):
+        day_start = index * capacity
+        day_end = day_start + capacity
+        overlap = max(0.0, min(end_shift, day_end) - max(start_shift, day_start))
+        if overlap <= EPSILON:
+            continue
+        qty = overlap * product["per_shift"]
+        schedule[product["code"]][current_day] += qty
+        usage[current_day] += overlap
+        produced += qty
+    return produced
+
+
+def _campaign_candidate(remaining, headers, cursor_shift, capacity, last_group):
+    if not remaining:
+        return None, cursor_shift
+
+    current_index = min(len(headers), int(math.floor(cursor_shift / capacity + EPSILON)))
+    eligible = []
+    for product in remaining:
+        earliest_index = _earliest_index(headers, product)
+        if earliest_index <= current_index:
+            eligible.append(product)
+
+    if not eligible:
+        next_index = min(_earliest_index(headers, product) for product in remaining)
+        cursor_shift = max(cursor_shift, next_index * capacity)
+        current_index = next_index
+        eligible = [
+            product
+            for product in remaining
+            if _earliest_index(headers, product) <= current_index
+        ]
+
+    # File mẫu Helper_SX_2Line sắp theo Chuyền -> R -> dòng gốc.
+    # Không kéo một SKU R muộn lên trước chỉ để giữ cùng nhóm; tính liên tục
+    # được đảm bảo bằng việc mỗi SKU chỉ chạy đúng một campaign.
+    eligible.sort(
+        key=lambda product: (
+            _earliest_index(headers, product),
+            0 if product["debt"] > 0 else 1,
+            product["row"],
+        )
+    )
+    return eligible[0], cursor_shift
+
+
+def _allocate_continuous_campaign_line(headers, products, capacity):
+    """Mirror file mẫu: mỗi SKU là một block liên tục, đổi SKU mất 0,5 ca."""
+    schedule = _empty_schedule(headers, products)
+    usage = defaultdict(float)
+    carryover = {}
+    campaigns = []
+    remaining = list(products)
+    cursor_shift = 0.0
+    last_code = None
+    last_group = None
+    month_end_shift = len(headers) * capacity
+    setup_total = 0.0
+
+    while remaining:
+        product, cursor_shift = _campaign_candidate(
+            remaining, headers, cursor_shift, capacity, last_group
+        )
+        remaining.remove(product)
+
+        earliest_shift = _earliest_index(headers, product) * capacity
+        cursor_shift = max(cursor_shift, earliest_shift)
+
+        if last_code is not None and product["code"] != last_code:
+            setup_start = cursor_shift
+            setup_duration = min(SETUP_SHIFTS, max(0.0, month_end_shift - setup_start))
+            if setup_duration > EPSILON:
+                _add_interval_usage(usage, headers, setup_start, setup_duration, capacity)
+                setup_total += setup_duration
+            cursor_shift += SETUP_SHIFTS
+
+        production_start = max(cursor_shift, earliest_shift)
+        required_duration = product["planned_qty"] / product["per_shift"]
+
+        if production_start >= month_end_shift - EPSILON:
+            carryover[product["code"]] = _clean_number(product["planned_qty"])
+            campaigns.append(
+                {
+                    "code": product["code"],
+                    "group": product["product_group"],
+                    "start_shift": production_start,
+                    "end_shift": production_start,
+                    "scheduled_qty": 0,
+                }
+            )
+            last_code = product["code"]
+            last_group = product["product_group"]
+            continue
+
+        actual_duration = min(required_duration, month_end_shift - production_start)
+        produced = _add_production_interval(
+            schedule,
+            usage,
+            headers,
+            product,
+            production_start,
+            actual_duration,
+            capacity,
+        )
+        cursor_shift = production_start + actual_duration
+
+        missing = max(0.0, product["planned_qty"] - produced)
+        if missing > 1e-6:
+            carryover[product["code"]] = _clean_number(missing)
+
+        campaigns.append(
+            {
+                "code": product["code"],
+                "group": product["product_group"],
+                "start_shift": production_start,
+                "end_shift": cursor_shift,
+                "scheduled_qty": _clean_number(produced),
+            }
+        )
+        last_code = product["code"]
+        last_group = product["product_group"]
+
+    return schedule, usage, carryover, {
+        "mode": "continuous_campaign",
+        "setup_shifts": setup_total,
+        "campaigns": campaigns,
+    }
+
+
+def _new_remaining(headers, capacity):
+    return {current_day: float(capacity) for current_day in headers}
+
+
+def _consume_setup(remaining, usage, headers, start_index, *, allow_sunday, max_index=None):
+    need = SETUP_SHIFTS
+    end_index = len(headers) - 1 if max_index is None else min(max_index, len(headers) - 1)
+    for index in range(max(0, start_index), end_index + 1):
+        current_day = headers[index]
+        if not allow_sunday and current_day.weekday() == 6:
+            continue
+        take = min(remaining[current_day], need)
+        if take > EPSILON:
+            remaining[current_day] -= take
+            usage[current_day] += take
+            need -= take
+        if need <= EPSILON:
+            return index, True
+    return end_index + 1, False
+
+
+def _place_units(
+    schedule,
+    usage,
+    remaining,
+    headers,
+    product,
+    units,
+    start_index,
+    *,
+    allow_sunday,
+    max_index=None,
+):
+    if units <= 0:
+        return 0, start_index
+
+    quantum_shift = product["quantum_shift"]
+    placed = 0
+    cursor = max(0, start_index)
+    end_index = len(headers) - 1 if max_index is None else min(max_index, len(headers) - 1)
+
+    while placed < units and cursor <= end_index:
+        current_day = headers[cursor]
+        if (
+            (allow_sunday or current_day.weekday() != 6)
+            and current_day >= (product["earliest_date"] or headers[0])
+            and remaining[current_day] + EPSILON >= quantum_shift
+        ):
+            max_fit = int(math.floor((remaining[current_day] + EPSILON) / quantum_shift))
+            max_fit = min(max_fit, units - placed)
+            if max_fit > 0:
+                shift_used = max_fit * quantum_shift
+                qty = max_fit * product["quantum_qty"]
+                schedule[product["code"]][current_day] += qty
+                usage[current_day] += shift_used
+                remaining[current_day] -= shift_used
+                placed += max_fit
+                if placed >= units:
+                    return placed, cursor
+        cursor += 1
+
+    return placed, cursor
+
+
+def _month_week_buckets(headers):
+    buckets = []
+    for start in range(0, len(headers), 7):
+        buckets.append((start, min(start + 6, len(headers) - 1)))
+    return buckets
+
+
+def _weekly_unit_targets(headers, product):
+    buckets = _month_week_buckets(headers)
+    active = [
+        bucket for bucket in buckets
+        if headers[bucket[1]] >= (product["earliest_date"] or headers[0])
+    ]
+    if not active:
+        return {}
+
+    total = product["required_units"]
+    targets = {}
+    done_target = 0
+    for ordinal, bucket in enumerate(active, start=1):
+        cumulative = int(math.ceil(total * ordinal / len(active) - EPSILON))
+        targets[bucket] = cumulative - done_target
+        done_target = cumulative
+    return targets
+
+
+def _allocate_weekly_rgb_line(headers, products, capacity):
+    """Mirror file mẫu RGB: chia sản lượng theo tuần rồi gom từng mã thành mini-campaign."""
+    schedule = _empty_schedule(headers, products)
+    usage = defaultdict(float)
+    remaining_capacity = _new_remaining(headers, capacity)
+    weekly_targets = {product["code"]: _weekly_unit_targets(headers, product) for product in products}
+    pending = defaultdict(int)
+    last_code = None
+    last_group = None
+    setup_total = 0.0
+    campaigns = []
+
+    for bucket in _month_week_buckets(headers):
+        start_index, end_index = bucket
+        weekly_units = {}
+        for product in products:
+            pending[product["code"]] += weekly_targets[product["code"]].get(bucket, 0)
+            if pending[product["code"]] > 0:
+                weekly_units[product["code"]] = pending[product["code"]]
+
+        remaining_products = [
+            product for product in products
+            if weekly_units.get(product["code"], 0) > 0
+        ]
+
+        while remaining_products:
+            same_group = [
+                product for product in remaining_products
+                if last_group and product["product_group"] == last_group
+            ]
+            candidates = same_group or remaining_products
+            candidates.sort(
+                key=lambda product: (
+                    _earliest_index(headers, product),
+                    0 if product["debt"] > 0 else 1,
+                    product["product_group"],
+                    product["row"],
+                )
+            )
+            product = candidates[0]
+            remaining_products.remove(product)
+
+            campaign_start = start_index
+            if last_code is not None and last_code != product["code"]:
+                setup_index, ok = _consume_setup(
+                    remaining_capacity,
+                    usage,
+                    headers,
+                    campaign_start,
+                    allow_sunday=False,
+                    max_index=end_index,
+                )
+                if ok:
+                    setup_total += SETUP_SHIFTS
+                    campaign_start = setup_index
+                else:
+                    # Không phí công cố đổi mã trong tuần nếu hết capacity; dồn qua tuần sau.
+                    continue
+
+            requested = weekly_units[product["code"]]
+            placed, last_index = _place_units(
+                schedule,
+                usage,
+                remaining_capacity,
+                headers,
+                product,
+                requested,
+                campaign_start,
+                allow_sunday=False,
+                max_index=end_index,
+            )
+            pending[product["code"]] -= placed
+            if placed > 0:
+                campaigns.append(
+                    {
+                        "code": product["code"],
+                        "week": f"{headers[start_index]:%d/%m}-{headers[end_index]:%d/%m}",
+                        "units": placed,
+                    }
+                )
+                last_code = product["code"]
+                last_group = product["product_group"]
+
+    # Nếu capacity T2-T7 không đủ mới dùng Chủ nhật, giống file mẫu.
+    for product in sorted(products, key=lambda item: (_earliest_index(headers, item), item["row"])):
+        missing = pending[product["code"]]
+        if missing <= 0:
+            continue
+        start_index = _earliest_index(headers, product)
+        if last_code is not None and last_code != product["code"]:
+            setup_index, ok = _consume_setup(
+                remaining_capacity,
+                usage,
+                headers,
+                start_index,
+                allow_sunday=True,
+            )
+            if ok:
+                setup_total += SETUP_SHIFTS
+                start_index = setup_index
+
+        placed, _ = _place_units(
+            schedule,
+            usage,
+            remaining_capacity,
+            headers,
+            product,
+            missing,
+            start_index,
+            allow_sunday=True,
+        )
+        pending[product["code"]] -= placed
+        if placed > 0:
+            last_code = product["code"]
+            last_group = product["product_group"]
+
+    carryover = {}
+    for product in products:
+        missing = pending[product["code"]]
+        if missing > 0:
+            carryover[product["code"]] = _clean_number(missing * product["quantum_qty"])
+
+    return schedule, usage, carryover, {
+        "mode": "weekly_rgb",
+        "setup_shifts": setup_total,
+        "campaigns": campaigns,
+    }
+
+
+def _place_fractional_shift(
+    schedule,
+    usage,
+    remaining,
+    headers,
+    product,
+    day_index,
+    shift_qty,
+):
+    if shift_qty <= EPSILON:
+        return 0.0
+    current_day = headers[day_index]
+    shift_need = shift_qty / product["per_shift"]
+    shift_take = min(remaining[current_day], shift_need)
+    if shift_take <= EPSILON:
+        return 0.0
+    qty = shift_take * product["per_shift"]
+    schedule[product["code"]][current_day] += qty
+    usage[current_day] += shift_take
+    remaining[current_day] -= shift_take
+    return qty
+
+
+def _allocate_galon_line(headers, products, capacity):
+    """19L rải đều theo ngày làm việc; các mã Galon khác chạy block liên tục vào capacity còn lại."""
+    schedule = _empty_schedule(headers, products)
+    usage = defaultdict(float)
+    remaining_capacity = _new_remaining(headers, capacity)
+    carryover = {}
+    campaigns = []
+    setup_total = 0.0
+    last_code = None
+
+    spread = next((product for product in products if product["code"] == GALON_SPREAD_CODE), None)
+    others = [product for product in products if product["code"] != GALON_SPREAD_CODE]
+
+    if spread is not None:
+        eligible = [
+            index for index, current_day in enumerate(headers)
+            if index >= _earliest_index(headers, spread) and current_day.weekday() != 6
+        ]
+        remaining_qty = spread["planned_qty"]
+
+        # Rải đều giống công thức file mẫu: mỗi ngày nhận số ca nền như nhau,
+        # phần ca dư được phân theo vị trí tỷ lệ trên toàn dải ngày.
+        if eligible and remaining_qty > EPSILON:
+            full_units = int(math.floor(remaining_qty / spread["per_shift"] + EPSILON))
+            partial_qty = remaining_qty - full_units * spread["per_shift"]
+            base_units, extra_units = divmod(full_units, len(eligible))
+
+            planned_units = {index: base_units for index in eligible}
+            for extra_no in range(1, extra_units + 1):
+                rank = int(math.ceil(extra_no * len(eligible) / extra_units)) if extra_units else 0
+                rank = min(max(rank, 1), len(eligible))
+                planned_units[eligible[rank - 1]] += 1
+
+            for index in eligible:
+                units_today = planned_units[index]
+                for _ in range(units_today):
+                    made = _place_fractional_shift(
+                        schedule,
+                        usage,
+                        remaining_capacity,
+                        headers,
+                        spread,
+                        index,
+                        spread["per_shift"],
+                    )
+                    if made <= EPSILON:
+                        break
+                    remaining_qty -= made
+
+            if partial_qty > EPSILON and remaining_qty > EPSILON:
+                # Phần lẻ đặt ở ngày làm việc cuối còn capacity để không tạo nhiều lần đổi mã.
+                for index in reversed(eligible):
+                    made = _place_fractional_shift(
+                        schedule,
+                        usage,
+                        remaining_capacity,
+                        headers,
+                        spread,
+                        index,
+                        min(partial_qty, remaining_qty),
+                    )
+                    if made > EPSILON:
+                        remaining_qty -= made
+                        break
+
+        # Chỉ dùng Chủ nhật nếu phần còn lại không thể nhét vào T2-T7.
+        if remaining_qty > EPSILON:
+            for index, current_day in enumerate(headers):
+                if index < _earliest_index(headers, spread) or current_day.weekday() != 6:
+                    continue
+                while remaining_qty > EPSILON and remaining_capacity[current_day] > EPSILON:
+                    qty = min(spread["per_shift"], remaining_qty)
+                    made = _place_fractional_shift(
+                        schedule,
+                        usage,
+                        remaining_capacity,
+                        headers,
+                        spread,
+                        index,
+                        qty,
+                    )
+                    if made <= EPSILON:
+                        break
+                    remaining_qty -= made
+
+        if remaining_qty > 1e-6:
+            carryover[spread["code"]] = _clean_number(remaining_qty)
+
+        last_code = spread["code"]
+        campaigns.append({"code": spread["code"], "mode": "spread_workdays"})
+
+    for product in sorted(
+        others,
+        key=lambda item: (
+            _earliest_index(headers, item),
+            0 if item["debt"] > 0 else 1,
+            item["row"],
+        ),
+    ):
+        start_index = _earliest_index(headers, product)
+
+        if last_code is not None and last_code != product["code"]:
+            setup_index, ok = _consume_setup(
+                remaining_capacity,
+                usage,
+                headers,
+                start_index,
+                allow_sunday=True,
+            )
+            if ok:
+                setup_total += SETUP_SHIFTS
+                start_index = setup_index
+
+        placed, _ = _place_units(
+            schedule,
+            usage,
+            remaining_capacity,
+            headers,
+            product,
+            product["required_units"],
+            start_index,
+            allow_sunday=True,
+        )
+        missing_units = product["required_units"] - placed
+        if missing_units > 0:
+            carryover[product["code"]] = _clean_number(missing_units * product["quantum_qty"])
+        if placed > 0:
+            last_code = product["code"]
+            campaigns.append({"code": product["code"], "mode": "continuous_remaining_capacity"})
+
+    return schedule, usage, carryover, {
+        "mode": "galon_hybrid",
+        "setup_shifts": setup_total,
+        "campaigns": campaigns,
+    }
+
+
+def _allocate_generic_line(headers, products, capacity):
+    # Unknown line: safer default is one continuous block per SKU, not fragmented optimization.
+    return _allocate_continuous_campaign_line(headers, products, capacity)
+
+
+def build_schedule(headers, products):
+    schedule = _empty_schedule(headers, products)
     active_products = [product for product in products if product["planned_qty"] > 0]
 
-    line_capacity = {}
     by_line = defaultdict(list)
     for product in active_products:
         by_line[product["line"]].append(product)
-        line_capacity[product["line"]] = max(
-            line_capacity.get(product["line"], 0.0),
-            product["max_shifts_per_day"],
-        )
 
+    line_capacity = {}
     line_usage = defaultdict(lambda: defaultdict(float))
     carryover = {}
     optimizer_meta = {}
 
     for line, line_products in sorted(by_line.items()):
-        assignments, usage, line_carryover, meta = _optimize_line(
-            headers,
-            line_products,
-            line_capacity[line],
-        )
+        if line in CONTINUOUS_LINES:
+            # File mẫu KHS/PET sử dụng một capacity chung (hiện tại đều 3 ca/ngày).
+            capacity = min(product["max_shifts_per_day"] for product in line_products)
+            line_schedule, usage, line_carryover, meta = _allocate_continuous_campaign_line(
+                headers, line_products, capacity
+            )
+        elif line in WEEKLY_LINES:
+            capacity = max(product["max_shifts_per_day"] for product in line_products)
+            line_schedule, usage, line_carryover, meta = _allocate_weekly_rgb_line(
+                headers, line_products, capacity
+            )
+        elif line == GALON_LINE:
+            capacity = max(product["max_shifts_per_day"] for product in line_products)
+            line_schedule, usage, line_carryover, meta = _allocate_galon_line(
+                headers, line_products, capacity
+            )
+        else:
+            capacity = min(product["max_shifts_per_day"] for product in line_products)
+            line_schedule, usage, line_carryover, meta = _allocate_generic_line(
+                headers, line_products, capacity
+            )
+
+        line_capacity[line] = capacity
         optimizer_meta[line] = meta
         carryover.update(line_carryover)
 
@@ -394,8 +808,7 @@ def build_schedule(headers, products):
         for product in line_products:
             code = product["code"]
             for current_day in headers:
-                units = assignments[code][current_day]
-                schedule[code][current_day] = units * product["quantum_qty"]
+                schedule[code][current_day] = line_schedule[code][current_day]
 
     validate_schedule(headers, products, schedule, line_capacity, line_usage)
     inventory = simulate_inventory(headers, products, schedule)
@@ -599,9 +1012,11 @@ def main_with_retry(*, sleep_func=time.sleep, max_attempts=6, retry_delay_second
 
         for line, utilization in sorted(info["utilization"].items()):
             capacity = info["line_capacity"][line]
+            mode = info["optimizer_meta"].get(line, {}).get("mode", "")
+            setup = info["optimizer_meta"].get(line, {}).get("setup_shifts", 0)
             print(
-                f"[Scheduler] {line}: {capacity:g} ca/ngày; "
-                f"utilization tháng {utilization * 100:.1f}%."
+                f"[Scheduler] {line}: mode={mode}; {capacity:g} ca/ngày; "
+                f"setup {setup:g} ca; utilization tháng {utilization * 100:.1f}%."
             )
 
         if info["carryover"]:
