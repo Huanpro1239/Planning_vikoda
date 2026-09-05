@@ -44,7 +44,7 @@ jobs:
         run: python sync_planning_fc_compat.py
 
       - name: Calculate Ke hoach SX M to R directly
-        run: python sync_planning_metrics_compat.py
+        run: python sync_planning_metrics_direct.py
 
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
