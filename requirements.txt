@@ -2,4 +2,3 @@ msal
 requests
 openpyxl
 lxml
-ortools
