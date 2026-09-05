@@ -1,9 +1,13 @@
 import unittest
 from datetime import datetime
+from io import BytesIO
+
+from openpyxl import Workbook
 
 from sync_planning_metrics import (
     calculate_product_metrics,
     excel_roundup_integer,
+    read_system_receipts,
 )
 
 
@@ -87,6 +91,26 @@ class PlanningMetricsTests(unittest.TestCase):
             plan_month=8,
         )
         self.assertIsNone(result["production_start"])
+
+    def test_system_receipts_ignore_codes_outside_planning_catalog(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Sheet1"
+        worksheet.append([None, "Mã vật tư", None, None, None, None, None, None, "Nhập trong kỳ"])
+        worksheet.append([None, 130100096, None, None, None, None, None, None, 9000])
+        worksheet.append([None, 130100014, None, None, None, None, None, None, 5000])
+
+        buffer = BytesIO()
+        workbook.save(buffer)
+        workbook.close()
+
+        result = read_system_receipts(
+            buffer.getvalue(),
+            {"130100096": 24},
+        )
+
+        self.assertEqual(result, {"130100096": 375})
+        self.assertNotIn("130100014", result)
 
 
 if __name__ == "__main__":
