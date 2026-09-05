@@ -42,6 +42,9 @@ jobs:
       - name: Sync stock to SharePoint
         run: python sync_stock.py
 
+      - name: Sync FC to Ke hoach SX
+        run: python sync_planning_fc.py
+
       - name: Remove Ke hoach SX formulas
         run: python cleanup_planning.py
 
