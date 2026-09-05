@@ -43,19 +43,22 @@ jobs:
       - name: Sync FC to Ke hoach SX
         run: python sync_planning_fc.py
 
+      - name: Calculate Ke hoach SX M to R directly
+        run: python sync_planning_metrics.py
+
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
 
-      - name: Save source eTag state
+      - name: Save sync states
         shell: bash
         run: |
-          if git diff --quiet -- state.json; then
-            echo "state.json không thay đổi."
+          if git diff --quiet -- state.json planning_runtime.json; then
+            echo "Các file state không thay đổi."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json
-          git commit -m "chore: update SharePoint source state"
+          git add state.json planning_runtime.json
+          git commit -m "chore: update SharePoint sync states"
           git push
