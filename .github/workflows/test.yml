@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
     branches:
+      - main
       - fix/remove-ke-hoach-sx-formulas
   pull_request:
 
