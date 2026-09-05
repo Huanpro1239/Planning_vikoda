@@ -75,18 +75,20 @@ def _parse_header_date(value, plan_year):
         raise RuntimeError(f"Tiêu đề ngày không hợp lệ: {value!r}") from exc
 
 
-def _risk_date(first_day, actual_stock, target_stock, fc):
-    if fc <= 0:
-        return date.max
-    daily_fc = fc / 26.0
-    if daily_fc <= 0:
-        return date.max
-    days_to_target = max((actual_stock - target_stock) / daily_fc, 0.0)
-    return first_day + timedelta(days=days_to_target)
-
-
 def _is_sugar(classification):
     return str(classification or "").strip().casefold() == "có đường".casefold()
+
+
+def _demand_profile(headers, fc):
+    """FC được phân trên ngày nhu cầu T2-T7; Chủ nhật vẫn sản xuất nhưng demand = 0."""
+    demand_days = sum(1 for current_day in headers if current_day.weekday() != 6)
+    if fc <= 0 or demand_days <= 0:
+        return {current_day: 0.0 for current_day in headers}
+    daily = fc / demand_days
+    return {
+        current_day: (0.0 if current_day.weekday() == 6 else daily)
+        for current_day in headers
+    }
 
 
 def _validate_quantum(product):
@@ -159,7 +161,11 @@ def read_schedule_inputs(workbook_bytes, *, plan_year=None):
         products = []
         seen_codes = set()
         for row_number, values in enumerate(
-            worksheet.iter_rows(min_row=2, max_col=START_COLUMN_NUMBER + MAX_DAYS - 1, values_only=True),
+            worksheet.iter_rows(
+                min_row=2,
+                max_col=START_COLUMN_NUMBER + MAX_DAYS - 1,
+                values_only=True,
+            ),
             start=2,
         ):
             code = normalize_code(values[0] if values else None)
@@ -186,17 +192,12 @@ def read_schedule_inputs(workbook_bytes, *, plan_year=None):
                 "actual_stock": _to_number(values[9], f"{PLANNING_SHEET}!J{row_number}"),
                 "fc": _to_number(values[11], f"{PLANNING_SHEET}!L{row_number}"),
                 "target_stock": _to_number(values[12], f"{PLANNING_SHEET}!M{row_number}"),
-                "debt": _to_number(values[13], f"{PLANNING_SHEET}!N{row_number}"),
+                "debt": max(_to_number(values[13], f"{PLANNING_SHEET}!N{row_number}"), 0.0),
                 "planned_qty": max(planned_qty, 0.0),
                 "earliest_date": earliest,
                 "existing_daily": list(values[18:18 + MAX_DAYS]),
             }
-            product["risk_date"] = _risk_date(
-                first_day,
-                product["actual_stock"],
-                product["target_stock"],
-                product["fc"],
-            )
+            product["demand_by_day"] = _demand_profile(headers, product["fc"])
             _validate_quantum(product)
             products.append(product)
 
@@ -208,12 +209,31 @@ def read_schedule_inputs(workbook_bytes, *, plan_year=None):
         workbook.close()
 
 
-def _priority_key(product):
+def _forecast_breach_date(product, current_day, headers, schedule, threshold):
+    stock = product["projected_stock"] + schedule[product["code"]][current_day]
+    start_index = headers.index(current_day)
+    for future_day in headers[start_index:]:
+        stock -= product["demand_by_day"][future_day]
+        if stock < threshold - EPSILON:
+            return future_day
+    return date.max
+
+
+def _priority_key(product, current_day, headers, schedule):
+    stockout_date = _forecast_breach_date(product, current_day, headers, schedule, 0.0)
+    safety_date = _forecast_breach_date(
+        product,
+        current_day,
+        headers,
+        schedule,
+        product["target_stock"],
+    )
     earliest = product["earliest_date"] or date.max
     remaining_shift = product["remaining_units"] * product.get("quantum_shift", 0)
     return (
+        stockout_date,
+        safety_date,
         0 if product["debt"] > 0 else 1,
-        product["risk_date"],
         earliest,
         -remaining_shift,
         product["code"],
@@ -222,7 +242,7 @@ def _priority_key(product):
 
 def build_schedule(headers, products):
     schedule = {
-        product["code"]: {day: 0.0 for day in headers}
+        product["code"]: {current_day: 0.0 for current_day in headers}
         for product in products
     }
 
@@ -239,6 +259,9 @@ def build_schedule(headers, products):
     for product in active:
         by_line[product["line"]].append(product)
 
+    for product in products:
+        product["projected_stock"] = product["actual_stock"]
+
     for current_day in headers:
         for line, line_products in sorted(by_line.items()):
             available = line_capacity[line] - line_usage[line][current_day]
@@ -251,7 +274,8 @@ def build_schedule(headers, products):
                     if current_day < earliest:
                         continue
                     sku_remaining_capacity = (
-                        product["max_shifts_per_day"] - sku_usage[product["code"]][current_day]
+                        product["max_shifts_per_day"]
+                        - sku_usage[product["code"]][current_day]
                     )
                     if product["quantum_shift"] - available > EPSILON:
                         continue
@@ -262,25 +286,28 @@ def build_schedule(headers, products):
                 if not candidates:
                     break
 
-                product = min(candidates, key=_priority_key)
-                sku_remaining_capacity = (
-                    product["max_shifts_per_day"] - sku_usage[product["code"]][current_day]
+                product = min(
+                    candidates,
+                    key=lambda item: _priority_key(item, current_day, headers, schedule),
                 )
-                fit_line = int(math.floor((available + EPSILON) / product["quantum_shift"]))
-                fit_sku = int(
-                    math.floor((sku_remaining_capacity + EPSILON) / product["quantum_shift"])
-                )
-                units = min(product["remaining_units"], fit_line, fit_sku)
-                if units <= 0:
-                    break
 
-                used_shift = units * product["quantum_shift"]
-                produced = units * product["quantum_qty"]
+                # Xếp từng quantum một rồi tính lại mức độ khẩn cấp. Cách này
+                # tránh một SKU chiếm trọn ngày trong khi SKU khác sắp stockout.
+                used_shift = product["quantum_shift"]
+                produced = product["quantum_qty"]
                 schedule[product["code"]][current_day] += produced
-                product["remaining_units"] -= units
+                product["remaining_units"] -= 1
                 line_usage[line][current_day] += used_shift
                 sku_usage[product["code"]][current_day] += used_shift
                 available -= used_shift
+
+        # Chốt tồn cuối ngày. Chủ nhật vẫn sản xuất, nhưng demand profile
+        # mặc định bằng 0 để nhất quán với logic FC/26 của workbook hiện tại.
+        for product in products:
+            product["projected_stock"] += (
+                schedule[product["code"]][current_day]
+                - product["demand_by_day"][current_day]
+            )
 
     carryover = {}
     for product in active:
@@ -289,7 +316,38 @@ def build_schedule(headers, products):
             carryover[product["code"]] = _clean_number(remaining_qty)
 
     validate_schedule(headers, products, schedule, line_capacity, line_usage)
-    return schedule, line_capacity, line_usage, carryover
+    inventory = simulate_inventory(headers, products, schedule)
+    return schedule, line_capacity, line_usage, carryover, inventory
+
+
+def simulate_inventory(headers, products, schedule):
+    result = {}
+    for product in products:
+        stock = product["actual_stock"]
+        min_stock = stock
+        first_stockout = None
+        first_below_safety = None
+        for current_day in headers:
+            stock += (
+                schedule[product["code"]][current_day]
+                - product["demand_by_day"][current_day]
+            )
+            min_stock = min(min_stock, stock)
+            if stock < -EPSILON and first_stockout is None:
+                first_stockout = current_day
+            if (
+                stock < product["target_stock"] - EPSILON
+                and first_below_safety is None
+            ):
+                first_below_safety = current_day
+
+        result[product["code"]] = {
+            "ending_stock": _clean_number(stock),
+            "min_stock": _clean_number(min_stock),
+            "first_stockout": first_stockout,
+            "first_below_safety": first_below_safety,
+        }
+    return result
 
 
 def validate_schedule(headers, products, schedule, line_capacity, line_usage):
@@ -313,7 +371,8 @@ def validate_schedule(headers, products, schedule, line_capacity, line_usage):
             for current_day, qty in schedule[product["code"]].items():
                 if qty > EPSILON and current_day < earliest:
                     raise RuntimeError(
-                        f"Mã {product['code']} bị xếp ngày {current_day:%d/%m} trước R={earliest:%d/%m}."
+                        f"Mã {product['code']} bị xếp ngày {current_day:%d/%m} "
+                        f"trước R={earliest:%d/%m}."
                     )
 
 
@@ -334,7 +393,11 @@ def _set_numeric_or_blank(cell, value):
     namespace = etree.QName(cell).namespace
     node = etree.SubElement(cell, f"{{{namespace}}}v")
     cleaned = _clean_number(value)
-    node.text = str(cleaned) if isinstance(cleaned, int) else format(float(cleaned), ".15g")
+    node.text = (
+        str(cleaned)
+        if isinstance(cleaned, int)
+        else format(float(cleaned), ".15g")
+    )
 
 
 def patch_schedule_workbook(workbook_bytes, headers, products, schedule):
@@ -345,10 +408,18 @@ def patch_schedule_workbook(workbook_bytes, headers, products, schedule):
     for product in products:
         values = []
         for index in range(MAX_DAYS):
-            target = schedule[product["code"]][headers[index]] if index < day_count else 0
+            target = (
+                schedule[product["code"]][headers[index]]
+                if index < day_count
+                else 0
+            )
             target = _clean_number(target)
             values.append(target)
-            current = product["existing_daily"][index] if index < len(product["existing_daily"]) else None
+            current = (
+                product["existing_daily"][index]
+                if index < len(product["existing_daily"])
+                else None
+            )
             if not _number_equal(current, target):
                 changed_count += 1
         target_values[product["code"]] = values
@@ -402,9 +473,17 @@ def patch_schedule_workbook(workbook_bytes, headers, products, schedule):
             encoding="UTF-8",
             standalone=True,
         )
-        with zipfile.ZipFile(output_buffer, "w", compression=zipfile.ZIP_DEFLATED) as output_zip:
+        with zipfile.ZipFile(
+            output_buffer,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as output_zip:
             for item in source_zip.infolist():
-                data = new_xml if item.filename == sheet_path else source_zip.read(item.filename)
+                data = (
+                    new_xml
+                    if item.filename == sheet_path
+                    else source_zip.read(item.filename)
+                )
                 output_zip.writestr(item, data)
 
     return output_buffer.getvalue(), changed_count
@@ -412,7 +491,10 @@ def patch_schedule_workbook(workbook_bytes, headers, products, schedule):
 
 def prepare_schedule_update(workbook_bytes, *, plan_year=None):
     headers, products = read_schedule_inputs(workbook_bytes, plan_year=plan_year)
-    schedule, line_capacity, line_usage, carryover = build_schedule(headers, products)
+    schedule, line_capacity, line_usage, carryover, inventory = build_schedule(
+        headers,
+        products,
+    )
     updated_bytes, changed_count = patch_schedule_workbook(
         workbook_bytes,
         headers,
@@ -424,7 +506,9 @@ def prepare_schedule_update(workbook_bytes, *, plan_year=None):
     for line, capacity in line_capacity.items():
         total_capacity = capacity * len(headers)
         total_used = sum(line_usage[line].values())
-        utilization[line] = 0 if total_capacity <= 0 else total_used / total_capacity
+        utilization[line] = (
+            0 if total_capacity <= 0 else total_used / total_capacity
+        )
 
     return updated_bytes, {
         "headers": headers,
@@ -434,6 +518,7 @@ def prepare_schedule_update(workbook_bytes, *, plan_year=None):
         "line_usage": line_usage,
         "utilization": utilization,
         "carryover": carryover,
+        "inventory": inventory,
         "changed_count": changed_count,
     }
 
@@ -463,6 +548,26 @@ def main_with_retry(*, sleep_func=time.sleep, max_attempts=6, retry_delay_second
         else:
             print("[Scheduler] Tất cả P > 0 đã được xếp hết trong tháng.")
 
+        stockout_codes = []
+        safety_codes = []
+        for product in info["products"]:
+            result = info["inventory"][product["code"]]
+            if result["first_stockout"]:
+                stockout_codes.append((product["code"], result["first_stockout"]))
+            elif result["first_below_safety"]:
+                safety_codes.append((product["code"], result["first_below_safety"]))
+
+        if stockout_codes:
+            print("[Scheduler][INVENTORY_RISK] Các mã vẫn có nguy cơ tồn âm:")
+            for code, risk_day in stockout_codes:
+                print(f"  - {code}: từ {risk_day:%d/%m}")
+        if safety_codes:
+            print("[Scheduler][SAFETY_RISK] Các mã xuống dưới tồn mục tiêu:")
+            for code, risk_day in safety_codes:
+                print(f"  - {code}: từ {risk_day:%d/%m}")
+        if not stockout_codes and not safety_codes:
+            print("[Scheduler] Inventory simulation không phát hiện stockout/safety breach.")
+
         if info["changed_count"] == 0:
             print(f"[{PLANNING_SHEET}] Lịch S:... đã đúng; không cần upload lại.")
             return
@@ -475,12 +580,17 @@ def main_with_retry(*, sleep_func=time.sleep, max_attempts=6, retry_delay_second
                 expected_etag=dest_item["eTag"],
             )
             print(
-                f"[{PLANNING_SHEET}] Đã cập nhật {info['changed_count']} ô lịch sản xuất S:..."
+                f"[{PLANNING_SHEET}] Đã cập nhật "
+                f"{info['changed_count']} ô lịch sản xuất S:..."
             )
             return
         except RuntimeError as exc:
             message = str(exc)
-            retryable = "423" in message or "resourceLocked" in message or "412" in message
+            retryable = (
+                "423" in message
+                or "resourceLocked" in message
+                or "412" in message
+            )
             if not retryable or attempt == max_attempts:
                 raise
             print(
