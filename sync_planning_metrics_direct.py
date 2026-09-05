@@ -87,6 +87,30 @@ def read_planning_rows_with_no_kho(dest_bytes):
     return selector, plan_month, rows
 
 
+def clamp_nonnegative_production(output):
+    """O và P chỉ nhận giá trị > 0; còn lại trả 0. Q = 0 khi P = 0."""
+    output = dict(output)
+
+    required = float(output.get("required_production", 0) or 0)
+    rounded = float(output.get("rounded_production", 0) or 0)
+
+    if required <= 0:
+        output["required_production"] = 0
+        output["rounded_production"] = 0
+        output["production_days"] = 0
+        return output
+
+    output["required_production"] = metrics.clean_number(required)
+
+    if rounded <= 0:
+        output["rounded_production"] = 0
+        output["production_days"] = 0
+    else:
+        output["rounded_production"] = metrics.clean_number(rounded)
+
+    return output
+
+
 def calculate_metrics_from_no_kho(
     *,
     report_date,
@@ -135,7 +159,7 @@ def calculate_metrics_from_no_kho(
             raise RuntimeError(f"Chưa có Leadtime Danh_muc!J cho mã {code}.")
 
         warehouse_debt = float(row["current_debt"] or 0)
-        result[code] = metrics.calculate_row(
+        calculated = metrics.calculate_row(
             fc=row["fc"],
             actual_stock=row["actual_stock"],
             book_stock=row["book_stock"],
@@ -149,6 +173,7 @@ def calculate_metrics_from_no_kho(
             plan_year=plan_year,
             plan_month=plan_month,
         )
+        result[code] = clamp_nonnegative_production(calculated)
 
     return result, state_changed, source_key, plan_key
 
