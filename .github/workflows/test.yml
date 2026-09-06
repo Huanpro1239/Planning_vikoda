@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - fix/remove-ke-hoach-sx-formulas
+    paths-ignore:
+      - state.json
+      - planning_runtime.json
   pull_request:
 
 jobs:
