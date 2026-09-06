@@ -7,6 +7,7 @@ import sync_planning_schedule_priority_v7 as v7
 
 SHARED_MACHINE_LINES = {"KHS", "PET 9000"}
 SHARED_MACHINE_NAME = "KHS + PET 9000"
+URGENT_BUFFER_DAYS = 1
 
 
 _ORIGINAL_BUILD_SCHEDULE = priority.base.build_schedule
@@ -33,8 +34,14 @@ def _next_unit_info(headers, product, capacity, scheduled_units):
             math.ceil(required_qty / quantum_qty - priority.base.EPSILON)
         )
         if unit_no <= cumulative_units:
-            # Urgent supply quantum: phải hoàn thành chậm nhất cuối ngày này.
-            return ((index + 1) * capacity, True, 0.0)
+            # Urgent supply phải hoàn thành trước ngày dự kiến thiếu 1 ngày.
+            # Riêng thiếu ngay ngày đầu tháng thì cho phép hoàn thành trong ngày 1.
+            raw_deadline = (index + 1) * capacity
+            buffered_deadline = max(
+                capacity,
+                raw_deadline - URGENT_BUFFER_DAYS * capacity,
+            )
+            return (buffered_deadline, True, 0.0)
 
     # Quantum dư do làm tròn hoặc safety build: không được chen trước urgent.
     release_index = priority.base._earliest_index(headers, product)
@@ -64,9 +71,6 @@ def _candidate_key(
     slack = latest_start - cursor_shift
 
     if critical:
-        # Minimum-slack / latest-start rule: không chỉ nhìn ngày deadline mà còn
-        # trừ thời gian setup + thời lượng quantum. SKU phải bắt đầu sớm hơn sẽ
-        # thắng, tránh tình trạng tới đúng deadline mới đổi mã rồi đã quá trễ.
         return (
             0,
             slack,
@@ -95,6 +99,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
     Shared KHS/PET machine scheduler.
 
     - Urgent supply (FC + debt vượt tồn thực tế) is deadline-protected.
+    - Urgent deadlines have a one-day production buffer.
     - Safety/rounding quantity cannot jump ahead of an urgent quantum.
     - Urgent priority uses minimum slack / latest-start, including setup and
       quantum duration, so a SKU is started early enough to meet its deadline.
@@ -137,7 +142,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
         eligible = [
             product
             for product in pending
-            if infos[product["code"]][1]  # critical has no release barrier
+            if infos[product["code"]][1]
             or infos[product["code"]][2] <= cursor_shift + priority.base.EPSILON
         ]
 
@@ -162,7 +167,6 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
         )
         chosen = primary
 
-        # Giữ nguyên mã nếu không làm quantum urgent có latest-start nhỏ nhất bị trễ.
         if last_code and last_code in by_code:
             current = by_code[last_code]
             if units_left(current) > 0 and current in eligible and current["code"] != primary["code"]:
@@ -176,8 +180,6 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
                     + float(primary["quantum_shift"])
                 )
 
-                # Safety không được chen trước urgent. Với hai urgent, chỉ tiếp tục
-                # mã hiện tại nếu competitor vẫn hoàn thành trước deadline của nó.
                 if not (primary_critical and not current_critical):
                     if (
                         primary_finish_after_switch
@@ -272,6 +274,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
         "setup_shifts": setup_total,
         "campaigns": campaigns,
         "deadline_misses": deadline_misses,
+        "urgent_buffer_days": URGENT_BUFFER_DAYS,
         "physical_lines": sorted(SHARED_MACHINE_LINES),
     }
 
