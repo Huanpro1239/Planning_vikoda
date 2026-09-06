@@ -55,6 +55,9 @@ jobs:
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
 
+      - name: Verify selected planning month
+        run: python verify_planning_month.py
+
       - name: Save sync states
         shell: bash
         run: |
