@@ -1,3 +1,4 @@
+import math
 from collections import defaultdict
 
 import sync_planning_schedule_priority as priority
@@ -11,14 +12,239 @@ SHARED_MACHINE_NAME = "KHS + PET 9000"
 _ORIGINAL_BUILD_SCHEDULE = priority.base.build_schedule
 
 
-def build_schedule_shared_machine(headers, products):
-    """
-    KHS và PET 9000 dùng chung một máy nên phải chia sẻ cùng một timeline ca.
+def _next_unit_info(headers, product, capacity, scheduled_units):
+    """Return (deadline_shift, critical, release_shift) for the next quantum."""
+    unit_no = scheduled_units + 1
+    required_units = int(product.get("required_units", 0) or 0)
+    if unit_no > required_units:
+        return None
 
-    Hai line không còn được schedule độc lập. Toàn bộ SKU KHS/PET được đưa vào
-    cùng sequence optimizer stockout-first; một SKU = một campaign liên tục.
-    Các line khác (RGB/Galon/...) giữ allocator hiện hành.
+    quantum_qty = float(product.get("quantum_qty", 0) or 0)
+    if quantum_qty <= 0:
+        return None
+
+    cumulative_demand = float(product.get("debt", 0) or 0)
+    actual_stock = max(float(product.get("actual_stock", 0) or 0), 0.0)
+
+    for index, current_day in enumerate(headers):
+        cumulative_demand += float(product["demand_by_day"].get(current_day, 0) or 0)
+        required_qty = max(cumulative_demand - actual_stock, 0.0)
+        cumulative_units = int(
+            math.ceil(required_qty / quantum_qty - priority.base.EPSILON)
+        )
+        if unit_no <= cumulative_units:
+            # Urgent supply quantum: phải hoàn thành chậm nhất cuối ngày này.
+            return ((index + 1) * capacity, True, 0.0)
+
+    # Quantum dư do làm tròn hoặc safety build: không được chen trước urgent.
+    release_index = priority.base._earliest_index(headers, product)
+    return (len(headers) * capacity, False, release_index * capacity)
+
+
+def _candidate_key(headers, product, capacity, scheduled_units, last_code, last_group):
+    info = _next_unit_info(
+        headers,
+        product,
+        capacity,
+        scheduled_units[product["code"]],
+    )
+    deadline, critical, release = info
+    return (
+        0 if critical else 1,
+        deadline,
+        0 if product["code"] == last_code else 1,
+        0 if last_group and product.get("product_group") == last_group else 1,
+        0 if float(product.get("debt", 0) or 0) > 0 else 1,
+        release,
+        product.get("row", 0),
+    )
+
+
+def allocate_shared_deadline_guarded(headers, products, capacity):
     """
+    Shared KHS/PET machine scheduler.
+
+    - Urgent supply (FC + debt vượt tồn thực tế) is deadline-protected.
+    - Safety/rounding quantity cannot jump ahead of an urgent quantum.
+    - Continuity is kept whenever one more quantum of the current SKU still
+      leaves enough slack for the most urgent competitor.
+    - A switch consumes 0.5 shift, so KHS and PET can never run in parallel.
+    """
+    schedule = priority.base._empty_schedule(headers, products)
+    usage = defaultdict(float)
+    carryover = {}
+    campaigns = []
+    deadline_misses = []
+
+    scheduled_units = {product["code"]: 0 for product in products}
+    by_code = {product["code"]: product for product in products}
+    month_end_shift = len(headers) * capacity
+    cursor_shift = 0.0
+    last_code = None
+    last_group = None
+    setup_total = 0.0
+
+    def units_left(product):
+        return int(product.get("required_units", 0) or 0) - scheduled_units[product["code"]]
+
+    while any(units_left(product) > 0 for product in products):
+        pending = [product for product in products if units_left(product) > 0]
+        if not pending:
+            break
+
+        infos = {
+            product["code"]: _next_unit_info(
+                headers,
+                product,
+                capacity,
+                scheduled_units[product["code"]],
+            )
+            for product in pending
+        }
+
+        eligible = [
+            product
+            for product in pending
+            if infos[product["code"]][1]  # critical has no release barrier
+            or infos[product["code"]][2] <= cursor_shift + priority.base.EPSILON
+        ]
+
+        if not eligible:
+            next_release = min(infos[product["code"]][2] for product in pending)
+            cursor_shift = max(cursor_shift, next_release)
+            if cursor_shift >= month_end_shift - priority.base.EPSILON:
+                break
+            continue
+
+        primary = min(
+            eligible,
+            key=lambda product: _candidate_key(
+                headers,
+                product,
+                capacity,
+                scheduled_units,
+                last_code,
+                last_group,
+            ),
+        )
+        chosen = primary
+
+        # Giữ nguyên mã nếu không làm quantum urgent sớm nhất bị trễ.
+        if last_code and last_code in by_code:
+            current = by_code[last_code]
+            if units_left(current) > 0 and current in eligible and current["code"] != primary["code"]:
+                current_deadline, current_critical, _ = infos[current["code"]]
+                primary_deadline, primary_critical, _ = infos[primary["code"]]
+
+                current_finish = cursor_shift + float(current["quantum_shift"])
+                primary_finish_after_switch = (
+                    current_finish
+                    + priority.base.SETUP_SHIFTS
+                    + float(primary["quantum_shift"])
+                )
+
+                # Safety không được chen trước urgent. Với hai urgent, chỉ tiếp tục
+                # mã hiện tại nếu competitor vẫn hoàn thành trước deadline của nó.
+                if not (primary_critical and not current_critical):
+                    if (
+                        primary_finish_after_switch
+                        <= primary_deadline + priority.base.EPSILON
+                        and current_finish
+                        <= current_deadline + priority.base.EPSILON
+                    ):
+                        chosen = current
+
+        if last_code is not None and chosen["code"] != last_code:
+            if (
+                cursor_shift + priority.base.SETUP_SHIFTS
+                > month_end_shift + priority.base.EPSILON
+            ):
+                break
+            priority.base._add_interval_usage(
+                usage,
+                headers,
+                cursor_shift,
+                priority.base.SETUP_SHIFTS,
+                capacity,
+            )
+            cursor_shift += priority.base.SETUP_SHIFTS
+            setup_total += priority.base.SETUP_SHIFTS
+
+        duration = float(chosen["quantum_shift"])
+        if cursor_shift + duration > month_end_shift + priority.base.EPSILON:
+            break
+
+        deadline, critical, _ = _next_unit_info(
+            headers,
+            chosen,
+            capacity,
+            scheduled_units[chosen["code"]],
+        )
+        start_shift = cursor_shift
+        produced = priority.base._add_production_interval(
+            schedule,
+            usage,
+            headers,
+            chosen,
+            start_shift,
+            duration,
+            capacity,
+        )
+        expected = float(chosen["quantum_qty"])
+        if not math.isclose(produced, expected, rel_tol=1e-9, abs_tol=1e-5):
+            raise RuntimeError(
+                f"Mã {chosen['code']} quantum dự kiến {expected} nhưng ghi {produced}."
+            )
+
+        cursor_shift += duration
+        scheduled_units[chosen["code"]] += 1
+
+        if critical and cursor_shift > deadline + priority.base.EPSILON:
+            deadline_misses.append(
+                {
+                    "code": chosen["code"],
+                    "deadline_shift": deadline,
+                    "finish_shift": cursor_shift,
+                }
+            )
+
+        if campaigns and campaigns[-1]["code"] == chosen["code"]:
+            campaigns[-1]["end_shift"] = cursor_shift
+            campaigns[-1]["scheduled_qty"] = priority.base._clean_number(
+                campaigns[-1]["scheduled_qty"] + produced
+            )
+        else:
+            campaigns.append(
+                {
+                    "code": chosen["code"],
+                    "group": chosen.get("product_group"),
+                    "start_shift": start_shift,
+                    "end_shift": cursor_shift,
+                    "scheduled_qty": priority.base._clean_number(produced),
+                }
+            )
+
+        last_code = chosen["code"]
+        last_group = chosen.get("product_group")
+
+    for product in products:
+        missing_units = units_left(product)
+        if missing_units > 0:
+            carryover[product["code"]] = priority.base._clean_number(
+                missing_units * float(product["quantum_qty"])
+            )
+
+    return schedule, usage, carryover, {
+        "mode": "shared_machine_deadline_guarded",
+        "setup_shifts": setup_total,
+        "campaigns": campaigns,
+        "deadline_misses": deadline_misses,
+        "physical_lines": sorted(SHARED_MACHINE_LINES),
+    }
+
+
+def build_schedule_shared_machine(headers, products):
+    """Build schedule with one physical machine shared by KHS and PET 9000."""
     schedule = priority.base._empty_schedule(headers, products)
     active_products = [product for product in products if product["planned_qty"] > 0]
 
@@ -34,7 +260,6 @@ def build_schedule_shared_machine(headers, products):
     carryover = {}
     optimizer_meta = {}
 
-    # Các resource khác dùng logic hiện hành của base scheduler.
     if other_products:
         (
             other_schedule,
@@ -57,15 +282,11 @@ def build_schedule_shared_machine(headers, products):
 
     if shared_products:
         capacity = min(product["max_shifts_per_day"] for product in shared_products)
-        allocator = priority.base._allocate_continuous_campaign_line
-        shared_schedule, usage, shared_carryover, meta = allocator(
+        shared_schedule, usage, shared_carryover, meta = allocate_shared_deadline_guarded(
             headers,
             shared_products,
             capacity,
         )
-        meta = dict(meta)
-        meta["mode"] = "shared_machine_stockout_first"
-        meta["physical_lines"] = sorted(SHARED_MACHINE_LINES)
 
         line_capacity[SHARED_MACHINE_NAME] = capacity
         carryover.update(shared_carryover)
