@@ -5,6 +5,7 @@ import sync_planning_schedule as base
 from planning_resource_timeline import validate_resource_timeline
 from sync_planning_schedule_production import install_production_output_cleanup
 import sync_planning_schedule_rgb_v9 as rgb_v9
+import sync_planning_schedule_rgb_v10 as rgb_v10
 
 
 class RGBV9Tests(unittest.TestCase):
@@ -32,10 +33,10 @@ class RGBV9Tests(unittest.TestCase):
         product["required_units"] = int(round(planned / product["quantum_qty"]))
         return product
 
-    def test_production_installer_keeps_rgb_v9_last(self):
+    def test_production_installer_keeps_rgb_v10_last(self):
         install_production_output_cleanup()
         install_production_output_cleanup()
-        self.assertIs(base._allocate_weekly_rgb_line, rgb_v9.allocate_rgb_quantized_service)
+        self.assertIs(base._allocate_weekly_rgb_line, rgb_v10.allocate_rgb_quantum_lookahead)
 
     def test_rgb_v9_reserves_setup_in_capacity_and_emits_valid_timeline(self):
         headers = [date(2026, 9, 1) + timedelta(days=i) for i in range(2)]
