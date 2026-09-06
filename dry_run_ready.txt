@@ -1,1 +1,1 @@
-run 2026-09-06 timeline proof and RGB service tradeoff review
+run 2026-09-06 RGB V9 serialized setup and service review
