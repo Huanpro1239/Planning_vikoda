@@ -44,7 +44,14 @@ class PublishBoundaryTests(unittest.TestCase):
             return {"name": "copy.xlsx"}
 
     @staticmethod
-    def _report(input_revision, status):
+    def _report(
+        input_revision,
+        status,
+        *,
+        monthly_ok=True,
+        resource_ok=True,
+    ):
+        review_required = status == "review_required"
         return {
             "schema_version": 2,
             "algorithm": "priority_v8_rgb_v10_galon_v9",
@@ -53,6 +60,20 @@ class PublishBoundaryTests(unittest.TestCase):
             "mass_balance": {},
             "resources": {},
             "publish_status": status,
+            "status": {
+                "monthly_quantity": {
+                    "ok": monthly_ok,
+                    "state": "complete" if monthly_ok else "carryover",
+                },
+                "resource_validation": {
+                    "ok": resource_ok,
+                    "state": "passed" if resource_ok else "failed",
+                },
+                "service": {
+                    "ok": not review_required,
+                    "state": "stockout_risk" if review_required else "no_stockout",
+                },
+            },
             "pipeline": {"conversion_hash": "conversion-hash"},
         }
 
@@ -73,10 +94,13 @@ class PublishBoundaryTests(unittest.TestCase):
         *,
         status,
         publish_mode="publish",
+        use_default_mode=False,
         review_approval=None,
         graph=None,
         max_attempts=2,
         retry_delay_seconds=3,
+        monthly_ok=True,
+        resource_ok=True,
     ):
         graph = graph or self.FakeGraph()
         saved_states = []
@@ -87,9 +111,24 @@ class PublishBoundaryTests(unittest.TestCase):
         def prepare(target_bytes, source_bytes, *, runtime_state, input_revision):
             return (
                 b"final:" + target_bytes,
-                self._report(input_revision, status),
+                self._report(
+                    input_revision,
+                    status,
+                    monthly_ok=monthly_ok,
+                    resource_ok=resource_ok,
+                ),
                 {"state": f"new-r{graph.attempt}"},
             )
+
+        call_kwargs = {
+            "review_approval": review_approval,
+            "publisher": "planner",
+            "sleep_func": sleeps.append,
+            "max_attempts": max_attempts,
+            "retry_delay_seconds": retry_delay_seconds,
+        }
+        if not use_default_mode:
+            call_kwargs["publish_mode"] = publish_mode
 
         with (
             patch.object(pipeline_runner, "prepare_pipeline_output", prepare),
@@ -118,12 +157,7 @@ class PublishBoundaryTests(unittest.TestCase):
             result = pipeline_runner.run_pipeline_with_retry(
                 graph,
                 "drive",
-                publish_mode=publish_mode,
-                review_approval=review_approval,
-                publisher="planner",
-                sleep_func=sleeps.append,
-                max_attempts=max_attempts,
-                retry_delay_seconds=retry_delay_seconds,
+                **call_kwargs,
             )
 
         return result, graph, saved_states, saved_decisions, proposals, sleeps
@@ -131,6 +165,19 @@ class PublishBoundaryTests(unittest.TestCase):
     def test_cli_defaults_to_proposal_mode(self):
         args = pipeline_runner._parse_args([])
         self.assertFalse(args.publish)
+
+    def test_runner_default_current_schema_is_proposal_only(self):
+        result, graph, states, decisions, proposals, _ = self._run(
+            status="ready_for_publish",
+            use_default_mode=True,
+        )
+
+        self.assertEqual(result["publish_mode"], "proposal")
+        self.assertFalse(result["uploaded"])
+        self.assertEqual(graph.uploads, [])
+        self.assertEqual(states, [])
+        self.assertEqual(decisions, [])
+        self.assertEqual(proposals[0][1]["publish_decision"]["basis"], "safe_default")
 
     def test_ready_for_publish_explicit_publish_uploads_and_saves_state(self):
         result, graph, states, decisions, proposals, _ = self._run(
@@ -227,6 +274,54 @@ class PublishBoundaryTests(unittest.TestCase):
         self.assertEqual(graph.uploads, [])
         self.assertEqual(states, [])
         self.assertEqual(decisions, [])
+
+    def test_review_approval_cannot_override_monthly_carryover(self):
+        proposal_id = self._expected_proposal_id()
+        approval = {
+            "proposal_id": proposal_id,
+            "reason": "Không được dùng lý do này để bỏ qua carryover.",
+            "approved_by": "planner",
+        }
+
+        result, graph, states, decisions, proposals, _ = self._run(
+            status="review_required",
+            publish_mode="publish",
+            review_approval=approval,
+            monthly_ok=False,
+        )
+
+        self.assertTrue(result["publish_blocked"])
+        self.assertEqual(graph.uploads, [])
+        self.assertEqual(states, [])
+        self.assertEqual(decisions, [])
+        self.assertEqual(
+            proposals[-1][1]["publish_decision"]["basis"],
+            "non_waivable_validation",
+        )
+
+    def test_review_approval_cannot_override_resource_validation(self):
+        proposal_id = self._expected_proposal_id()
+        approval = {
+            "proposal_id": proposal_id,
+            "reason": "Không được dùng lý do này để bỏ qua resource validation.",
+            "approved_by": "planner",
+        }
+
+        result, graph, states, decisions, proposals, _ = self._run(
+            status="review_required",
+            publish_mode="publish",
+            review_approval=approval,
+            resource_ok=False,
+        )
+
+        self.assertTrue(result["publish_blocked"])
+        self.assertEqual(graph.uploads, [])
+        self.assertEqual(states, [])
+        self.assertEqual(decisions, [])
+        self.assertEqual(
+            proposals[-1][1]["publish_decision"]["basis"],
+            "non_waivable_validation",
+        )
 
     def test_412_recompute_invalidates_review_approval_for_old_snapshot(self):
         proposal_id = self._expected_proposal_id()
