@@ -3,7 +3,7 @@ name: Apply Review Fixes
 on:
   push:
     paths:
-      - review_fix_payload.b64
+      - review_fix_ready.txt
 
 permissions:
   contents: write
@@ -26,9 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Extract reviewed fixes
+      - name: Reassemble and verify reviewed fixes
         run: |
-          base64 -d review_fix_payload.b64 > /tmp/review_fix_payload.tar.gz
+          cat review_fix_payload.part* | base64 -d > /tmp/review_fix_payload.tar.gz
+          echo "f3fb23f7ff540e3ae6ec6828e04197f0ee595d3d64d4ace01414820a55dc521a  /tmp/review_fix_payload.tar.gz" | sha256sum -c -
           tar -xzf /tmp/review_fix_payload.tar.gz
 
       - name: Run full regression suite
@@ -37,7 +38,7 @@ jobs:
       - name: Commit reviewed fixes and remove one-shot files
         shell: bash
         run: |
-          git rm review_fix_payload.b64 .github/workflows/apply-review-fixes.yml
+          git rm -f review_fix_payload.b64 review_fix_payload.part* review_fix_ready.txt .github/workflows/apply-review-fixes.yml
           git add -A
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
