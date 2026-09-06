@@ -2,6 +2,7 @@ import unittest
 from datetime import date, timedelta
 
 from planning_resource_timeline import validate_resource_timeline
+from review_rgb_service import _day1_protection_bound
 import sync_planning_schedule as base
 import sync_planning_schedule_production as production
 import sync_planning_schedule_rgb_v9 as v9
@@ -74,6 +75,47 @@ class RGBV10Tests(unittest.TestCase):
         )
         self.assertTrue(validation["validated"])
         self.assertLessEqual(validation["max_daily_usage"], 2.0 + 1e-7)
+
+    def test_day1_lower_bound_accounts_for_quantum_capacity_and_setup(self):
+        headers = [date(2026, 9, 1)]
+        products = [
+            {
+                "code": "UNAVOIDABLE",
+                "actual_stock": 0.0,
+                "debt": 250.0,
+                "demand_by_day": {headers[0]: 0.0},
+                "quantum_qty": 100.0,
+                "quantum_shift": 1.0,
+                "earliest_date": headers[0],
+            },
+            {
+                "code": "B",
+                "actual_stock": 0.0,
+                "debt": 100.0,
+                "demand_by_day": {headers[0]: 0.0},
+                "quantum_qty": 100.0,
+                "quantum_shift": 1.0,
+                "earliest_date": headers[0],
+            },
+            {
+                "code": "C",
+                "actual_stock": 0.0,
+                "debt": 100.0,
+                "demand_by_day": {headers[0]: 0.0},
+                "quantum_qty": 100.0,
+                "quantum_shift": 1.0,
+                "earliest_date": headers[0],
+            },
+        ]
+
+        bound = _day1_protection_bound(headers, products, 2.0)
+
+        self.assertEqual(bound["at_risk_codes"], ["B", "C", "UNAVOIDABLE"])
+        self.assertEqual(bound["inherently_unprotectable_codes"], ["UNAVOIDABLE"])
+        self.assertEqual(bound["protectable_codes"], ["B", "C"])
+        self.assertEqual(bound["max_protected_skus"], 1)
+        self.assertEqual(bound["minimum_stockout_skus"], 2)
+        self.assertEqual(bound["best_protected_sets"], [["B"], ["C"]])
 
     def test_production_installer_enables_v10_hook(self):
         production.install_production_output_cleanup()
