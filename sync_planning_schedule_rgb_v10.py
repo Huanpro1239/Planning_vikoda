@@ -28,6 +28,23 @@ def _release_shift(headers, product, capacity):
     return base._earliest_index(headers, product) * float(capacity)
 
 
+def _empty_schedule_rows(products, headers):
+    """Immutable product/day production matrix used by beam-search states."""
+    return tuple(
+        tuple(0.0 for _ in headers)
+        for _ in products
+    )
+
+
+def _add_schedule_qty(schedule_rows, product_index, day_index, qty):
+    """Copy only the touched product row instead of replaying the full timeline."""
+    rows = list(schedule_rows)
+    row = list(rows[product_index])
+    row[day_index] += float(qty)
+    rows[product_index] = tuple(row)
+    return tuple(rows)
+
+
 def _transition(state, product_index, products, headers, capacity):
     product = products[product_index]
     counts = state["counts"]
@@ -38,6 +55,7 @@ def _transition(state, product_index, products, headers, capacity):
     last = state["last"]
     timeline = state["timeline"]
     setup_total = float(state["setup_total"])
+    schedule_rows = state.get("schedule_rows")
 
     if last is not None and last != product_index:
         setup_slot = _fit_interval(cursor, base.SETUP_SHIFTS, float(capacity))
@@ -80,13 +98,26 @@ def _transition(state, product_index, products, headers, capacity):
         "end_shift": end,
         "duration_shifts": duration,
     }
-    return {
+
+    result = {
         "cursor": end,
         "last": product_index,
         "counts": tuple(new_counts),
         "timeline": timeline + (production_event,),
         "setup_total": setup_total,
     }
+    if schedule_rows is not None:
+        day_index = min(
+            len(headers) - 1,
+            max(0, int(math.floor((start + EPS) / float(capacity)))),
+        )
+        result["schedule_rows"] = _add_schedule_qty(
+            schedule_rows,
+            product_index,
+            day_index,
+            qty,
+        )
+    return result
 
 
 def _schedule_from_timeline(headers, products, capacity, timeline):
@@ -151,25 +182,78 @@ def _service_metrics(headers, products, schedule, *, through_days=None):
     )
 
 
-def _partial_key(state, headers, products, capacity):
-    schedule, _ = _schedule_from_timeline(
-        headers,
-        products,
-        capacity,
-        state["timeline"],
+def _service_metrics_rows(headers, products, schedule_rows, *, through_days=None):
+    """Same service objective as _service_metrics, without dict/timeline rebuilds."""
+    limit = len(headers) if through_days is None else max(0, min(int(through_days), len(headers)))
+    stockout_codes = set()
+    stockout_days = 0
+    total_deficit = 0.0
+    max_deficit = 0.0
+    latest_stockout = -1
+    safety_days = 0
+    safety_deficit = 0.0
+
+    for product_index, product in enumerate(products):
+        row = schedule_rows[product_index]
+        code = product["code"]
+        balance = float(product.get("actual_stock", 0) or 0)
+        debt = max(float(product.get("debt", 0) or 0), 0.0)
+        target = max(float(product.get("target_stock", 0) or 0), 0.0)
+        for index, day in enumerate(headers[:limit]):
+            balance += float(row[index] or 0)
+            balance -= float(product["demand_by_day"].get(day, 0) or 0)
+            if index == 0:
+                balance -= debt
+            if balance < -EPS:
+                deficit = -balance
+                stockout_codes.add(code)
+                stockout_days += 1
+                total_deficit += deficit
+                max_deficit = max(max_deficit, deficit)
+                latest_stockout = max(latest_stockout, index)
+            if balance < target - EPS:
+                safety_days += 1
+                safety_deficit += target - balance
+
+    return (
+        len(stockout_codes),
+        stockout_days,
+        round(total_deficit, 6),
+        round(max_deficit, 6),
+        latest_stockout,
+        safety_days,
+        round(safety_deficit, 6),
     )
+
+
+def _partial_key(state, headers, products, capacity):
     # Days before the current cursor day are irreversible. If cursor is exactly
     # at a day boundary, the preceding day is also closed.
     closed_days = min(
         len(headers),
         int(math.floor((float(state["cursor"]) + EPS) / float(capacity))),
     )
-    service = _service_metrics(
-        headers,
-        products,
-        schedule,
-        through_days=closed_days,
-    )
+    schedule_rows = state.get("schedule_rows")
+    if schedule_rows is not None:
+        service = _service_metrics_rows(
+            headers,
+            products,
+            schedule_rows,
+            through_days=closed_days,
+        )
+    else:
+        schedule, _ = _schedule_from_timeline(
+            headers,
+            products,
+            capacity,
+            state["timeline"],
+        )
+        service = _service_metrics(
+            headers,
+            products,
+            schedule,
+            through_days=closed_days,
+        )
     return service + (
         round(float(state["setup_total"]), 6),
         round(float(state["cursor"]), 6),
@@ -177,8 +261,12 @@ def _partial_key(state, headers, products, capacity):
 
 
 def _final_key(state, headers, products, capacity):
-    schedule, _ = _schedule_from_timeline(headers, products, capacity, state["timeline"])
-    service = _service_metrics(headers, products, schedule)
+    schedule_rows = state.get("schedule_rows")
+    if schedule_rows is not None:
+        service = _service_metrics_rows(headers, products, schedule_rows)
+    else:
+        schedule, _ = _schedule_from_timeline(headers, products, capacity, state["timeline"])
+        service = _service_metrics(headers, products, schedule)
     return service + (
         round(float(state["setup_total"]), 6),
         round(float(state["cursor"]), 6),
@@ -212,6 +300,7 @@ def allocate_rgb_quantum_lookahead(headers, products, capacity):
         "counts": tuple(0 for _ in active),
         "timeline": tuple(),
         "setup_total": 0.0,
+        "schedule_rows": _empty_schedule_rows(active, headers),
     }
     states = [initial]
     expanded_total = 0
@@ -248,7 +337,13 @@ def allocate_rgb_quantum_lookahead(headers, products, capacity):
         ranked = sorted(dedup.values(), key=lambda item: item[0])
         states = [item[1] for item in ranked[:BEAM_WIDTH]]
 
-    best = min(states, key=lambda state: _final_key(state, headers, active, capacity))
+    best_score, best = min(
+        (
+            (_final_key(state, headers, active, capacity), state)
+            for state in states
+        ),
+        key=lambda item: item[0],
+    )
     active_schedule, usage = _schedule_from_timeline(
         headers,
         active,
@@ -274,9 +369,10 @@ def allocate_rgb_quantum_lookahead(headers, products, capacity):
         "setup_shifts": float(best["setup_total"]),
         "timeline": list(best["timeline"]),
         "quantum_sequence": sequence,
-        "objective": list(_final_key(best, headers, active, capacity)),
+        "objective": list(best_score),
         "expanded_states": expanded_total,
         "beam_width": BEAM_WIDTH,
+        "incremental_scoring": True,
         "quantum_policy": "whole_quantum_no_cross_day",
     }
 
