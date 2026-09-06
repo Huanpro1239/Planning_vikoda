@@ -120,6 +120,17 @@ def _save_states_after_success(source_items, report, proposed_runtime_state):
     )
 
 
+def _blocked_decision(report, publisher, basis, reason):
+    return {
+        "state": "blocked",
+        "basis": basis,
+        "publish_status": report.get("publish_status"),
+        "proposal_id": report.get("proposal_id"),
+        "publisher": publisher or None,
+        "reason": reason,
+    }
+
+
 def _publish_decision(report, review_approval, publisher):
     status = str(report.get("publish_status") or "").strip()
     proposal_id = report.get("proposal_id")
@@ -135,14 +146,35 @@ def _publish_decision(report, review_approval, publisher):
         }
 
     if status != REVIEW_REQUIRED_STATUS:
-        return False, {
-            "state": "blocked",
-            "basis": "unknown_publish_status",
-            "publish_status": status or None,
-            "proposal_id": proposal_id,
-            "publisher": publisher or None,
-            "reason": "Publish status không thuộc chính sách cho phép.",
-        }
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "unknown_publish_status",
+            "Publish status không thuộc chính sách cho phép.",
+        )
+
+    sections = report.get("status") or {}
+    monthly = sections.get("monthly_quantity") or {}
+    resource = sections.get("resource_validation") or {}
+    service = sections.get("service") or {}
+
+    # Review approval is intentionally narrow: it may accept a validated service
+    # shortage, but it never waives monthly mass-balance/carryover or physical
+    # resource validation. Hard workbook validation has already passed earlier.
+    if not bool(monthly.get("ok")) or not bool(resource.get("ok")):
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "non_waivable_validation",
+            "review_required do carryover/resource validation không được phép override.",
+        )
+    if bool(service.get("ok")) or service.get("state") != "stockout_risk":
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "unsupported_review_reason",
+            "Chỉ stockout_risk đã validate mới có thể dùng review approval.",
+        )
 
     approval = dict(review_approval or {})
     approved_proposal_id = str(approval.get("proposal_id") or "").strip()
@@ -150,23 +182,19 @@ def _publish_decision(report, review_approval, publisher):
     approved_by = str(approval.get("approved_by") or publisher or "").strip()
 
     if not approved_proposal_id or approved_proposal_id != proposal_id:
-        return False, {
-            "state": "blocked",
-            "basis": "review_approval",
-            "publish_status": status,
-            "proposal_id": proposal_id,
-            "publisher": publisher or None,
-            "reason": "review_required cần approval đúng proposal_id của snapshot hiện tại.",
-        }
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "review_approval",
+            "review_required cần approval đúng proposal_id của snapshot hiện tại.",
+        )
     if not reason:
-        return False, {
-            "state": "blocked",
-            "basis": "review_approval",
-            "publish_status": status,
-            "proposal_id": proposal_id,
-            "publisher": publisher or None,
-            "reason": "review_required cần lý do chấp nhận rủi ro/thiếu hàng.",
-        }
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "review_approval",
+            "review_required cần lý do chấp nhận rủi ro/thiếu hàng.",
+        )
 
     return True, {
         "state": "authorized",
@@ -186,7 +214,7 @@ def run_pipeline_with_retry(
     graph,
     drive_id,
     *,
-    publish_mode="publish",
+    publish_mode=None,
     review_approval=None,
     publisher=None,
     sleep_func=time.sleep,
@@ -196,16 +224,21 @@ def run_pipeline_with_retry(
     """
     Read all inputs -> compute entire workbook -> validate -> optional ETag upload.
 
+    For current report schema, omitted publish_mode defaults to proposal/read-only.
+    The obsolete `feasible` status keeps implicit publish behavior only for
+    backward-compatible legacy callers/tests; production reports now emit
+    `ready_for_publish` or `review_required`.
+
     publish_mode="proposal" is read-only for SharePoint and runtime state: the
     computed workbook/report are saved only as local review artifacts.
 
     publish_mode="publish" writes only when publish policy authorizes the exact
-    computed proposal. `review_required` needs an approval bound to proposal_id
-    plus a non-empty reason. Any 412/transient Graph error restarts from fresh
-    target + source snapshots; an approval for an older proposal_id is therefore
-    not reused after recomputation.
+    computed proposal. `review_required` may override only validated
+    `stockout_risk`, and needs an approval bound to proposal_id plus a non-empty
+    reason. Any 412/transient Graph error restarts from fresh target + source
+    snapshots; an approval for an older proposal_id is therefore not reused.
     """
-    if publish_mode not in {"proposal", "publish"}:
+    if publish_mode not in {None, "proposal", "publish"}:
         raise ValueError("publish_mode phải là 'proposal' hoặc 'publish'.")
 
     for attempt in range(1, max_attempts + 1):
@@ -229,11 +262,18 @@ def run_pipeline_with_retry(
             print_operational_report(report)
 
             changed = hashlib.sha256(final_bytes).digest() != hashlib.sha256(target_bytes).digest()
+            effective_mode = publish_mode
+            if effective_mode is None:
+                effective_mode = (
+                    "publish"
+                    if report.get("publish_status") == "feasible"
+                    else "proposal"
+                )
 
-            if publish_mode == "proposal":
+            if effective_mode == "proposal":
                 report["publish_decision"] = {
                     "state": "proposal_only",
-                    "basis": "explicit_proposal_mode",
+                    "basis": "explicit_proposal_mode" if publish_mode == "proposal" else "safe_default",
                     "publish_status": report.get("publish_status"),
                     "proposal_id": report.get("proposal_id"),
                     "publisher": publisher or None,
