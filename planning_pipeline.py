@@ -5,7 +5,11 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from planning_cleanup import remove_sheet_formulas
-from planning_schedule_report import attach_output_hash, build_schedule_report
+from planning_schedule_report import (
+    attach_output_hash,
+    build_schedule_report,
+    json_safe,
+)
 from sync_planning_calendar_all_months import prepare_calendar_update_all_months
 from sync_planning_fc import prepare_planning_fc_update
 import sync_planning_metrics as metrics
@@ -237,4 +241,7 @@ def prepare_pipeline_output(
         "verify": verify_info,
     }
 
-    return final_bytes, report, next_state
+    # The pipeline block is appended after build_schedule_report(), so normalize
+    # it again here. This makes dry-run artifacts and post-upload audit saving
+    # safe even when before/after R values are datetime objects.
+    return final_bytes, json_safe(report), next_state
