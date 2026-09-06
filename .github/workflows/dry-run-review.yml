@@ -3,7 +3,8 @@ name: Planning Dry Run Review
 on:
   push:
     branches:
-      - review-followup-26c
+      - "review-*"
+      - "fix/**"
     paths:
       - dry_run_ready.txt
 
@@ -19,15 +20,15 @@ jobs:
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
       MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
     steps:
-      - name: Checkout review branch
+      - name: Checkout review commit
         uses: actions/checkout@v4
-        with:
-          ref: review-followup-26c
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |

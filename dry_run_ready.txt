@@ -1,1 +1,1 @@
-run 2026-09-06 final reviewed candidate; exact-head tests+dry-run PASS; approved for controlled production deployment
+run 2026-09-06 final publish-boundary candidate after narrow approval policy; read-only dry-run only; no production publish approval
