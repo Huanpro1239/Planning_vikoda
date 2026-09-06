@@ -37,29 +37,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Sync stock to SharePoint
-        run: python sync_stock_compat.py
+      - name: Run single-snapshot validated planning pipeline
+        run: python -X utf8 sync_planning_pipeline.py
 
-      - name: Sync Ton_kho to Ke hoach SX J K
-        run: python sync_planning_stock_inputs.py
-
-      - name: Sync FC to Ke hoach SX
-        run: python sync_planning_fc_compat.py
-
-      - name: Generate Ke hoach SX date headers
-        run: python sync_planning_calendar_all_months.py
-
-      - name: Calculate Ke hoach SX M to R directly
-        run: python sync_planning_metrics_all_months.py
-
-      - name: Schedule daily production S onward
-        run: python sync_planning_schedule_production.py
-
-      - name: Remove remaining Ke hoach SX formulas
-        run: python cleanup_planning.py
-
-      - name: Verify planning inputs and selected month
-        run: python verify_planning_month.py
+      - name: Upload planning audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: planning-audit-${{ github.run_id }}
+          path: |
+            planning_schedule_report.json
+            planning_input_revision.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Save sync states
         shell: bash
