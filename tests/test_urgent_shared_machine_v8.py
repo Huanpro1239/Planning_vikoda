@@ -80,8 +80,14 @@ class UrgentSupplyAndSharedMachineV8Tests(unittest.TestCase):
                 usage[v8.SHARED_MACHINE_NAME][current_day],
                 3.0 + priority.base.EPSILON,
             )
-        self.assertEqual(sum(schedule["KHS-A"].values()), 300.0)
-        self.assertTrue(carryover or sum(schedule["PET-A"].values()) <= 300.0)
+
+        # 6 production shifts + 0.5 setup cannot fit into a 6-shift horizon.
+        # The scheduler must report physical carryover instead of overbooking.
+        for product in products:
+            produced = sum(schedule[product["code"]].values())
+            missing = float(carryover.get(product["code"], 0) or 0)
+            self.assertAlmostEqual(produced + missing, product["planned_qty"])
+        self.assertTrue(carryover)
         self.assertEqual(
             meta[v8.SHARED_MACHINE_NAME]["mode"],
             "shared_machine_deadline_guarded",
