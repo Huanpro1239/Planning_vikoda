@@ -197,7 +197,9 @@ def prepare_pipeline_output(
         metric_patched = 0
     steps.append("M_R")
 
-    # 6) Build V8 schedule on the same bytes; no upload occurs here.
+    # 6) Build production schedule on the same bytes; no upload occurs here.
+    # KHS/PET remains V8, RGB uses V10 quantum-level service optimization,
+    # and Galon uses V9 serialized setup-aware scheduling.
     scheduled_bytes, schedule_info = priority.base.prepare_schedule_update(
         work,
         plan_year=plan_year,
@@ -208,7 +210,7 @@ def prepare_pipeline_output(
         work,
         schedule_info,
         input_revision=dict(input_revision or {}),
-        algorithm="priority_v8",
+        algorithm="priority_v8_rgb_v10_galon_v9",
     )
 
     # 7) Cleanup formulas on the local copy, then validate exact final bytes.
