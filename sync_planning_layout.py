@@ -9,7 +9,6 @@ from sync_planning_fc import _find_sheet_xml_path, _load_shared_strings, _read_c
 
 PLANNING_SHEET = "Ke_hoach_SX"
 START_COLUMN_NUMBER = 19  # S
-BASE_END_COLUMN_NUMBER = 18  # R
 
 
 def _column_number_from_ref(ref):
@@ -31,7 +30,8 @@ def _column_letter(number):
 
 
 def _looks_like_date_header(value):
-    first_line = str(value or "").strip().splitlines()[0] if str(value or "").strip() else ""
+    text = str(value or "").strip()
+    first_line = text.splitlines()[0] if text else ""
     return bool(re.fullmatch(r"\d{2}/\d{2}", first_line))
 
 
@@ -51,16 +51,29 @@ def _normalize_cols(root, active_end):
     cols_nodes = root.xpath('//*[local-name()="cols"]')
     if not cols_nodes:
         return 0
+
     cols = cols_nodes[0]
-    children = list(cols)
+    children = [child for child in list(cols) if etree.QName(child).localname == "col"]
+    schedule_cols = []
+    for col in children:
+        minimum = int(col.get("min", "1"))
+        maximum = int(col.get("max", str(minimum)))
+        if maximum >= START_COLUMN_NUMBER:
+            schedule_cols.append(col)
+
+    # Already canonical: exactly one schedule-format definition S:last-day,
+    # and no formatting survives past the active date range.
+    if len(schedule_cols) == 1:
+        only = schedule_cols[0]
+        if (
+            int(only.get("min", "0")) == START_COLUMN_NUMBER
+            and int(only.get("max", "0")) == active_end
+        ):
+            return 0
+
     date_attrs = None
     kept = []
-    changed = 0
-
     for col in children:
-        if etree.QName(col).localname != "col":
-            kept.append(col)
-            continue
         minimum = int(col.get("min", "1"))
         maximum = int(col.get("max", str(minimum)))
         if maximum < START_COLUMN_NUMBER:
@@ -75,12 +88,12 @@ def _normalize_cols(root, active_end):
         if minimum < START_COLUMN_NUMBER:
             col.set("max", str(START_COLUMN_NUMBER - 1))
             kept.append(col)
-        changed += 1
 
     if date_attrs is None:
         date_attrs = {"width": "8.88671875", "customWidth": "1"}
     date_attrs.pop("min", None)
     date_attrs.pop("max", None)
+
     namespace = etree.QName(cols).namespace
     date_col = etree.Element(f"{{{namespace}}}col")
     date_col.set("min", str(START_COLUMN_NUMBER))
@@ -89,14 +102,13 @@ def _normalize_cols(root, active_end):
         date_col.set(key, value)
     kept.append(date_col)
 
-    if changed or len(kept) != len(children):
-        for child in list(cols):
+    for child in list(cols):
+        if etree.QName(child).localname == "col":
             cols.remove(child)
-        kept.sort(key=lambda node: int(node.get("min", "0")) if etree.QName(node).localname == "col" else 0)
-        for child in kept:
-            cols.append(child)
-        return 1
-    return 0
+    kept.sort(key=lambda node: int(node.get("min", "0")))
+    for child in kept:
+        cols.append(child)
+    return 1
 
 
 def canonicalize_planning_layout(workbook_bytes, *, active_days, reset_schedule=False):
@@ -122,8 +134,7 @@ def canonicalize_planning_layout(workbook_bytes, *, active_days, reset_schedule=
         sheet_data_nodes = root.xpath('//*[local-name()="sheetData"]')
         if not sheet_data_nodes:
             raise RuntimeError(f"Không tìm thấy sheetData của {PLANNING_SHEET}.")
-        sheet_data = sheet_data_nodes[0]
-        row_nodes = sheet_data.xpath('./*[local-name()="row"]')
+        row_nodes = sheet_data_nodes[0].xpath('./*[local-name()="row"]')
         last_row = 1
 
         for row in row_nodes:
@@ -139,13 +150,14 @@ def canonicalize_planning_layout(workbook_bytes, *, active_days, reset_schedule=
                 if remove:
                     row.remove(cell)
                     changed += 1
+
             desired_span = f"1:{active_end}"
-            if row.get("spans") != desired_span:
+            if row.get("spans") is not None and row.get("spans") != desired_span:
                 row.set("spans", desired_span)
                 changed += 1
 
-        dimension_nodes = root.xpath('//*[local-name()="dimension"]')
         desired_ref = f"A1:{active_end_letter}{last_row}"
+        dimension_nodes = root.xpath('//*[local-name()="dimension"]')
         if dimension_nodes and dimension_nodes[0].get("ref") != desired_ref:
             dimension_nodes[0].set("ref", desired_ref)
             changed += 1
