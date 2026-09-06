@@ -11,6 +11,7 @@ import sync_planning_schedule_priority as priority
 import sync_planning_schedule_priority_debt as debt_priority
 import sync_planning_schedule_priority_v8 as v8
 import sync_planning_schedule_rgb_v9 as rgb_v9
+import sync_planning_schedule_galon_v9 as galon_v9
 from sync_planning_layout import canonicalize_planning_layout
 from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 from verify_planning_month import verify_workbook
@@ -23,14 +24,14 @@ def install_production_output_cleanup():
     """Install the production scheduler hooks and canonical output layout.
 
     V8 installs the full priority chain and may overwrite lower-level RGB/Galon
-    hooks. Debt-aware priority must therefore be installed *after* V8 every
-    time this installer is called. RGB V9 is then installed last so the RGB
-    machine is scheduled as one serial resource with explicit 0.5-shift setup,
-    whole quanta and a whole-resource service objective.
+    hooks. Debt-aware priority is reinstalled after V8. RGB/Galon V9 are then
+    installed last so both physical resources reserve every 0.5-shift setup,
+    keep whole production quanta and optimize service across the resource.
     """
     v8.install_priority_scheduler_v8()
     debt_priority.install_debt_aware_priority()
     rgb_v9.install_rgb_service_scheduler()
+    galon_v9.install_galon_service_scheduler(priority.base)
 
     original_patch = priority.base.patch_schedule_workbook
 
@@ -85,7 +86,7 @@ def run_scheduler_with_retry(
                     "etag": dest_item.get("eTag"),
                     "last_modified": dest_item.get("lastModifiedDateTime"),
                 },
-                algorithm="priority_v8",
+                algorithm="priority_v8_rgb_galon_v9",
             )
             report = attach_output_hash(report, updated_bytes)
 
