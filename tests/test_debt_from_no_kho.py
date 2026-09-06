@@ -28,7 +28,7 @@ class DebtFromNoKhoTests(unittest.TestCase):
         self.assertEqual(debts["130100011"], 2650)
         self.assertEqual(debts["130100096"], 0)
 
-    def test_n_and_o_use_no_kho_value_directly(self):
+    def test_n_uses_no_kho_and_urgent_o_uses_actual_stock(self):
         old_mapping = metrics.LEADTIME_BY_CODE
         metrics.LEADTIME_BY_CODE = {"130100011": 4}
         try:
@@ -54,9 +54,10 @@ class DebtFromNoKhoTests(unittest.TestCase):
                 state={},
             )
             self.assertEqual(result["130100011"]["warehouse_debt"], 2650)
+            # Urgent: đủ cung ứng trước => FC + nợ - tồn thực tế J, không cộng M.
             self.assertAlmostEqual(
                 result["130100011"]["required_production"],
-                57019 + 2650 - 1708,
+                57019 + 2650 - 7176,
             )
         finally:
             metrics.LEADTIME_BY_CODE = old_mapping
