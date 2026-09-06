@@ -227,6 +227,98 @@ def _search_best_sequence(headers, products, capacity):
     return best
 
 
+def _day1_protection_bound(headers, products, capacity):
+    """Exact day-1 lower bound for stockout SKU count with setup and quanta."""
+    if not headers:
+        return {
+            "at_risk_codes": [],
+            "inherently_unprotectable_codes": [],
+            "protectable_codes": [],
+            "max_protected_skus": 0,
+            "minimum_stockout_skus": 0,
+            "best_protected_sets": [],
+        }
+
+    day = headers[0]
+    protectable = []
+    unprotectable = []
+    at_risk = []
+    details = {}
+
+    for product in products:
+        code = product["code"]
+        stock = float(product.get("actual_stock", 0) or 0)
+        debt = max(float(product.get("debt", 0) or 0), 0.0)
+        demand = float(product["demand_by_day"].get(day, 0) or 0)
+        need = max(debt + demand - stock, 0.0)
+        if need <= EPS:
+            continue
+
+        at_risk.append(code)
+        quantum_qty = float(product.get("quantum_qty", 0) or 0)
+        quantum_shift = float(product.get("quantum_shift", 0) or 0)
+        release_index = _effective_release_index(headers, product)
+        if quantum_qty <= EPS or quantum_shift <= EPS:
+            required_units = math.inf
+            required_shifts = math.inf
+        else:
+            required_units = int(math.ceil(need / quantum_qty - EPS))
+            required_shifts = required_units * quantum_shift
+
+        details[code] = {
+            "need": need,
+            "required_units": None if not math.isfinite(required_units) else required_units,
+            "required_shifts": None if not math.isfinite(required_shifts) else required_shifts,
+            "release_index": release_index,
+        }
+        if (
+            release_index > 0
+            or not math.isfinite(required_shifts)
+            or required_shifts > float(capacity) + EPS
+        ):
+            unprotectable.append(code)
+        else:
+            protectable.append(code)
+
+    by_code = {product["code"]: product for product in products}
+    best_count = 0
+    best_sets = set()
+    for subset_size in range(len(protectable) + 1):
+        for subset in itertools.combinations(protectable, subset_size):
+            if not subset:
+                feasible = True
+            else:
+                feasible = False
+                for order in itertools.permutations(subset):
+                    production_shifts = sum(
+                        float(details[code]["required_shifts"] or 0)
+                        for code in order
+                    )
+                    setup_shifts = base.SETUP_SHIFTS * max(0, len(order) - 1)
+                    if production_shifts + setup_shifts <= float(capacity) + EPS:
+                        feasible = True
+                        break
+            if not feasible:
+                continue
+            if subset_size > best_count:
+                best_count = subset_size
+                best_sets = {tuple(sorted(subset))}
+            elif subset_size == best_count:
+                best_sets.add(tuple(sorted(subset)))
+
+    return {
+        "at_risk_codes": sorted(at_risk),
+        "inherently_unprotectable_codes": sorted(unprotectable),
+        "protectable_codes": sorted(protectable),
+        "max_protected_skus": best_count,
+        "minimum_stockout_skus": max(0, len(at_risk) - best_count),
+        "best_protected_sets": [list(item) for item in sorted(best_sets)],
+        "details": details,
+        "capacity_shifts": float(capacity),
+        "setup_shifts_per_switch": float(base.SETUP_SHIFTS),
+    }
+
+
 def _solo_day1_floor(headers, product, capacity):
     if not headers:
         return {}
@@ -288,6 +380,22 @@ def _build_review(workbook_bytes, plan_year, report=None):
         setup_shifts=current_setup,
     )
     best = _search_best_sequence(headers, rgb_products, capacity)
+    day1_bound = _day1_protection_bound(headers, rgb_products, capacity)
+    current_day1_stockout_codes = sorted(
+        code
+        for code, item in current_per_code.items()
+        if item.get("days") and item["days"][0].get("stockout")
+    )
+    day1_bound["current_stockout_codes"] = current_day1_stockout_codes
+    day1_bound["current_stockout_skus"] = len(current_day1_stockout_codes)
+    day1_bound["current_meets_lower_bound"] = (
+        len(current_day1_stockout_codes) == day1_bound["minimum_stockout_skus"]
+    )
+    day1_bound["monthly_stockout_sku_lower_bound"] = day1_bound["minimum_stockout_skus"]
+    day1_bound["current_monthly_stockout_skus"] = current_metrics["stockout_skus"]
+    day1_bound["current_primary_objective_optimal"] = (
+        current_metrics["stockout_skus"] == day1_bound["minimum_stockout_skus"]
+    )
 
     floors = {
         code: _solo_day1_floor(headers, next(product for product in rgb_products if product["code"] == code), capacity)
@@ -316,6 +424,7 @@ def _build_review(workbook_bytes, plan_year, report=None):
             "carryover": best["carryover"],
         },
         "alternative_strictly_better": _objective(best["metrics"]) < _objective(current_metrics),
+        "day1_capacity_lower_bound": day1_bound,
         "day1_solo_lower_bounds": floors,
     }
 
@@ -329,6 +438,7 @@ def _fmt(value):
 def _markdown(review):
     cur = review["current"]
     alt = review["best_full_campaign_alternative"]
+    bound = review["day1_capacity_lower_bound"]
     lines = [
         "# RGB service / stockout review",
         "",
@@ -355,7 +465,20 @@ def _markdown(review):
         lines.append(
             f"| {key} | {_fmt(cur['metrics'][key])} | {_fmt(alt['metrics'][key])} |"
         )
+
+    best_sets = [" + ".join(item) if item else "(none)" for item in bound["best_protected_sets"]]
     lines.extend([
+        "",
+        "## Day-1 capacity/setup lower bound",
+        f"- SKU sẽ âm nếu ngày 1 không sản xuất: {', '.join(bound['at_risk_codes']) or '(none)' }",
+        f"- SKU không thể cứu hết ngày 1 dù chạy một mình: {', '.join(bound['inherently_unprotectable_codes']) or '(none)' }",
+        f"- Tối đa SKU có thể bảo vệ ngày 1 với capacity + setup: {bound['max_protected_skus']}",
+        f"- Số SKU stockout tối thiểu bắt buộc ngày 1: **{bound['minimum_stockout_skus']}**",
+        f"- Các tập SKU có thể bảo vệ tối đa: {' | '.join(best_sets) or '(none)'}",
+        f"- Lịch V10 hiện tại stockout ngày 1: {bound['current_stockout_skus']} SKU ({', '.join(bound['current_stockout_codes']) or 'none'})",
+        f"- V10 đạt lower bound ngày 1: **{'YES' if bound['current_meets_lower_bound'] else 'NO'}**",
+        f"- Vì stockout ngày 1 đã tính vào stockout theo tháng, lower bound stockout SKU tháng cũng là {bound['monthly_stockout_sku_lower_bound']}; V10 hiện có {bound['current_monthly_stockout_skus']}.",
+        f"- Primary objective (số SKU từng stockout) đạt tối ưu theo lower bound: **{'YES' if bound['current_primary_objective_optimal'] else 'NO'}**",
         "",
         f"- Alternative order: {' -> '.join(alt['order'])}",
         "",
@@ -399,6 +522,7 @@ def _markdown(review):
     lines.extend([
         "",
         "## Interpretation rule",
+        "- Day-1 capacity/setup lower bound is an exact combinatorial bound for the first-day obligations under current quantum sizes, release dates, line capacity and 0.5-ca SKU setup.",
         "- Solo day-1 lower bound proves only the unavoidable minimum for that SKU if it monopolized RGB that day.",
         "- Whole-resource comparison is used to decide whether current delay is avoidable without merely moving shortage to another RGB SKU.",
         "- The comparator keeps exact P quantum/batch, 2-ca/day resource capacity, 0.5-ca setup on every SKU switch, and the effective release dates used by the production scheduler.",
