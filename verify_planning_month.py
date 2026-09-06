@@ -353,6 +353,7 @@ def verify_workbook(workbook_bytes, schedule_report=None):
 
         # 4) Hậu kiểm độc lập dữ liệu kế hoạch và lịch ngày.
         EPS = 1e-7
+        MASS_EPS = 1e-5
         resource_capacity = {}
         daily_resource_usage = {}
         checked_schedule_rows = 0
@@ -442,20 +443,51 @@ def verify_workbook(workbook_bytes, schedule_report=None):
                 report_balance = (schedule_report.get("mass_balance") or {}).get(code)
 
             if report_balance is not None:
-                report_planned = _finite_number(report_balance.get("planned_qty"), f"report {code}.planned_qty")
-                report_scheduled = _finite_number(report_balance.get("scheduled_qty"), f"report {code}.scheduled_qty")
-                carryover_qty = _finite_number(report_balance.get("carryover_qty"), f"report {code}.carryover_qty")
-                if not math.isclose(report_planned, planned, rel_tol=1e-9, abs_tol=1e-5):
+                report_planned = _finite_number(
+                    report_balance.get("planned_qty"),
+                    f"report {code}.planned_qty",
+                )
+                report_scheduled = _finite_number(
+                    report_balance.get("scheduled_qty"),
+                    f"report {code}.scheduled_qty",
+                )
+                carryover_qty = _finite_number(
+                    report_balance.get("carryover_qty"),
+                    f"report {code}.carryover_qty",
+                )
+                for label, value in (
+                    ("planned_qty", report_planned),
+                    ("scheduled_qty", report_scheduled),
+                    ("carryover_qty", carryover_qty),
+                ):
+                    if value < -MASS_EPS:
+                        raise RuntimeError(
+                            f"Report mã {code} có {label} âm: {value}."
+                        )
+                if total_scheduled > planned + MASS_EPS:
+                    raise RuntimeError(
+                        f"Mã {code} scheduled={total_scheduled} vượt P={planned}; "
+                        "carryover âm không được phép che sản xuất vượt kế hoạch."
+                    )
+                if report_scheduled > report_planned + MASS_EPS:
+                    raise RuntimeError(
+                        f"Report mã {code} scheduled={report_scheduled} vượt P={report_planned}."
+                    )
+                if carryover_qty > report_planned + MASS_EPS:
+                    raise RuntimeError(
+                        f"Report mã {code} carryover={carryover_qty} vượt P={report_planned}."
+                    )
+                if not math.isclose(report_planned, planned, rel_tol=1e-9, abs_tol=MASS_EPS):
                     raise RuntimeError(f"Report P mã {code}={report_planned} khác workbook P={planned}.")
-                if not math.isclose(report_scheduled, total_scheduled, rel_tol=1e-9, abs_tol=1e-5):
+                if not math.isclose(report_scheduled, total_scheduled, rel_tol=1e-9, abs_tol=MASS_EPS):
                     raise RuntimeError(
                         f"Report scheduled mã {code}={report_scheduled} khác workbook={total_scheduled}."
                     )
-                if not math.isclose(total_scheduled + carryover_qty, planned, rel_tol=1e-9, abs_tol=1e-5):
+                if not math.isclose(total_scheduled + carryover_qty, planned, rel_tol=1e-9, abs_tol=MASS_EPS):
                     raise RuntimeError(
                         f"Mass balance mã {code}: scheduled {total_scheduled} + carryover {carryover_qty} != P {planned}."
                     )
-            elif not math.isclose(total_scheduled, planned, rel_tol=1e-9, abs_tol=1e-5):
+            elif not math.isclose(total_scheduled, planned, rel_tol=1e-9, abs_tol=MASS_EPS):
                 raise RuntimeError(
                     f"Tổng SX ngày của mã {code} = {total_scheduled} khác P={planned}. "
                     "Cần schedule report có provenance để xác nhận carryover hợp lệ."
