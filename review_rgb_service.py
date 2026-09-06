@@ -266,7 +266,7 @@ def _json_schedule(schedule):
     }
 
 
-def _build_review(workbook_bytes, plan_year):
+def _build_review(workbook_bytes, plan_year, report=None):
     install_production_output_cleanup()
     headers, products = base.read_schedule_inputs(workbook_bytes, plan_year=plan_year)
     rgb_products = [product for product in products if product.get("line") == "RGB"]
@@ -274,11 +274,18 @@ def _build_review(workbook_bytes, plan_year):
         raise RuntimeError("Không có SKU RGB trong workbook dry-run.")
     capacity = max(float(product.get("max_shifts_per_day", 0) or 0) for product in rgb_products)
 
+    report = report or {}
+    rgb_report = ((report.get("resources") or {}).get("RGB") or {})
+    rgb_meta = rgb_report.get("meta") or {}
+    current_setup = float(rgb_meta.get("setup_shifts", 0) or 0)
+    current_mode = str(rgb_meta.get("mode") or "unknown")
+
     current_schedule = _current_schedule(headers, rgb_products)
     current_metrics, current_per_code = _service_metrics(
         headers,
         rgb_products,
         current_schedule,
+        setup_shifts=current_setup,
     )
     best = _search_best_sequence(headers, rgb_products, capacity)
 
@@ -293,6 +300,7 @@ def _build_review(workbook_bytes, plan_year):
         "capacity_shifts_per_day": capacity,
         "active_codes": [product["code"] for product in rgb_products if product.get("planned_qty", 0) > EPS],
         "current": {
+            "optimizer_mode": current_mode,
             "metrics": current_metrics,
             "objective": list(_objective(current_metrics)),
             "per_code": current_per_code,
@@ -326,11 +334,12 @@ def _markdown(review):
         "",
         f"- Capacity: {review['capacity_shifts_per_day']} ca/ngày",
         f"- Active RGB SKU: {', '.join(review['active_codes'])}",
+        f"- Current optimizer: `{cur.get('optimizer_mode')}`",
         f"- Exact full-campaign sequences evaluated: {alt['evaluated_sequences']}",
         f"- Best full-campaign alternative strictly improves current objective: **{'YES' if review['alternative_strictly_better'] else 'NO'}**",
         "",
         "## Whole-resource comparison",
-        "| Metric | Current weekly schedule | Best full-campaign alternative |",
+        "| Metric | Current production schedule | Best full-campaign alternative |",
         "|---|---:|---:|",
     ]
     for key in (
@@ -407,7 +416,7 @@ def main():
     except Exception as exc:
         raise RuntimeError(f"plan_month không hợp lệ: {plan_month!r}") from exc
 
-    review = _build_review(WORKBOOK_PATH.read_bytes(), plan_year)
+    review = _build_review(WORKBOOK_PATH.read_bytes(), plan_year, report=report)
     OUTPUT_JSON.write_text(
         json.dumps(review, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
