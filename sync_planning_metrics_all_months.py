@@ -26,8 +26,22 @@ def resolve_plan_year(report_date, plan_month):
 
 
 def _planning_stock(actual_stock, book_stock):
-    """Tồn dùng để lập kế hoạch: lấy mức bảo thủ hơn giữa tồn thực tế và sổ sách."""
+    """Tồn dùng cho kế hoạch thường: lấy mức bảo thủ hơn giữa thực tế và sổ sách."""
     return min(max(float(actual_stock or 0), 0.0), max(float(book_stock or 0), 0.0))
+
+
+def _urgent_supply_need(fc, warehouse_debt, actual_stock):
+    """
+    Nhu cầu bắt buộc để không thiếu cung trong tháng.
+
+    Khi FC + nợ kho lớn hơn tồn thực tế J, SKU được xem là urgent. Phần urgent
+    chỉ bù đủ cung ứng thực tế, không cộng tồn cuối mục tiêu M. Nhờ vậy capacity
+    máy được ưu tiên cho stockout prevention trước safety-stock build.
+    """
+    return max(
+        float(fc or 0) + float(warehouse_debt or 0) - max(float(actual_stock or 0), 0.0),
+        0.0,
+    )
 
 
 def calculate_row_all_months(
@@ -61,15 +75,22 @@ def calculate_row_all_months(
         0 if opening_consignment > minimum_stock else minimum_stock
     )
 
-    # O - dùng Planning Stock = MIN(J thực tế, K sổ sách).
-    # Mục tiêu: không để tồn sổ sách cao che mất thiếu hàng vật lý.
     planning_stock = _planning_stock(actual_stock, book_stock)
-    if warehouse_debt > 0:
-        required_production = fc + warehouse_debt - planning_stock
-    else:
-        required_production = fc + expected_end_stock - planning_stock + warehouse_debt
+    urgent_supply_need = _urgent_supply_need(fc, warehouse_debt, actual_stock)
+    is_urgent = urgent_supply_need > 0
 
-    # O/P không âm.
+    # O - SKU urgent ưu tiên đủ cung ứng trước, bỏ qua M.
+    # SKU chưa urgent mới build tồn cuối mục tiêu theo Planning Stock bảo thủ.
+    if is_urgent:
+        required_production = urgent_supply_need
+    else:
+        required_production = (
+            float(fc or 0)
+            + float(warehouse_debt or 0)
+            + float(expected_end_stock or 0)
+            - planning_stock
+        )
+
     required_production = max(required_production, 0)
 
     # P - làm tròn mẻ/ca.
@@ -85,7 +106,7 @@ def calculate_row_all_months(
 
     production_days = rounded_production / per_shift / shifts_per_day
 
-    # R - ngày nhu cầu danh nghĩa; scheduler có thể kéo sớm hơn nếu capacity/risk yêu cầu.
+    # R - ngày nhu cầu danh nghĩa; scheduler có thể kéo sớm hơn nếu risk/capacity yêu cầu.
     if daily_fc <= 0:
         production_start = None
     else:
