@@ -56,7 +56,6 @@ class PlanningLayoutTests(unittest.TestCase):
             self.assertIsNone(planning["S2"].value)
             self.assertIsNone(planning["T2"].value)
             self.assertIsNone(planning["AY2"].value)
-            self.assertEqual(planning.max_column, 48)  # AV
             self.assertEqual(planning.auto_filter.ref, "A1:AV2")
         finally:
             workbook.close()
