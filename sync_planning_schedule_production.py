@@ -10,6 +10,7 @@ from planning_schedule_report import (
 import sync_planning_schedule_priority as priority
 import sync_planning_schedule_priority_debt as debt_priority
 import sync_planning_schedule_priority_v8 as v8
+import sync_planning_schedule_rgb_v9 as rgb_v9
 from sync_planning_layout import canonicalize_planning_layout
 from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 from verify_planning_month import verify_workbook
@@ -23,11 +24,13 @@ def install_production_output_cleanup():
 
     V8 installs the full priority chain and may overwrite lower-level RGB/Galon
     hooks. Debt-aware priority must therefore be installed *after* V8 every
-    time this installer is called. Repeated installer calls/retries reapply the
-    debt-aware hooks instead of silently falling back to the old logic.
+    time this installer is called. RGB V9 is then installed last so the RGB
+    machine is scheduled as one serial resource with explicit 0.5-shift setup,
+    whole quanta and a whole-resource service objective.
     """
     v8.install_priority_scheduler_v8()
     debt_priority.install_debt_aware_priority()
+    rgb_v9.install_rgb_service_scheduler()
 
     original_patch = priority.base.patch_schedule_workbook
 
