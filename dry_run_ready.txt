@@ -1,1 +1,1 @@
-run 2026-09-06 RGB V10 lower-bound proof final review
+run 2026-09-06 final reviewed candidate; ready for controlled production deployment
