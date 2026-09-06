@@ -1,1 +1,1 @@
-run 2026-09-06 round3 final exact head with demand deadline classification
+run 2026-09-06 timeline proof and RGB service tradeoff review
