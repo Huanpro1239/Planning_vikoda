@@ -153,8 +153,29 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
                 break
             continue
 
+        # Chỉ xét ứng viên mà toàn bộ setup + quantum còn vừa horizon.
+        # Nếu ứng viên ưu tiên nhất không vừa nhưng SKU khác vẫn vừa, phải thử
+        # SKU đó thay vì break và bỏ phí capacity.
+        feasible = []
+        for product in eligible:
+            same_code = product["code"] == last_code
+            setup_needed = (
+                0.0
+                if last_code is None or same_code
+                else priority.base.SETUP_SHIFTS
+            )
+            duration = float(product.get("quantum_shift", 0) or 0)
+            if (
+                cursor_shift + setup_needed + duration
+                <= month_end_shift + priority.base.EPSILON
+            ):
+                feasible.append(product)
+
+        if not feasible:
+            break
+
         primary = min(
-            eligible,
+            feasible,
             key=lambda product: _candidate_key(
                 headers,
                 product,
@@ -169,7 +190,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
 
         if last_code and last_code in by_code:
             current = by_code[last_code]
-            if units_left(current) > 0 and current in eligible and current["code"] != primary["code"]:
+            if units_left(current) > 0 and current in feasible and current["code"] != primary["code"]:
                 current_deadline, current_critical, _ = infos[current["code"]]
                 primary_deadline, primary_critical, _ = infos[primary["code"]]
 
@@ -238,6 +259,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
             deadline_misses.append(
                 {
                     "code": chosen["code"],
+                    "qty": priority.base._clean_number(expected),
                     "deadline_shift": deadline,
                     "finish_shift": cursor_shift,
                 }
@@ -262,18 +284,82 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
         last_code = chosen["code"]
         last_group = chosen.get("product_group")
 
+    unserved_due = []
+    urgent_carryover = {}
+    safety_carryover = {}
+    shortage_by_day = defaultdict(float)
+
     for product in products:
         missing_units = units_left(product)
-        if missing_units > 0:
-            carryover[product["code"]] = priority.base._clean_number(
-                missing_units * float(product["quantum_qty"])
+        if missing_units <= 0:
+            continue
+
+        code = product["code"]
+        quantum_qty = float(product["quantum_qty"])
+        carryover[code] = priority.base._clean_number(missing_units * quantum_qty)
+
+        probe_units = scheduled_units[code]
+        urgent_qty = 0.0
+        safety_qty = 0.0
+        earliest_deadline = None
+        for _ in range(missing_units):
+            info = _next_unit_info(
+                headers,
+                product,
+                capacity,
+                probe_units,
             )
+            probe_units += 1
+            if info is None:
+                continue
+            deadline, critical, _ = info
+            if critical:
+                urgent_qty += quantum_qty
+                earliest_deadline = (
+                    deadline
+                    if earliest_deadline is None
+                    else min(earliest_deadline, deadline)
+                )
+            else:
+                safety_qty += quantum_qty
+
+        if urgent_qty > priority.base.EPSILON:
+            urgent_carryover[code] = priority.base._clean_number(urgent_qty)
+            deadline_index = max(
+                0,
+                min(
+                    len(headers) - 1,
+                    int(math.ceil(earliest_deadline / capacity - priority.base.EPSILON)) - 1,
+                ),
+            )
+            due_day = headers[deadline_index]
+            shortage_by_day[due_day] += urgent_qty
+            unserved_due.append(
+                {
+                    "code": code,
+                    "qty": priority.base._clean_number(urgent_qty),
+                    "deadline_shift": earliest_deadline,
+                    "due_date": due_day,
+                }
+            )
+
+        if safety_qty > priority.base.EPSILON:
+            safety_carryover[code] = priority.base._clean_number(safety_qty)
 
     return schedule, usage, carryover, {
         "mode": "shared_machine_deadline_guarded",
         "setup_shifts": setup_total,
         "campaigns": campaigns,
+        # Backward-compatible field: late-completed urgent quantum only.
         "deadline_misses": deadline_misses,
+        "late_completed": list(deadline_misses),
+        "unserved_due": unserved_due,
+        "urgent_carryover": urgent_carryover,
+        "safety_carryover": safety_carryover,
+        "shortage_by_day": {
+            day: priority.base._clean_number(qty)
+            for day, qty in sorted(shortage_by_day.items())
+        },
         "urgent_buffer_days": URGENT_BUFFER_DAYS,
         "physical_lines": sorted(SHARED_MACHINE_LINES),
     }

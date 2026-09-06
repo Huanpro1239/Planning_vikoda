@@ -15,7 +15,7 @@ from sync_planning_fc import (
     _load_shared_strings,
     _read_cell_text,
 )
-from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code
+from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error, normalize_code
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
@@ -816,31 +816,51 @@ def build_schedule(headers, products):
 
 
 def simulate_inventory(headers, products, schedule):
+    """Simulate one consistent inventory/obligation balance.
+
+    Current business semantics in V8 treat ``debt`` as an obligation due in
+    the first planning day. It is therefore charged exactly once on day 1,
+    while FC demand is charged by ``demand_by_day``. Production made on the
+    same day can satisfy that obligation.
+
+    ``ending_stock`` remains the legacy signed net balance. Positive balance
+    is physical stock available after due obligations; negative balance is
+    backlog. Extra fields expose those meanings explicitly.
+    """
     result = {}
     for product in products:
-        stock = product["actual_stock"]
-        min_stock = stock
+        balance = float(product["actual_stock"] or 0)
+        min_balance = balance
         first_stockout = None
         first_below_safety = None
-        for current_day in headers:
-            stock += (
+        debt = max(float(product.get("debt", 0) or 0), 0.0)
+        debt_due_date = headers[0] if headers and debt > EPSILON else None
+
+        for index, current_day in enumerate(headers):
+            debt_due_today = debt if index == 0 else 0.0
+            balance += (
                 schedule[product["code"]][current_day]
                 - product["demand_by_day"][current_day]
+                - debt_due_today
             )
-            min_stock = min(min_stock, stock)
-            if stock < -EPSILON and first_stockout is None:
+            min_balance = min(min_balance, balance)
+            if balance < -EPSILON and first_stockout is None:
                 first_stockout = current_day
             if (
-                stock < product["target_stock"] - EPSILON
+                balance < product["target_stock"] - EPSILON
                 and first_below_safety is None
             ):
                 first_below_safety = current_day
 
         result[product["code"]] = {
-            "ending_stock": _clean_number(stock),
-            "min_stock": _clean_number(min_stock),
+            "ending_stock": _clean_number(balance),
+            "ending_net_available": _clean_number(balance),
+            "ending_physical_stock": _clean_number(max(balance, 0.0)),
+            "ending_backlog": _clean_number(max(-balance, 0.0)),
+            "min_stock": _clean_number(min_balance),
             "first_stockout": first_stockout,
             "first_below_safety": first_below_safety,
+            "debt_due_date": debt_due_date,
         }
     return result
 
@@ -1061,10 +1081,8 @@ def main_with_retry(*, sleep_func=time.sleep, max_attempts=6, retry_delay_second
                 f"[{PLANNING_SHEET}] Đã cập nhật {info['changed_count']} ô lịch sản xuất S:..."
             )
             return
-        except RuntimeError as exc:
-            message = str(exc)
-            retryable = "423" in message or "resourceLocked" in message or "412" in message
-            if not retryable or attempt == max_attempts:
+        except Exception as exc:
+            if not is_retryable_graph_error(exc) or attempt == max_attempts:
                 raise
             print(
                 f"[{PLANNING_SHEET}] File đang khóa/thay đổi; thử scheduler lại "

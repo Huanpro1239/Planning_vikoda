@@ -60,6 +60,44 @@ CODE_PATTERN = re.compile(r"^\d{6,}$")
 SYNC_VERSION = 3
 
 
+class GraphRequestError(RuntimeError):
+    """Structured Microsoft Graph failure used by retry policies."""
+
+    def __init__(self, message, *, status_code=None, error_code=None, detail=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.detail = detail
+
+
+def is_retryable_graph_error(exc):
+    """Return True only for transient/concurrency/network failures."""
+    if isinstance(exc, GraphRequestError):
+        if exc.status_code in {412, 423, 429, 500, 502, 503, 504}:
+            return True
+        if str(exc.error_code or "").casefold() in {
+            "resourcelocked",
+            "preconditionfailed",
+            "toomanyrequests",
+            "timeout",
+            "serviceunavailable",
+        }:
+            return True
+        return False
+
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+
+    # Backward compatibility for existing fakes/tests while callers migrate.
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return any(
+            marker in message
+            for marker in ("412", "423", "429", "resourceLocked", "500", "502", "503", "504")
+        )
+    return False
+
+
 def get_access_token():
     app = msal.ConfidentialClientApplication(
         client_id=os.environ["MS_CLIENT_ID"],
@@ -99,10 +137,19 @@ class GraphClient:
         try:
             detail = response.json()
         except Exception:
-            detail = response.text
+            detail = getattr(response, "text", "")
 
-        raise RuntimeError(
-            f"Microsoft Graph lỗi {response.status_code}: {detail}"
+        error_code = None
+        if isinstance(detail, dict):
+            error = detail.get("error")
+            if isinstance(error, dict):
+                error_code = error.get("code")
+
+        raise GraphRequestError(
+            f"Microsoft Graph lỗi {response.status_code}: {detail}",
+            status_code=response.status_code,
+            error_code=error_code,
+            detail=detail,
         )
 
     def get_json(self, url, params=None):
@@ -158,9 +205,11 @@ class GraphClient:
         )
 
         if response.status_code == 412:
-            raise RuntimeError(
-                "File đích vừa thay đổi trong lúc workflow chạy. "
-                "Dừng để tránh ghi đè thay đổi mới."
+            raise GraphRequestError(
+                "Microsoft Graph HTTP 412 preconditionFailed: file đích vừa thay đổi; "
+                "phải tải lại workbook, tính lại patch và dùng ETag mới.",
+                status_code=412,
+                error_code="preconditionFailed",
             )
 
         self._raise(response)

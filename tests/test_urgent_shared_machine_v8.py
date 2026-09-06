@@ -132,5 +132,59 @@ class UrgentSupplyAndSharedMachineV8Tests(unittest.TestCase):
             )
 
 
+    def test_tries_smaller_feasible_candidate_before_stopping(self):
+        headers = [date(2026, 9, 1)]
+        a = self._product(
+            "A",
+            "KHS",
+            2,
+            actual_stock=0.0,
+            daily=(400.0, 0.0),
+            planned_qty=400.0,
+        )
+        b = self._product(
+            "B",
+            "PET 9000",
+            3,
+            actual_stock=0.0,
+            daily=(100.0, 0.0),
+            planned_qty=100.0,
+        )
+        # One A batch takes 2 shifts; B takes 0.5 shift. After A=200,
+        # setup 0.5 + B 0.5 still fits the 3-shift horizon.
+        a.update(
+            batch=200.0,
+            per_shift=100.0,
+            is_sugar=True,
+            quantum_qty=200.0,
+            quantum_shift=2.0,
+            required_units=2,
+            demand_by_day={headers[0]: 400.0},
+        )
+        b.update(
+            batch=100.0,
+            per_shift=200.0,
+            is_sugar=True,
+            quantum_qty=100.0,
+            quantum_shift=0.5,
+            required_units=1,
+            demand_by_day={headers[0]: 100.0},
+        )
+
+        schedule, usage, carryover, meta = v8.allocate_shared_deadline_guarded(
+            headers, [a, b], 3.0
+        )
+
+        self.assertEqual(sum(schedule["A"].values()), 200)
+        self.assertEqual(sum(schedule["B"].values()), 100)
+        self.assertAlmostEqual(sum(usage.values()), 3.0)
+        self.assertEqual(carryover, {"A": 200})
+        self.assertEqual(meta["urgent_carryover"], {"A": 200})
+        self.assertEqual(meta["safety_carryover"], {})
+        self.assertEqual(meta["unserved_due"][0]["code"], "A")
+        self.assertEqual(meta["unserved_due"][0]["qty"], 200)
+        self.assertEqual(meta["unserved_due"][0]["due_date"], headers[0])
+
+
 if __name__ == "__main__":
     unittest.main()

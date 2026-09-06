@@ -1,7 +1,7 @@
 import time
 
 from planning_cleanup import remove_sheet_formulas
-from sync_stock import DEST_PATH, GraphClient, get_access_token
+from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 
 PLANNING_SHEET = "Ke_hoach_SX"
 
@@ -36,14 +36,8 @@ def cleanup_with_retry(
                 expected_etag=dest_item["eTag"],
             )
             return removed
-        except RuntimeError as exc:
-            message = str(exc)
-            retryable = (
-                "423" in message
-                or "resourceLocked" in message
-                or "412" in message
-            )
-            if not retryable or attempt == max_attempts:
+        except Exception as exc:
+            if not is_retryable_graph_error(exc) or attempt == max_attempts:
                 raise
 
             print(

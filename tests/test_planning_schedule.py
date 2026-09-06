@@ -201,5 +201,27 @@ class PlanningScheduleTests(unittest.TestCase):
         self.assertEqual(inventory["A"]["first_stockout"], date(2026, 9, 2))
 
 
+    def test_inventory_simulation_charges_debt_once_on_first_day(self):
+        headers = [date(2026, 9, 1), date(2026, 9, 2)]
+        product = self.product(
+            code="DEBT",
+            planned_qty=0,
+            actual_stock=0,
+            fc=0,
+            debt=100,
+        )
+        product["demand_by_day"] = {day: 0 for day in headers}
+
+        _, _, _, _, inventory, _ = build_schedule(headers, [product])
+        result = inventory["DEBT"]
+
+        self.assertEqual(result["ending_stock"], -100)
+        self.assertEqual(result["ending_net_available"], -100)
+        self.assertEqual(result["ending_physical_stock"], 0)
+        self.assertEqual(result["ending_backlog"], 100)
+        self.assertEqual(result["first_stockout"], headers[0])
+        self.assertEqual(result["debt_due_date"], headers[0])
+
+
 if __name__ == "__main__":
     unittest.main()

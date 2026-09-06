@@ -1,6 +1,7 @@
 import unittest
 
 import cleanup_planning
+from sync_stock import GraphRequestError
 
 
 class FakeGraph:
@@ -25,6 +26,18 @@ class FakeGraph:
         return {"name": "Sắp kế hoạch.xlsx"}
 
 
+class FakeGraph412(FakeGraph):
+    def upload_file(self, drive_id, item_id, content, expected_etag):
+        self.upload_calls += 1
+        if self.upload_calls == 1:
+            raise GraphRequestError(
+                "precondition failed",
+                status_code=412,
+                error_code="preconditionFailed",
+            )
+        return {"name": "Sắp kế hoạch.xlsx"}
+
+
 class CleanupRetryTests(unittest.TestCase):
     def test_reloads_file_and_retries_when_sharepoint_is_locked(self):
         graph = FakeGraph()
@@ -46,6 +59,28 @@ class CleanupRetryTests(unittest.TestCase):
         self.assertEqual(graph.upload_calls, 2)
         self.assertEqual(graph.item_calls, 2)
         self.assertEqual(len(cleanup_calls), 2)
+
+
+    def test_412_reloads_recomputes_and_uses_new_etag(self):
+        graph = FakeGraph412()
+        cleanup_inputs = []
+
+        def fake_cleanup(data, sheet_name):
+            cleanup_inputs.append(data)
+            return b"updated-" + str(len(cleanup_inputs)).encode(), 1
+
+        removed = cleanup_planning.cleanup_with_retry(
+            graph,
+            "drive-id",
+            cleanup_func=fake_cleanup,
+            sleep_func=lambda _: None,
+            max_attempts=2,
+        )
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(graph.item_calls, 2)
+        self.assertEqual(graph.upload_calls, 2)
+        self.assertEqual(len(cleanup_inputs), 2)
 
 
 if __name__ == "__main__":

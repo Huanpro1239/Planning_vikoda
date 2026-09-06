@@ -14,7 +14,7 @@ from sync_planning_fc import (
     _load_shared_strings,
     _read_cell_text,
 )
-from sync_stock import DEST_PATH, GraphClient, get_access_token
+from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 
 FC_SHEET = "FC"
 FC_SELECTOR_CELL = "R1"
@@ -234,14 +234,8 @@ def main_with_retry(
                 f"[{PLANNING_SHEET}] Đã cập nhật {info['changed_count']} ô tiêu đề ngày."
             )
             return
-        except RuntimeError as exc:
-            message = str(exc)
-            retryable = (
-                "423" in message
-                or "resourceLocked" in message
-                or "412" in message
-            )
-            if not retryable or attempt == max_attempts:
+        except Exception as exc:
+            if not is_retryable_graph_error(exc) or attempt == max_attempts:
                 raise
 
             print(

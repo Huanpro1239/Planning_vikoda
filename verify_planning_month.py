@@ -1,4 +1,5 @@
 import calendar
+import math
 from datetime import datetime
 from io import BytesIO
 
@@ -135,6 +136,15 @@ def verify_workbook(workbook_bytes):
                 f"cần {expected_start!r} ... {expected_end!r}."
             )
 
+        for offset, expected_header in enumerate(headers):
+            column = START_COLUMN + offset
+            actual_header = planning.cell(row=1, column=column).value
+            if actual_header != expected_header:
+                raise RuntimeError(
+                    f"Tiêu đề ngày sai tại {get_column_letter(column)}1: "
+                    f"{actual_header!r}; cần {expected_header!r}."
+                )
+
         legacy_labels = {"Kỳ kế hoạch", "Tổng SX", "Chênh lệch (SX-P)"}
         for column in range(START_COLUMN, max(after_end_column + 4, 53)):
             value = planning.cell(row=1, column=column).value
@@ -167,6 +177,137 @@ def verify_workbook(workbook_bytes):
                 "Còn dữ liệu sau ngày cuối tháng: " + "; ".join(stale_cells)
             )
 
+        # 4) Hậu kiểm độc lập dữ liệu kế hoạch và lịch ngày. Không tin line_usage
+        # do allocator tự tạo: tính lại từ chính workbook cuối.
+        EPS = 1e-7
+        shared_lines = {"KHS", "PET 9000"}
+        resource_capacity = {}
+        daily_resource_usage = {}
+        checked_schedule_rows = 0
+
+        def number(value, label):
+            if value in (None, ""):
+                return 0.0
+            if isinstance(value, bool):
+                raise RuntimeError(f"{label} chứa TRUE/FALSE, không phải số.")
+            try:
+                result = float(value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(f"{label} không phải số: {value!r}") from exc
+            if not math.isfinite(result):
+                raise RuntimeError(f"{label} phải là số hữu hạn, hiện {value!r}.")
+            return result
+
+        planning_rows = []
+        for row in range(2, planning.max_row + 1):
+            code = normalize_code(planning.cell(row=row, column=1).value)
+            if not code:
+                continue
+
+            batch = number(planning.cell(row=row, column=4).value, f"D{row}")
+            per_shift = number(planning.cell(row=row, column=5).value, f"E{row}")
+            line = str(planning.cell(row=row, column=6).value or "").strip()
+            classification = str(planning.cell(row=row, column=8).value or "").strip()
+            shifts_per_day = number(planning.cell(row=row, column=9).value, f"I{row}")
+            actual_stock = number(planning.cell(row=row, column=10).value, f"J{row}")
+            book_stock = number(planning.cell(row=row, column=11).value, f"K{row}")
+            forecast = number(planning.cell(row=row, column=12).value, f"L{row}")
+            target_stock = number(planning.cell(row=row, column=13).value, f"M{row}")
+            debt = number(planning.cell(row=row, column=14).value, f"N{row}")
+            required = number(planning.cell(row=row, column=15).value, f"O{row}")
+            planned = number(planning.cell(row=row, column=16).value, f"P{row}")
+            production_days = number(planning.cell(row=row, column=17).value, f"Q{row}")
+
+            for label, value in (("M", target_stock), ("O", required), ("P", planned), ("Q", production_days)):
+                if value < -EPS:
+                    raise RuntimeError(f"{label}{row} của mã {code} không được âm: {value}.")
+
+            if per_shift <= 0 or shifts_per_day <= 0:
+                if planned > EPS:
+                    raise RuntimeError(
+                        f"Mã {code} có P>0 nhưng E/I không hợp lệ: E={per_shift}, I={shifts_per_day}."
+                    )
+            else:
+                urgent_qty = max(forecast + debt - max(actual_stock, 0.0), 0.0)
+                if urgent_qty > EPS:
+                    expected_required = urgent_qty
+                else:
+                    planning_stock = min(max(actual_stock, 0.0), max(book_stock, 0.0))
+                    expected_required = max(
+                        forecast + debt + target_stock - planning_stock,
+                        0.0,
+                    )
+                if not math.isclose(required, expected_required, rel_tol=1e-9, abs_tol=1e-5):
+                    raise RuntimeError(
+                        f"O{row} mã {code} sai: {required}; cần {expected_required}."
+                    )
+
+                base_qty = batch if classification.casefold() == "có đường".casefold() else per_shift
+                if planned > EPS and base_qty <= 0:
+                    raise RuntimeError(f"Mã {code} có quantum <=0 nhưng P={planned}.")
+                expected_planned = (
+                    0.0
+                    if expected_required <= EPS
+                    else math.ceil(expected_required / base_qty - 1e-12) * base_qty
+                )
+                if not math.isclose(planned, expected_planned, rel_tol=1e-9, abs_tol=1e-5):
+                    raise RuntimeError(
+                        f"P{row} mã {code} sai: {planned}; cần {expected_planned}."
+                    )
+
+                expected_q = planned / per_shift / shifts_per_day
+                if not math.isclose(production_days, expected_q, rel_tol=1e-9, abs_tol=1e-6):
+                    raise RuntimeError(
+                        f"Q{row} mã {code} sai: {production_days}; cần {expected_q}."
+                    )
+
+            daily_values = []
+            for offset, current_day in enumerate(headers):
+                column = START_COLUMN + offset
+                qty = number(
+                    planning.cell(row=row, column=column).value,
+                    f"{get_column_letter(column)}{row}",
+                )
+                if qty < -EPS:
+                    raise RuntimeError(
+                        f"Lịch mã {code} ngày {current_day:%d/%m} âm: {qty}."
+                    )
+                daily_values.append(qty)
+
+            total_scheduled = sum(daily_values)
+            if not math.isclose(total_scheduled, planned, rel_tol=1e-9, abs_tol=1e-5):
+                raise RuntimeError(
+                    f"Tổng SX ngày của mã {code} = {total_scheduled} khác P={planned}. "
+                    "Nếu thiếu capacity phải báo carryover/infeasible, không để workbook im lặng lệch mass balance."
+                )
+
+            resource = "KHS + PET 9000" if line in shared_lines else line
+            if resource:
+                existing_capacity = resource_capacity.get(resource)
+                if existing_capacity is None:
+                    resource_capacity[resource] = shifts_per_day
+                elif resource == "KHS + PET 9000" or line not in {"RGB", "Galon"}:
+                    resource_capacity[resource] = min(existing_capacity, shifts_per_day)
+                else:
+                    resource_capacity[resource] = max(existing_capacity, shifts_per_day)
+
+                if per_shift > EPS:
+                    for current_day, qty in zip(headers, daily_values):
+                        key = (resource, current_day)
+                        daily_resource_usage[key] = daily_resource_usage.get(key, 0.0) + qty / per_shift
+
+            planning_rows.append(code)
+            checked_schedule_rows += 1
+
+        for (resource, current_day), used_shifts in daily_resource_usage.items():
+            capacity = resource_capacity.get(resource, 0.0)
+            if used_shifts > capacity + 1e-6:
+                raise RuntimeError(
+                    f"Resource {resource} ngày {current_day:%d/%m} có ít nhất "
+                    f"{used_shifts:.3f} ca sản xuất > capacity {capacity:.3f}; "
+                    "chưa tính setup."
+                )
+
         print(
             f"[VERIFY] {stock_checked} mã J=Ton_kho!D, K=SUM(Ton_kho!E:H) đúng; "
             f"{selector!r} -> FC!{get_column_letter(source_column)}, {fc_checked} mã L đúng; "
@@ -179,6 +320,7 @@ def verify_workbook(workbook_bytes):
             "source_column": source_column,
             "stock_checked": stock_checked,
             "fc_checked": fc_checked,
+            "schedule_checked": checked_schedule_rows,
         }
     finally:
         workbook.close()

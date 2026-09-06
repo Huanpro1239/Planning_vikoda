@@ -1,7 +1,7 @@
 import unittest
 from io import BytesIO
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from verify_planning_month import verify_workbook
 from sync_planning_calendar import build_date_headers
@@ -46,8 +46,9 @@ class VerifyPlanningMonthTests(unittest.TestCase):
         planning.append(headers)
         planning.append([
             130100096, "A", "Thùng", 4500, 4500, "KHS", "Lon", "Không đường",
-            3, planning_actual, planning_book, planning_fc, 0, 0, 0, 0, 0, None,
-        ] + [None] * 30)
+            3, planning_actual, planning_book, planning_fc, 1801.92307692308, 0,
+            2836, 4500, 1 / 3, None,
+        ] + [4500] + [None] * 29)
         if stale_after_end:
             planning["AW2"] = 123
 
@@ -73,6 +74,23 @@ class VerifyPlanningMonthTests(unittest.TestCase):
     def test_fails_when_data_survives_after_last_day(self):
         with self.assertRaisesRegex(RuntimeError, "Còn dữ liệu sau ngày cuối tháng"):
             verify_workbook(self.make_workbook(stale_after_end=True))
+
+
+    def test_fails_when_middle_calendar_header_is_corrupt(self):
+        workbook = load_workbook(BytesIO(self.make_workbook()))
+        workbook["Ke_hoach_SX"]["T1"] = "BAD MIDDLE HEADER"
+        output = BytesIO()
+        workbook.save(output)
+        with self.assertRaisesRegex(RuntimeError, "Tiêu đề ngày sai"):
+            verify_workbook(output.getvalue())
+
+    def test_fails_when_daily_production_exceeds_P(self):
+        workbook = load_workbook(BytesIO(self.make_workbook()))
+        workbook["Ke_hoach_SX"]["S2"] = 999999
+        output = BytesIO()
+        workbook.save(output)
+        with self.assertRaisesRegex(RuntimeError, "Tổng SX ngày"):
+            verify_workbook(output.getvalue())
 
 
 if __name__ == "__main__":
