@@ -3,6 +3,7 @@ from datetime import datetime
 from io import BytesIO
 
 import sync_planning_calendar as calendar_sync
+from sync_planning_layout import canonicalize_planning_layout, needs_schedule_reset
 
 
 def resolve_plan_year(plan_month, now=None):
@@ -19,13 +20,24 @@ def resolve_plan_year(plan_month, now=None):
 
 
 def prepare_calendar_update_all_months(workbook_bytes, *, plan_year=None):
+    reset_schedule = needs_schedule_reset(workbook_bytes)
+
     if plan_year is None:
         with zipfile.ZipFile(BytesIO(workbook_bytes), "r") as archive:
             selector = calendar_sync._read_selector_from_archive(archive)
         plan_month = calendar_sync.parse_plan_month(selector)
         plan_year = resolve_plan_year(plan_month)
 
-    return _ORIGINAL_PREPARE(workbook_bytes, plan_year=plan_year)
+    updated, info = _ORIGINAL_PREPARE(workbook_bytes, plan_year=plan_year)
+    updated, layout_changes = canonicalize_planning_layout(
+        updated,
+        active_days=info["days"],
+        reset_schedule=reset_schedule,
+    )
+    info = dict(info)
+    info["changed_count"] += layout_changes
+    info["layout_changes"] = layout_changes
+    return updated, info
 
 
 _ORIGINAL_PREPARE = calendar_sync.prepare_calendar_update
