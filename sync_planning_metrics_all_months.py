@@ -25,6 +25,11 @@ def resolve_plan_year(report_date, plan_month):
     return year
 
 
+def _planning_stock(actual_stock, book_stock):
+    """Tồn dùng để lập kế hoạch: lấy mức bảo thủ hơn giữa tồn thực tế và sổ sách."""
+    return min(max(float(actual_stock or 0), 0.0), max(float(book_stock or 0), 0.0))
+
+
 def calculate_row_all_months(
     *,
     fc,
@@ -56,14 +61,19 @@ def calculate_row_all_months(
         0 if opening_consignment > minimum_stock else minimum_stock
     )
 
-    # O - nhu cầu sản xuất.
+    # O - dùng Planning Stock = MIN(J thực tế, K sổ sách).
+    # Mục tiêu: không để tồn sổ sách cao che mất thiếu hàng vật lý.
+    planning_stock = _planning_stock(actual_stock, book_stock)
     if warehouse_debt > 0:
-        required_production = fc + warehouse_debt - book_stock
+        required_production = fc + warehouse_debt - planning_stock
     else:
-        required_production = fc + expected_end_stock - book_stock + warehouse_debt
+        required_production = fc + expected_end_stock - planning_stock + warehouse_debt
+
+    # O/P không âm.
+    required_production = max(required_production, 0)
 
     # P - làm tròn mẻ/ca.
-    if required_production == 0:
+    if required_production <= 0:
         rounded_production = 0
     else:
         is_sugar = classification.casefold() == "có đường".casefold()
@@ -71,10 +81,11 @@ def calculate_row_all_months(
         rounded_production = (
             metrics.excel_roundup_integer(required_production / base_qty) * base_qty
         )
+        rounded_production = max(rounded_production, 0)
 
     production_days = rounded_production / per_shift / shifts_per_day
 
-    # R - ngày sớm nhất cần bắt đầu sản xuất.
+    # R - ngày nhu cầu danh nghĩa; scheduler có thể kéo sớm hơn nếu capacity/risk yêu cầu.
     if daily_fc <= 0:
         production_start = None
     else:
