@@ -41,7 +41,15 @@ def _next_unit_info(headers, product, capacity, scheduled_units):
     return (len(headers) * capacity, False, release_index * capacity)
 
 
-def _candidate_key(headers, product, capacity, scheduled_units, last_code, last_group):
+def _candidate_key(
+    headers,
+    product,
+    capacity,
+    scheduled_units,
+    cursor_shift,
+    last_code,
+    last_group,
+):
     info = _next_unit_info(
         headers,
         product,
@@ -49,14 +57,36 @@ def _candidate_key(headers, product, capacity, scheduled_units, last_code, last_
         scheduled_units[product["code"]],
     )
     deadline, critical, release = info
+    same_code = product["code"] == last_code
+    setup_needed = 0.0 if last_code is None or same_code else priority.base.SETUP_SHIFTS
+    duration = float(product.get("quantum_shift", 0) or 0)
+    latest_start = deadline - duration - setup_needed
+    slack = latest_start - cursor_shift
+
+    if critical:
+        # Minimum-slack / latest-start rule: không chỉ nhìn ngày deadline mà còn
+        # trừ thời gian setup + thời lượng quantum. SKU phải bắt đầu sớm hơn sẽ
+        # thắng, tránh tình trạng tới đúng deadline mới đổi mã rồi đã quá trễ.
+        return (
+            0,
+            slack,
+            latest_start,
+            deadline,
+            0 if same_code else 1,
+            0 if last_group and product.get("product_group") == last_group else 1,
+            0 if float(product.get("debt", 0) or 0) > 0 else 1,
+            product.get("row", 0),
+        )
+
     return (
-        0 if critical else 1,
-        deadline,
-        0 if product["code"] == last_code else 1,
+        1,
+        release,
+        0 if same_code else 1,
         0 if last_group and product.get("product_group") == last_group else 1,
         0 if float(product.get("debt", 0) or 0) > 0 else 1,
-        release,
+        deadline,
         product.get("row", 0),
+        0,
     )
 
 
@@ -66,7 +96,9 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
 
     - Urgent supply (FC + debt vượt tồn thực tế) is deadline-protected.
     - Safety/rounding quantity cannot jump ahead of an urgent quantum.
-    - Continuity is kept whenever one more quantum of the current SKU still
+    - Urgent priority uses minimum slack / latest-start, including setup and
+      quantum duration, so a SKU is started early enough to meet its deadline.
+    - Continuity is kept only when one more quantum of the current SKU still
       leaves enough slack for the most urgent competitor.
     - A switch consumes 0.5 shift, so KHS and PET can never run in parallel.
     """
@@ -123,13 +155,14 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
                 product,
                 capacity,
                 scheduled_units,
+                cursor_shift,
                 last_code,
                 last_group,
             ),
         )
         chosen = primary
 
-        # Giữ nguyên mã nếu không làm quantum urgent sớm nhất bị trễ.
+        # Giữ nguyên mã nếu không làm quantum urgent có latest-start nhỏ nhất bị trễ.
         if last_code and last_code in by_code:
             current = by_code[last_code]
             if units_left(current) > 0 and current in eligible and current["code"] != primary["code"]:
