@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 import sync_planning_fc as fc
+from planning_schedule_report import load_schedule_report
 from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
 from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code, to_number
@@ -15,9 +16,182 @@ from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code,
 PLANNING_SHEET = "Ke_hoach_SX"
 STOCK_SHEET = "Ton_kho"
 START_COLUMN = 19  # S
+SHARED_RESOURCE = "KHS + PET 9000"
+SHARED_LINES = {"KHS", "PET 9000"}
+SETUP_SHIFTS = 0.5
 
 
-def verify_workbook(workbook_bytes):
+def _header_day(value):
+    text = str(value or "").strip()
+    return text.splitlines()[0] if text else "?"
+
+
+def _finite_number(value, label):
+    if value in (None, ""):
+        return 0.0
+    if isinstance(value, bool):
+        raise RuntimeError(f"{label} chứa TRUE/FALSE, không phải số.")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{label} không phải số: {value!r}") from exc
+    if not math.isfinite(result):
+        raise RuntimeError(f"{label} phải là số hữu hạn, hiện {value!r}.")
+    return result
+
+
+def _validate_report_provenance(schedule_report, plan_year, plan_month):
+    if not isinstance(schedule_report, dict):
+        raise RuntimeError("Thiếu schedule report có provenance để kiểm carryover/setup timeline.")
+    revision = schedule_report.get("input_revision")
+    if not isinstance(revision, dict) or not revision:
+        raise RuntimeError("Schedule report thiếu input_revision/provenance.")
+    reported_month = schedule_report.get("plan_month")
+    expected_month = f"{plan_year:04d}-{plan_month:02d}"
+    if reported_month and reported_month != expected_month:
+        raise RuntimeError(
+            f"Schedule report thuộc {reported_month}, không phải kỳ {expected_month}."
+        )
+
+
+def _validate_shared_timeline(
+    schedule_report,
+    headers,
+    planning_data,
+    capacity,
+):
+    _validate_report_provenance(
+        schedule_report,
+        planning_data["__plan_year"],
+        planning_data["__plan_month"],
+    )
+    resources = schedule_report.get("resources") or {}
+    resource_info = resources.get(SHARED_RESOURCE)
+    if not isinstance(resource_info, dict):
+        raise RuntimeError(
+            f"Schedule report thiếu resource {SHARED_RESOURCE!r}; không chứng minh được setup/timeline."
+        )
+
+    report_capacity = _finite_number(
+        resource_info.get("capacity_shifts_per_day"),
+        f"report {SHARED_RESOURCE} capacity",
+    )
+    if not math.isclose(report_capacity, capacity, rel_tol=1e-9, abs_tol=1e-6):
+        raise RuntimeError(
+            f"Schedule report capacity {report_capacity} khác workbook capacity {capacity} cho {SHARED_RESOURCE}."
+        )
+
+    meta = resource_info.get("meta") or {}
+    timeline = meta.get("timeline")
+    if not isinstance(timeline, list) or not timeline:
+        raise RuntimeError(
+            f"Schedule report thiếu timeline production/setup cho {SHARED_RESOURCE}."
+        )
+
+    events = []
+    horizon = len(headers) * capacity
+    for index, raw in enumerate(timeline):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Timeline event #{index + 1} không phải object.")
+        event = dict(raw)
+        kind = str(event.get("kind") or "").strip()
+        if kind not in {"production", "setup"}:
+            raise RuntimeError(f"Timeline event #{index + 1} có kind={kind!r} không hợp lệ.")
+        start = _finite_number(event.get("start_shift"), f"timeline[{index}].start_shift")
+        end = _finite_number(event.get("end_shift"), f"timeline[{index}].end_shift")
+        if start < -1e-7 or end < start - 1e-7 or end > horizon + 1e-7:
+            raise RuntimeError(
+                f"Timeline event #{index + 1} ngoài horizon: start={start}, end={end}, horizon={horizon}."
+            )
+        event["_start"] = start
+        event["_end"] = end
+        events.append(event)
+
+    events.sort(key=lambda item: (item["_start"], item["_end"]))
+    previous_end = 0.0
+    for event in events:
+        if event["_start"] < previous_end - 1e-7:
+            raise RuntimeError(
+                f"Timeline {SHARED_RESOURCE} bị chồng lấn tại shift {event['_start']:.3f}."
+            )
+        previous_end = max(previous_end, event["_end"])
+
+    daily_usage = [0.0] * len(headers)
+    reconstructed = {
+        code: [0.0] * len(headers)
+        for code, item in planning_data.items()
+        if not code.startswith("__") and item["line"] in SHARED_LINES
+    }
+
+    last_production_code = None
+    setup_since_last_production = 0.0
+    for event in events:
+        duration = event["_end"] - event["_start"]
+        kind = event["kind"]
+
+        for day_index in range(len(headers)):
+            day_start = day_index * capacity
+            day_end = day_start + capacity
+            overlap = max(
+                0.0,
+                min(event["_end"], day_end) - max(event["_start"], day_start),
+            )
+            if overlap > 1e-9:
+                daily_usage[day_index] += overlap
+
+        if kind == "setup":
+            setup_since_last_production += duration
+            continue
+
+        code = normalize_code(event.get("code")) or str(event.get("code") or "").strip()
+        if code not in reconstructed:
+            raise RuntimeError(f"Timeline production chứa mã {code!r} không thuộc máy chung trong workbook.")
+
+        if last_production_code is not None and code != last_production_code:
+            if setup_since_last_production < SETUP_SHIFTS - 1e-7:
+                raise RuntimeError(
+                    f"Timeline đổi mã {last_production_code} -> {code} thiếu setup {SETUP_SHIFTS:g} ca; "
+                    f"chỉ có {setup_since_last_production:g} ca."
+                )
+        setup_since_last_production = 0.0
+        last_production_code = code
+
+        per_shift = planning_data[code]["per_shift"]
+        expected_qty = duration * per_shift
+        event_qty = _finite_number(event.get("qty"), f"timeline production {code} qty")
+        if not math.isclose(event_qty, expected_qty, rel_tol=1e-9, abs_tol=1e-5):
+            raise RuntimeError(
+                f"Timeline mã {code} qty={event_qty} không khớp duration*E={expected_qty}."
+            )
+
+        for day_index in range(len(headers)):
+            day_start = day_index * capacity
+            day_end = day_start + capacity
+            overlap = max(
+                0.0,
+                min(event["_end"], day_end) - max(event["_start"], day_start),
+            )
+            if overlap > 1e-9:
+                reconstructed[code][day_index] += overlap * per_shift
+
+    for day_index, used in enumerate(daily_usage):
+        if used > capacity + 1e-6:
+            raise RuntimeError(
+                f"Timeline {SHARED_RESOURCE} ngày {_header_day(headers[day_index])} dùng "
+                f"{used:.3f} ca gồm production/setup > capacity {capacity:.3f}."
+            )
+
+    for code, values in reconstructed.items():
+        workbook_values = planning_data[code]["daily_values"]
+        for index, (expected, actual) in enumerate(zip(values, workbook_values)):
+            if not math.isclose(expected, actual, rel_tol=1e-9, abs_tol=1e-5):
+                raise RuntimeError(
+                    f"Timeline mã {code} ngày {_header_day(headers[index])}={expected} "
+                    f"khác workbook={actual}."
+                )
+
+
+def verify_workbook(workbook_bytes, schedule_report=None):
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
         for sheet_name in (fc.FC_SHEET, STOCK_SHEET, PLANNING_SHEET):
@@ -177,46 +351,34 @@ def verify_workbook(workbook_bytes):
                 "Còn dữ liệu sau ngày cuối tháng: " + "; ".join(stale_cells)
             )
 
-        # 4) Hậu kiểm độc lập dữ liệu kế hoạch và lịch ngày. Không tin line_usage
-        # do allocator tự tạo: tính lại từ chính workbook cuối.
+        # 4) Hậu kiểm độc lập dữ liệu kế hoạch và lịch ngày.
         EPS = 1e-7
-        shared_lines = {"KHS", "PET 9000"}
         resource_capacity = {}
         daily_resource_usage = {}
         checked_schedule_rows = 0
+        planning_data = {
+            "__plan_year": plan_year,
+            "__plan_month": plan_month,
+        }
 
-        def number(value, label):
-            if value in (None, ""):
-                return 0.0
-            if isinstance(value, bool):
-                raise RuntimeError(f"{label} chứa TRUE/FALSE, không phải số.")
-            try:
-                result = float(value)
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(f"{label} không phải số: {value!r}") from exc
-            if not math.isfinite(result):
-                raise RuntimeError(f"{label} phải là số hữu hạn, hiện {value!r}.")
-            return result
-
-        planning_rows = []
         for row in range(2, planning.max_row + 1):
             code = normalize_code(planning.cell(row=row, column=1).value)
             if not code:
                 continue
 
-            batch = number(planning.cell(row=row, column=4).value, f"D{row}")
-            per_shift = number(planning.cell(row=row, column=5).value, f"E{row}")
+            batch = _finite_number(planning.cell(row=row, column=4).value, f"D{row}")
+            per_shift = _finite_number(planning.cell(row=row, column=5).value, f"E{row}")
             line = str(planning.cell(row=row, column=6).value or "").strip()
             classification = str(planning.cell(row=row, column=8).value or "").strip()
-            shifts_per_day = number(planning.cell(row=row, column=9).value, f"I{row}")
-            actual_stock = number(planning.cell(row=row, column=10).value, f"J{row}")
-            book_stock = number(planning.cell(row=row, column=11).value, f"K{row}")
-            forecast = number(planning.cell(row=row, column=12).value, f"L{row}")
-            target_stock = number(planning.cell(row=row, column=13).value, f"M{row}")
-            debt = number(planning.cell(row=row, column=14).value, f"N{row}")
-            required = number(planning.cell(row=row, column=15).value, f"O{row}")
-            planned = number(planning.cell(row=row, column=16).value, f"P{row}")
-            production_days = number(planning.cell(row=row, column=17).value, f"Q{row}")
+            shifts_per_day = _finite_number(planning.cell(row=row, column=9).value, f"I{row}")
+            actual_stock = _finite_number(planning.cell(row=row, column=10).value, f"J{row}")
+            book_stock = _finite_number(planning.cell(row=row, column=11).value, f"K{row}")
+            forecast = _finite_number(planning.cell(row=row, column=12).value, f"L{row}")
+            target_stock = _finite_number(planning.cell(row=row, column=13).value, f"M{row}")
+            debt = _finite_number(planning.cell(row=row, column=14).value, f"N{row}")
+            required = _finite_number(planning.cell(row=row, column=15).value, f"O{row}")
+            planned = _finite_number(planning.cell(row=row, column=16).value, f"P{row}")
+            production_days = _finite_number(planning.cell(row=row, column=17).value, f"Q{row}")
 
             for label, value in (("M", target_stock), ("O", required), ("P", planned), ("Q", production_days)):
                 if value < -EPS:
@@ -264,29 +426,47 @@ def verify_workbook(workbook_bytes):
             daily_values = []
             for offset, current_day in enumerate(headers):
                 column = START_COLUMN + offset
-                qty = number(
+                qty = _finite_number(
                     planning.cell(row=row, column=column).value,
                     f"{get_column_letter(column)}{row}",
                 )
                 if qty < -EPS:
                     raise RuntimeError(
-                        f"Lịch mã {code} ngày {current_day:%d/%m} âm: {qty}."
+                        f"Lịch mã {code} ngày {_header_day(current_day)} âm: {qty}."
                     )
                 daily_values.append(qty)
 
             total_scheduled = sum(daily_values)
-            if not math.isclose(total_scheduled, planned, rel_tol=1e-9, abs_tol=1e-5):
+            report_balance = None
+            if isinstance(schedule_report, dict):
+                report_balance = (schedule_report.get("mass_balance") or {}).get(code)
+
+            if report_balance is not None:
+                report_planned = _finite_number(report_balance.get("planned_qty"), f"report {code}.planned_qty")
+                report_scheduled = _finite_number(report_balance.get("scheduled_qty"), f"report {code}.scheduled_qty")
+                carryover_qty = _finite_number(report_balance.get("carryover_qty"), f"report {code}.carryover_qty")
+                if not math.isclose(report_planned, planned, rel_tol=1e-9, abs_tol=1e-5):
+                    raise RuntimeError(f"Report P mã {code}={report_planned} khác workbook P={planned}.")
+                if not math.isclose(report_scheduled, total_scheduled, rel_tol=1e-9, abs_tol=1e-5):
+                    raise RuntimeError(
+                        f"Report scheduled mã {code}={report_scheduled} khác workbook={total_scheduled}."
+                    )
+                if not math.isclose(total_scheduled + carryover_qty, planned, rel_tol=1e-9, abs_tol=1e-5):
+                    raise RuntimeError(
+                        f"Mass balance mã {code}: scheduled {total_scheduled} + carryover {carryover_qty} != P {planned}."
+                    )
+            elif not math.isclose(total_scheduled, planned, rel_tol=1e-9, abs_tol=1e-5):
                 raise RuntimeError(
                     f"Tổng SX ngày của mã {code} = {total_scheduled} khác P={planned}. "
-                    "Nếu thiếu capacity phải báo carryover/infeasible, không để workbook im lặng lệch mass balance."
+                    "Cần schedule report có provenance để xác nhận carryover hợp lệ."
                 )
 
-            resource = "KHS + PET 9000" if line in shared_lines else line
+            resource = SHARED_RESOURCE if line in SHARED_LINES else line
             if resource:
                 existing_capacity = resource_capacity.get(resource)
                 if existing_capacity is None:
                     resource_capacity[resource] = shifts_per_day
-                elif resource == "KHS + PET 9000" or line not in {"RGB", "Galon"}:
+                elif resource == SHARED_RESOURCE or line not in {"RGB", "Galon"}:
                     resource_capacity[resource] = min(existing_capacity, shifts_per_day)
                 else:
                     resource_capacity[resource] = max(existing_capacity, shifts_per_day)
@@ -296,17 +476,45 @@ def verify_workbook(workbook_bytes):
                         key = (resource, current_day)
                         daily_resource_usage[key] = daily_resource_usage.get(key, 0.0) + qty / per_shift
 
-            planning_rows.append(code)
+            planning_data[code] = {
+                "line": line,
+                "per_shift": per_shift,
+                "daily_values": daily_values,
+                "planned": planned,
+                "scheduled": total_scheduled,
+            }
             checked_schedule_rows += 1
 
         for (resource, current_day), used_shifts in daily_resource_usage.items():
             capacity = resource_capacity.get(resource, 0.0)
             if used_shifts > capacity + 1e-6:
                 raise RuntimeError(
-                    f"Resource {resource} ngày {current_day:%d/%m} có ít nhất "
-                    f"{used_shifts:.3f} ca sản xuất > capacity {capacity:.3f}; "
-                    "chưa tính setup."
+                    f"Resource {resource} ngày {_header_day(current_day)} có ít nhất "
+                    f"{used_shifts:.3f} ca sản xuất > capacity {capacity:.3f}; chưa tính setup."
                 )
+
+        shared_codes = [
+            code
+            for code, item in planning_data.items()
+            if not code.startswith("__")
+            and item["line"] in SHARED_LINES
+            and item["scheduled"] > EPS
+        ]
+        if len(shared_codes) > 1:
+            if schedule_report is None:
+                raise RuntimeError(
+                    "Máy chung KHS/PET có nhiều SKU: cần schedule report có provenance và "
+                    "timeline production/setup để chứng minh không chồng lấn/có đủ 0,5 ca setup."
+                )
+            _validate_shared_timeline(
+                schedule_report,
+                headers,
+                planning_data,
+                resource_capacity[SHARED_RESOURCE],
+            )
+
+        if schedule_report is not None:
+            _validate_report_provenance(schedule_report, plan_year, plan_month)
 
         print(
             f"[VERIFY] {stock_checked} mã J=Ton_kho!D, K=SUM(Ton_kho!E:H) đúng; "
@@ -321,6 +529,11 @@ def verify_workbook(workbook_bytes):
             "stock_checked": stock_checked,
             "fc_checked": fc_checked,
             "schedule_checked": checked_schedule_rows,
+            "publish_status": (
+                schedule_report.get("publish_status")
+                if isinstance(schedule_report, dict)
+                else "verified_without_carryover_report"
+            ),
         }
     finally:
         workbook.close()
@@ -333,7 +546,7 @@ def main():
     drive_id = graph.get_default_drive_id(site_id)
     dest_item = graph.get_item_by_path(drive_id, DEST_PATH)
     dest_bytes = graph.download_file(drive_id, dest_item["id"])
-    verify_workbook(dest_bytes)
+    verify_workbook(dest_bytes, schedule_report=load_schedule_report())
 
 
 if __name__ == "__main__":
