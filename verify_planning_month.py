@@ -8,23 +8,68 @@ from openpyxl.utils import get_column_letter
 import sync_planning_fc as fc
 from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
-from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code
+from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code, to_number
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
+STOCK_SHEET = "Ton_kho"
 START_COLUMN = 19  # S
 
 
 def verify_workbook(workbook_bytes):
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
-        for sheet_name in (fc.FC_SHEET, PLANNING_SHEET):
+        for sheet_name in (fc.FC_SHEET, STOCK_SHEET, PLANNING_SHEET):
             if sheet_name not in workbook.sheetnames:
                 raise RuntimeError(f"Không tìm thấy sheet {sheet_name!r}.")
 
         fc_sheet = workbook[fc.FC_SHEET]
+        stock_sheet = workbook[STOCK_SHEET]
         planning = workbook[PLANNING_SHEET]
 
+        # 1) J/K phải lấy trực tiếp từ Ton_kho theo mã sản phẩm.
+        stock_values = {}
+        for row in range(2, stock_sheet.max_row + 1):
+            code = normalize_code(stock_sheet.cell(row=row, column=1).value)
+            if not code:
+                continue
+            if code in stock_values:
+                raise RuntimeError(f"Mã {code} bị lặp trong {STOCK_SHEET}!A.")
+            actual = to_number(stock_sheet.cell(row=row, column=4).value, f"{STOCK_SHEET}!D{row}")
+            book = sum(
+                to_number(stock_sheet.cell(row=row, column=column).value, f"{STOCK_SHEET}!{get_column_letter(column)}{row}")
+                for column in range(5, 9)
+            )
+            stock_values[code] = (actual, book)
+
+        stock_mismatches = []
+        stock_checked = 0
+        for row_number, values in enumerate(
+            planning.iter_rows(min_row=2, max_col=11, values_only=True),
+            start=2,
+        ):
+            code = normalize_code(values[0])
+            if not code:
+                continue
+            if code not in stock_values:
+                raise RuntimeError(f"Mã {code} ở {PLANNING_SHEET}!A{row_number} không có trong {STOCK_SHEET}!A.")
+            expected_actual, expected_book = stock_values[code]
+            actual_j = values[9]
+            actual_k = values[10]
+            stock_checked += 1
+            if not fc._values_equal(actual_j, expected_actual) or not fc._values_equal(actual_k, expected_book):
+                stock_mismatches.append((code, actual_j, expected_actual, actual_k, expected_book))
+
+        if stock_mismatches:
+            preview = "; ".join(
+                f"{code}: J={actual_j!r}/Ton_kho!D={expected_j!r}, K={actual_k!r}/SUM(E:H)={expected_k!r}"
+                for code, actual_j, expected_j, actual_k, expected_k in stock_mismatches[:10]
+            )
+            raise RuntimeError(
+                f"{PLANNING_SHEET}!J:K chưa theo {STOCK_SHEET} ({len(stock_mismatches)}/{stock_checked} mã sai): {preview}"
+            )
+
+        # 2) L phải lấy đúng cột tháng được chọn tại FC!R1.
         selector = fc_sheet[fc.FC_SELECTOR_CELL].value
         selector_key = fc._normalize_header(selector)
         plan_month = parse_plan_month(selector)
@@ -48,8 +93,8 @@ def verify_workbook(workbook_bytes):
                 continue
             fc_values[code] = values[source_column - 1]
 
-        mismatches = []
-        checked = 0
+        fc_mismatches = []
+        fc_checked = 0
         for row_number, values in enumerate(
             planning.iter_rows(min_row=2, max_col=fc.PLANNING_TARGET_COL, values_only=True),
             start=2,
@@ -61,19 +106,20 @@ def verify_workbook(workbook_bytes):
                 raise RuntimeError(f"Mã {code} ở {PLANNING_SHEET}!A{row_number} không có trong FC!B.")
             expected = fc_values[code]
             actual = values[fc.PLANNING_TARGET_COL - 1]
-            checked += 1
+            fc_checked += 1
             if not fc._values_equal(actual, expected):
-                mismatches.append((code, actual, expected))
+                fc_mismatches.append((code, actual, expected))
 
-        if mismatches:
+        if fc_mismatches:
             preview = "; ".join(
                 f"{code}: L={actual!r}, FC={expected!r}"
-                for code, actual, expected in mismatches[:10]
+                for code, actual, expected in fc_mismatches[:10]
             )
             raise RuntimeError(
-                f"{PLANNING_SHEET}!L chưa theo {selector!r} ({len(mismatches)}/{checked} mã sai): {preview}"
+                f"{PLANNING_SHEET}!L chưa theo {selector!r} ({len(fc_mismatches)}/{fc_checked} mã sai): {preview}"
             )
 
+        # 3) Header lịch phải đúng tháng và không còn cột legacy/dữ liệu dư.
         headers = build_date_headers(plan_year, plan_month)
         expected_start = headers[0]
         expected_end = headers[-1]
@@ -122,16 +168,17 @@ def verify_workbook(workbook_bytes):
             )
 
         print(
-            f"[VERIFY] {selector!r} -> FC!{get_column_letter(source_column)}; "
-            f"{checked} mã L đúng; lịch {expected_start.splitlines()[0]} -> "
-            f"{expected_end.splitlines()[0]} đúng."
+            f"[VERIFY] {stock_checked} mã J=Ton_kho!D, K=SUM(Ton_kho!E:H) đúng; "
+            f"{selector!r} -> FC!{get_column_letter(source_column)}, {fc_checked} mã L đúng; "
+            f"lịch {expected_start.splitlines()[0]} -> {expected_end.splitlines()[0]} đúng."
         )
         return {
             "selector": selector,
             "plan_month": plan_month,
             "plan_year": plan_year,
             "source_column": source_column,
-            "checked": checked,
+            "stock_checked": stock_checked,
+            "fc_checked": fc_checked,
         }
     finally:
         workbook.close()
