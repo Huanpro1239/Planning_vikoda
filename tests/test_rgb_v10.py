@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, timedelta
+from unittest import mock
 
 from planning_resource_timeline import validate_resource_timeline
 from review_rgb_service import _day1_protection_bound
@@ -75,6 +76,23 @@ class RGBV10Tests(unittest.TestCase):
         )
         self.assertTrue(validation["validated"])
         self.assertLessEqual(validation["max_daily_usage"], 2.0 + 1e-7)
+
+    def test_search_scores_incrementally_without_replaying_each_timeline(self):
+        headers, products = self._products()
+
+        with mock.patch.object(
+            v10,
+            "_schedule_from_timeline",
+            wraps=v10._schedule_from_timeline,
+        ) as replay:
+            _, _, _, meta = v10.allocate_rgb_quantum_lookahead(
+                headers,
+                products,
+                2.0,
+            )
+
+        self.assertEqual(replay.call_count, 1)
+        self.assertTrue(meta["incremental_scoring"])
 
     def test_day1_lower_bound_accounts_for_quantum_capacity_and_setup(self):
         headers = [date(2026, 9, 1)]
