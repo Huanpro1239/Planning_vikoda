@@ -44,13 +44,13 @@ jobs:
         run: python sync_planning_fc_compat.py
 
       - name: Generate Ke hoach SX date headers
-        run: python sync_planning_calendar.py
+        run: python sync_planning_calendar_all_months.py
 
       - name: Calculate Ke hoach SX M to R directly
-        run: python sync_planning_metrics_direct.py
+        run: python sync_planning_metrics_all_months.py
 
       - name: Schedule daily production S onward
-        run: python sync_planning_schedule.py
+        run: python sync_planning_schedule_priority.py
 
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
