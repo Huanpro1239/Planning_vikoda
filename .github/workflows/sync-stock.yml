@@ -40,6 +40,9 @@ jobs:
       - name: Sync stock to SharePoint
         run: python sync_stock_compat.py
 
+      - name: Sync Ton_kho to Ke hoach SX J K
+        run: python sync_planning_stock_inputs.py
+
       - name: Sync FC to Ke hoach SX
         run: python sync_planning_fc_compat.py
 
@@ -55,7 +58,7 @@ jobs:
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
 
-      - name: Verify selected planning month
+      - name: Verify planning inputs and selected month
         run: python verify_planning_month.py
 
       - name: Save sync states
