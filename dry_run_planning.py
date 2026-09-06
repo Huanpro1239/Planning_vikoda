@@ -13,6 +13,7 @@ from sync_stock import GraphClient, get_access_token, is_retryable_graph_error
 
 
 OUTPUT_DIR = Path("dry_run_artifacts")
+FOCUS_CODES = ("130100006", "130100008", "130100013")
 
 SOURCES = {
     "actual_stock": sync_stock.SOURCE_ACTUAL_PATH,
@@ -106,7 +107,88 @@ def _existing_schedule_analysis(workbook_bytes, plan_year):
     }
 
 
-def _after_summary(report):
+def _focus_daily_analysis(workbook_bytes, plan_year):
+    headers, products = schedule_base.read_schedule_inputs(
+        workbook_bytes,
+        plan_year=plan_year,
+    )
+    by_code = {product["code"]: product for product in products}
+    result = {}
+
+    for code in FOCUS_CODES:
+        product = by_code.get(code)
+        if product is None:
+            result[code] = {"missing": True, "days": []}
+            continue
+
+        balance = float(product.get("actual_stock", 0) or 0)
+        days = []
+        for index, current_day in enumerate(headers):
+            raw = product["existing_daily"][index]
+            production = 0.0 if raw in (None, "") else float(raw)
+            demand = float(product["demand_by_day"].get(current_day, 0) or 0)
+            debt_due = float(product.get("debt", 0) or 0) if index == 0 else 0.0
+            opening_net = balance
+            balance += production - demand - debt_due
+            days.append(
+                {
+                    "date": current_day.isoformat(),
+                    "opening_net": opening_net,
+                    "production": production,
+                    "demand": demand,
+                    "debt_due": debt_due,
+                    "ending_net": balance,
+                    "stockout": balance < -1e-7,
+                }
+            )
+
+        result[code] = {
+            "line": product.get("line"),
+            "uom": product.get("uom"),
+            "actual_stock": product.get("actual_stock"),
+            "debt": product.get("debt"),
+            "planned_qty": product.get("planned_qty"),
+            "days": days,
+        }
+    return result
+
+
+def _classify_late_completed(report):
+    buffer_only = []
+    demand_late = []
+    indeterminate = []
+
+    for resource, values in (report.get("resources") or {}).items():
+        meta = values.get("meta") or {}
+        for raw in meta.get("late_completed") or []:
+            event = dict(raw)
+            event["resource"] = resource
+            finish = event.get("finish_shift")
+            demand_deadline = event.get("demand_deadline_shift")
+            try:
+                finish_value = float(finish)
+                demand_value = float(demand_deadline)
+            except (TypeError, ValueError):
+                indeterminate.append(event)
+                continue
+
+            if not math.isfinite(finish_value) or not math.isfinite(demand_value):
+                indeterminate.append(event)
+            elif finish_value <= demand_value + 1e-7:
+                # Missed the one-day production buffer, but still completed by
+                # the business demand due point.
+                buffer_only.append(event)
+            else:
+                demand_late.append(event)
+
+    return {
+        "buffer_only": buffer_only,
+        "demand_late": demand_late,
+        "indeterminate": indeterminate,
+    }
+
+
+def _after_summary(report, final_bytes, plan_year):
     carryover = {
         code: values
         for code, values in (report.get("mass_balance") or {}).items()
@@ -136,13 +218,25 @@ def _after_summary(report):
     resources = {}
     for name, values in (report.get("resources") or {}).items():
         meta = values.get("meta") or {}
+        timeline = meta.get("timeline") or []
+        setup_shifts = float(meta.get("setup_shifts", 0) or 0)
         resources[name] = {
             "capacity_shifts_per_day": values.get("capacity_shifts_per_day"),
             "utilization": values.get("utilization"),
-            "setup_shifts": meta.get("setup_shifts", 0),
-            "timeline_events": len(meta.get("timeline") or []),
+            "setup_shifts": setup_shifts,
+            "timeline_events": len(timeline),
             "unserved_due": len(meta.get("unserved_due") or []),
             "late_completed": len(meta.get("late_completed") or []),
+            "setup_independently_verifiable": bool(timeline) or setup_shifts <= 1e-9,
+            "setup_verification_note": (
+                "timeline provenance available"
+                if timeline
+                else (
+                    "no setup required"
+                    if setup_shifts <= 1e-9
+                    else "setup_shifts reported but no independent timeline provenance"
+                )
+            ),
         }
 
     return {
@@ -152,12 +246,15 @@ def _after_summary(report):
         "stockout": stockout,
         "below_safety": below_safety,
         "resources": resources,
+        "focus_daily": _focus_daily_analysis(final_bytes, plan_year),
+        "late_classification": _classify_late_completed(report),
     }
 
 
 def _summary_markdown(summary):
     before = summary["before"]
     after = summary["after"]
+    late = after["late_classification"]
     lines = [
         "# Vikoda planning dry-run",
         "",
@@ -179,6 +276,9 @@ def _summary_markdown(summary):
         f"- Carryover SKUs: {len(after['carryover'])}",
         f"- Stockout-risk SKUs: {len(after['stockout'])}",
         f"- Below-safety SKUs: {len(after['below_safety'])}",
+        f"- Late vs production buffer only: {len(late['buffer_only'])}",
+        f"- Late vs actual demand due: {len(late['demand_late'])}",
+        f"- Late classification indeterminate: {len(late['indeterminate'])}",
         "",
         "## Resources",
     ]
@@ -188,7 +288,9 @@ def _summary_markdown(summary):
             f"- **{name}**: capacity={values.get('capacity_shifts_per_day')} ca/ngày; "
             f"utilization={util:.1f}%; setup={values.get('setup_shifts')} ca; "
             f"timeline={values.get('timeline_events')} events; "
-            f"unserved_due={values.get('unserved_due')}; late={values.get('late_completed')}"
+            f"unserved_due={values.get('unserved_due')}; late={values.get('late_completed')}; "
+            f"setup_provenance={'YES' if values.get('setup_independently_verifiable') else 'NO'} "
+            f"({values.get('setup_verification_note')})"
         )
 
     if after["carryover"]:
@@ -202,6 +304,40 @@ def _summary_markdown(summary):
         lines.extend(["", "## Stockout risk"])
         for code, day in after["stockout"].items():
             lines.append(f"- {code}: {day}")
+
+    lines.extend(["", "## Focus SKU daily balance"])
+    for code in FOCUS_CODES:
+        detail = after["focus_daily"].get(code, {})
+        if detail.get("missing"):
+            lines.append(f"- {code}: missing from planning workbook")
+            continue
+        lines.append(
+            f"### {code} — line={detail.get('line')}, J={detail.get('actual_stock')}, "
+            f"N={detail.get('debt')}, P={detail.get('planned_qty')} {detail.get('uom') or ''}"
+        )
+        lines.append("| Date | Opening net | Production | Demand | Debt due | Ending net | Stockout |")
+        lines.append("|---|---:|---:|---:|---:|---:|:---:|")
+        for day in detail.get("days", []):
+            lines.append(
+                f"| {day['date']} | {day['opening_net']:.3f} | {day['production']:.3f} | "
+                f"{day['demand']:.3f} | {day['debt_due']:.3f} | {day['ending_net']:.3f} | "
+                f"{'YES' if day['stockout'] else ''} |"
+            )
+
+    lines.extend(["", "## Late quantum classification"])
+    for label, title in (
+        ("buffer_only", "Missed production buffer but met actual demand due"),
+        ("demand_late", "Completed after actual demand due"),
+        ("indeterminate", "Indeterminate"),
+    ):
+        lines.append(f"### {title}: {len(late[label])}")
+        for event in late[label]:
+            lines.append(
+                f"- {event.get('resource')} {event.get('code')} unit {event.get('unit_no')}: "
+                f"qty={event.get('qty')} {event.get('uom') or ''}; "
+                f"production_deadline={event.get('production_deadline_date')}; "
+                f"demand_due={event.get('demand_due_date')}; finish_shift={event.get('finish_shift')}"
+            )
 
     changes = summary["report"].get("pipeline", {}).get("planning_changes", {})
     lines.extend(["", "## J:R changes on the dry-run copy", f"- Changed SKUs: {len(changes)}"])
@@ -261,7 +397,7 @@ def main():
         runtime_state=metrics.load_runtime_state(),
         input_revision=revision,
     )
-    after = _after_summary(report)
+    after = _after_summary(report, final_bytes, plan_year)
 
     summary = {
         "mode": "read_only_sharepoint_full_pipeline_dry_run",
