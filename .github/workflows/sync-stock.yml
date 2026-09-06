@@ -1,11 +1,6 @@
 name: Sync SharePoint Stock
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/sync-stock.yml"
   workflow_dispatch:
   repository_dispatch:
     types:
