@@ -50,7 +50,7 @@ jobs:
         run: python sync_planning_metrics_all_months.py
 
       - name: Schedule daily production S onward
-        run: python sync_planning_schedule_priority.py
+        run: python sync_planning_schedule_priority_v2.py
 
       - name: Remove remaining Ke hoach SX formulas
         run: python cleanup_planning.py
