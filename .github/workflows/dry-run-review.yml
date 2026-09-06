@@ -37,6 +37,9 @@ jobs:
       - name: Run full read-only planning dry-run
         run: python -X utf8 dry_run_planning.py
 
+      - name: Review RGB stockout tradeoffs
+        run: python -X utf8 review_rgb_service.py
+
       - name: Upload dry-run artifacts
         uses: actions/upload-artifact@v4
         with:
