@@ -8,6 +8,7 @@ from planning_schedule_report import (
     save_schedule_report,
 )
 import sync_planning_schedule_priority as priority
+import sync_planning_schedule_priority_debt as debt_priority
 import sync_planning_schedule_priority_v8 as v8
 from sync_planning_layout import canonicalize_planning_layout
 from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
@@ -18,8 +19,16 @@ PLANNING_SHEET = "Ke_hoach_SX"
 
 
 def install_production_output_cleanup():
-    """Install V8 scheduler and keep only real date columns in Ke_hoach_SX."""
+    """Install the production scheduler hooks and canonical output layout.
+
+    V8 installs the full priority chain and may overwrite lower-level RGB/Galon
+    hooks. Debt-aware priority must therefore be installed *after* V8 every
+    time this installer is called. Repeated installer calls/retries reapply the
+    debt-aware hooks instead of silently falling back to the old logic.
+    """
     v8.install_priority_scheduler_v8()
+    debt_priority.install_debt_aware_priority()
+
     original_patch = priority.base.patch_schedule_workbook
 
     def patch_schedule_without_extra_columns(workbook_bytes, headers, products, schedule):
