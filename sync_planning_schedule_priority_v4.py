@@ -149,11 +149,9 @@ def _choose_candidate(
         capacity,
     )
 
-    # Stockout sát ngay: service level thắng tuyệt đối continuity.
     if primary_key[0] == 0:
         return primary
 
-    # Giữ nguyên mã nếu độ khẩn cấp gần tương đương và không làm primary trễ.
     if last_code:
         same_code = next((p for p in active if p["code"] == last_code), None)
         if same_code is not None:
@@ -181,8 +179,6 @@ def _choose_candidate(
             ):
                 return same_code
 
-    # Cùng nhóm/khuôn chỉ được chen trước nếu chạy trọn campaign vẫn không làm
-    # SKU shortage-first lỡ deadline tồn kho.
     if last_group:
         same_group = [
             p
@@ -234,7 +230,6 @@ def _units_needed_through(headers, product, schedule, horizon_index, remaining_u
 
 
 def allocate_continuous_min_slack(headers, products, capacity):
-    """KHS/PET: shortage-first + minimum slack + campaign continuity có kiểm soát."""
     schedule = priority.base._empty_schedule(headers, products)
     usage = defaultdict(float)
     carryover = {}
@@ -316,17 +311,26 @@ def allocate_continuous_min_slack(headers, products, capacity):
         chunk_units = units_left
         full_finish = cursor_shift + units_left * product["quantum_shift"]
 
-        # Tìm competitor có deadline tồn kho gần nhất sau lịch đã xếp hiện tại.
         competitors = []
         for competitor in products:
-            if competitor["code"] == code or remaining_units[competitor["code"]] <= 0:
+            competitor_code = competitor["code"]
+            if competitor_code == code or remaining_units[competitor_code] <= 0:
                 continue
             stockout, safety = _dynamic_risk(headers, competitor, schedule)
             deadline = stockout if stockout is not None else safety
             if deadline is None:
                 continue
             release = priority.base._earliest_index(headers, competitor) * capacity
-            latest_start = max(release, _deadline_shift(deadline, capacity) - priority.base.SETUP_SHIFTS)
+            competitor_processing = _remaining_processing_shifts(
+                competitor,
+                remaining_units[competitor_code],
+            )
+            latest_start = max(
+                release,
+                _deadline_shift(deadline, capacity)
+                - competitor_processing
+                - priority.base.SETUP_SHIFTS,
+            )
             competitors.append((latest_start, deadline, competitor))
 
         if competitors:
@@ -352,13 +356,15 @@ def allocate_continuous_min_slack(headers, products, capacity):
                     horizon,
                     units_left,
                 )
+                # Nếu competitor đã tới latest-start, vẫn chạy tối đa 1 quantum
+                # cho SKU hiện tại rồi vòng kế tiếp tính lại priority; tránh loop vô hạn.
                 if max_before_switch <= 0:
-                    # Đánh giá lại ngay để competitor được chọn ở vòng kế tiếp.
-                    if last_code == code:
-                        last_code = None
-                    cursor_shift += priority.base.EPSILON
-                    continue
-                chunk_units = min(units_left, max(1, min(protect_units, max_before_switch)))
+                    chunk_units = 1
+                else:
+                    chunk_units = min(
+                        units_left,
+                        max(1, min(protect_units, max_before_switch)),
+                    )
 
         available = max(0.0, month_end_shift - cursor_shift)
         max_month_units = int(
@@ -412,7 +418,6 @@ def allocate_continuous_min_slack(headers, products, capacity):
 
 
 def install_priority_scheduler_v4():
-    # RGB + Galon dùng shortage-aware weekly/spread của v2; KHS/PET dùng MST v4.
     v2.install_priority_scheduler_v2()
     priority.base._allocate_continuous_campaign_line = allocate_continuous_min_slack
 
