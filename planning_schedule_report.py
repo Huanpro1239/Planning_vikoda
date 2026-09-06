@@ -24,6 +24,11 @@ def _json_value(value):
     return value
 
 
+def json_safe(value):
+    """Return a recursively JSON-serializable copy of report metadata."""
+    return _json_value(value)
+
+
 def _read_uom_by_code(workbook_bytes):
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
@@ -159,7 +164,7 @@ def build_schedule_report(
             "feasible" if not carryover else "valid_but_infeasible"
         ),
     }
-    return _json_value(report)
+    return json_safe(report)
 
 
 def attach_output_hash(report, workbook_bytes):
@@ -171,7 +176,7 @@ def attach_output_hash(report, workbook_bytes):
 def save_schedule_report(report, path=REPORT_PATH):
     path = Path(path)
     path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(json_safe(report), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return path
