@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,7 @@ from openpyxl import load_workbook
 REPORT_PATH = Path("planning_schedule_report.json")
 REPORT_SCHEMA_VERSION = 2
 PLANNING_SHEET = "Ke_hoach_SX"
+MASS_BALANCE_EPS = 1e-5
 
 
 def _json_value(value):
@@ -42,6 +44,46 @@ def _read_uom_by_code(workbook_bytes):
         workbook.close()
 
 
+def _validate_mass_balance_values(code, planned, scheduled, carryover):
+    values = {
+        "planned_qty": float(planned),
+        "scheduled_qty": float(scheduled),
+        "carryover_qty": float(carryover),
+    }
+    for label, value in values.items():
+        if not math.isfinite(value):
+            raise RuntimeError(
+                f"Schedule report mã {code} có {label} không hữu hạn: {value!r}."
+            )
+        if value < -MASS_BALANCE_EPS:
+            raise RuntimeError(
+                f"Schedule report mã {code} có {label} âm: {value}."
+            )
+
+    planned = values["planned_qty"]
+    scheduled = values["scheduled_qty"]
+    carryover = values["carryover_qty"]
+    if scheduled > planned + MASS_BALANCE_EPS:
+        raise RuntimeError(
+            f"Schedule report mã {code} scheduled={scheduled} vượt P={planned}."
+        )
+    if carryover > planned + MASS_BALANCE_EPS:
+        raise RuntimeError(
+            f"Schedule report mã {code} carryover={carryover} vượt P={planned}."
+        )
+    if not math.isclose(
+        scheduled + carryover,
+        planned,
+        rel_tol=1e-9,
+        abs_tol=MASS_BALANCE_EPS,
+    ):
+        raise RuntimeError(
+            f"Schedule report mã {code} mất cân đối: scheduled {scheduled} + "
+            f"carryover {carryover} != P {planned}."
+        )
+    return planned, scheduled, carryover
+
+
 def build_schedule_report(
     workbook_bytes,
     info,
@@ -63,6 +105,12 @@ def build_schedule_report(
         planned = float(product.get("planned_qty", 0) or 0)
         scheduled = sum(float(schedule[code].get(day, 0) or 0) for day in headers)
         missing = float(carryover.get(code, 0) or 0)
+        planned, scheduled, missing = _validate_mass_balance_values(
+            code,
+            planned,
+            scheduled,
+            missing,
+        )
         mass_balance[code] = {
             "uom": str(product.get("uom") or uom_by_code.get(code, "")),
             "planned_qty": planned,
