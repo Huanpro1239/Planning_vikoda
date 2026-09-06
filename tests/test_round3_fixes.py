@@ -12,6 +12,7 @@ import sync_planning_schedule as base
 import sync_planning_schedule_priority as priority
 import sync_planning_schedule_priority_debt as debt_priority
 import sync_planning_schedule_production as production
+import sync_planning_schedule_galon_v9 as galon_v9
 import sync_stock
 from sync_planning_calendar import build_date_headers
 from sync_stock import GraphRequestError
@@ -49,14 +50,14 @@ class DebtProductionInstallerTests(unittest.TestCase):
         base._validate_quantum(product)
         return headers, product
 
-    def test_production_installer_applies_debt_hook_after_v8(self):
+    def test_production_installer_keeps_debt_risk_and_galon_v9_after_v8(self):
         headers, product = self._galon_19l()
 
         production.install_production_output_cleanup()
         self.assertIs(priority._risk_snapshot, debt_priority.debt_aware_risk_snapshot)
-        self.assertIs(base._allocate_galon_line, debt_priority.debt_aware_galon_priority)
+        self.assertIs(base._allocate_galon_line, galon_v9.allocate_galon_quantized_service)
 
-        schedule, _, carryover, _ = base._allocate_galon_line(
+        schedule, _, carryover, meta = base._allocate_galon_line(
             headers,
             [product],
             2.0,
@@ -70,8 +71,10 @@ class DebtProductionInstallerTests(unittest.TestCase):
         )
         self.assertEqual(day1_net, 3508)
         self.assertEqual(carryover, {})
+        self.assertEqual(meta["mode"], "galon_quantized_service_v9")
+        self.assertTrue(meta["timeline"])
 
-    def test_repeated_production_installer_does_not_lose_debt_hook(self):
+    def test_repeated_production_installer_does_not_lose_debt_or_v9_hooks(self):
         production.install_production_output_cleanup()
         production.install_production_output_cleanup()
 
@@ -80,7 +83,7 @@ class DebtProductionInstallerTests(unittest.TestCase):
             priority.shortage_aware_weekly_unit_targets,
             debt_priority.debt_aware_weekly_unit_targets,
         )
-        self.assertIs(base._allocate_galon_line, debt_priority.debt_aware_galon_priority)
+        self.assertIs(base._allocate_galon_line, galon_v9.allocate_galon_quantized_service)
 
 
 class CarryoverMassBalanceGuardTests(unittest.TestCase):
