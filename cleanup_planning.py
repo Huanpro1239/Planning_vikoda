@@ -1,5 +1,6 @@
 import time
 
+from graph_retry import install_retry_after_support, retry_delay_seconds
 from planning_cleanup import remove_sheet_formulas
 from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 
@@ -13,22 +14,29 @@ def cleanup_with_retry(
     cleanup_func=remove_sheet_formulas,
     sleep_func=time.sleep,
     max_attempts=6,
-    retry_delay_seconds=10,
+    retry_delay_seconds_default=10,
+    retry_delay_seconds=None,
 ):
+    # Backward-compatible keyword used by older callers/tests.
+    if retry_delay_seconds is not None:
+        retry_delay_seconds_default = retry_delay_seconds
+
     for attempt in range(1, max_attempts + 1):
-        dest_item = graph.get_item_by_path(drive_id, DEST_PATH)
-        dest_bytes = graph.download_file(drive_id, dest_item["id"])
-
-        updated_bytes, removed = cleanup_func(
-            dest_bytes,
-            PLANNING_SHEET,
-        )
-
-        if removed == 0:
-            print(f"[{PLANNING_SHEET}] Không có công thức cần loại bỏ.")
-            return 0
-
         try:
+            # Read + compute + write are one retryable transaction. In
+            # particular 412 must re-download and re-compute from the new ETag.
+            dest_item = graph.get_item_by_path(drive_id, DEST_PATH)
+            dest_bytes = graph.download_file(drive_id, dest_item["id"])
+
+            updated_bytes, removed = cleanup_func(
+                dest_bytes,
+                PLANNING_SHEET,
+            )
+
+            if removed == 0:
+                print(f"[{PLANNING_SHEET}] Không có công thức cần loại bỏ.")
+                return 0
+
             graph.upload_file(
                 drive_id,
                 dest_item["id"],
@@ -40,16 +48,18 @@ def cleanup_with_retry(
             if not is_retryable_graph_error(exc) or attempt == max_attempts:
                 raise
 
+            delay = retry_delay_seconds(exc, retry_delay_seconds_default)
             print(
-                f"[{PLANNING_SHEET}] File đang khóa/thay đổi; "
-                f"thử lại ({attempt}/{max_attempts})."
+                f"[{PLANNING_SHEET}] Graph tạm lỗi/file thay đổi; "
+                f"thử lại ({attempt}/{max_attempts}) sau {delay:g}s."
             )
-            sleep_func(retry_delay_seconds)
+            sleep_func(delay)
 
     raise RuntimeError("Không thể hoàn tất cleanup sau các lần thử.")
 
 
 def main():
+    install_retry_after_support()
     token = get_access_token()
     graph = GraphClient(token)
 
