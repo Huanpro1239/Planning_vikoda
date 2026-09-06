@@ -1,1 +1,1 @@
-run 2026-09-06 final reviewed candidate; ready for controlled production deployment
+run 2026-09-06 final reviewed candidate; exact-head tests+dry-run PASS; approved for controlled production deployment
