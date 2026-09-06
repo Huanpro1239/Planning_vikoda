@@ -5,7 +5,6 @@ from io import BytesIO
 from openpyxl import Workbook, load_workbook
 
 import cleanup_planning
-import sync_planning_schedule_priority as priority
 import sync_planning_schedule_priority_v8 as v8
 from sync_planning_calendar import build_date_headers
 from sync_stock import GraphRequestError
@@ -57,11 +56,62 @@ class FollowupReviewReproductions(unittest.TestCase):
         wb.save(out)
         return out.getvalue()
 
+    def _shared_report(self, *, timeline, first_qty=6750, second_qty=6750):
+        return {
+            "schema_version": 2,
+            "algorithm": "priority_v8",
+            "plan_month": "2026-09",
+            "input_revision": {"etag": "copy-etag"},
+            "mass_balance": {
+                "100001": {
+                    "planned_qty": first_qty,
+                    "scheduled_qty": first_qty,
+                    "carryover_qty": 0,
+                },
+                "100002": {
+                    "planned_qty": second_qty,
+                    "scheduled_qty": second_qty,
+                    "carryover_qty": 0,
+                },
+            },
+            "resources": {
+                "KHS + PET 9000": {
+                    "capacity_shifts_per_day": 3,
+                    "meta": {"timeline": timeline},
+                }
+            },
+        }
+
     def test_shared_machine_setup_requires_timeline_provenance(self):
         # 3 production shifts exactly fill the machine, but a KHS->PET switch
         # also needs 0.5 shift. Daily qty alone cannot prove this schedule valid.
         with self.assertRaisesRegex(RuntimeError, "timeline|setup|provenance"):
             verify_workbook(self._workbook_two_shared_skus())
+
+    def test_report_timeline_without_setup_is_rejected(self):
+        report = self._shared_report(
+            timeline=[
+                {
+                    "kind": "production",
+                    "code": "100001",
+                    "qty": 6750,
+                    "start_shift": 0,
+                    "end_shift": 1.5,
+                },
+                {
+                    "kind": "production",
+                    "code": "100002",
+                    "qty": 6750,
+                    "start_shift": 1.5,
+                    "end_shift": 3,
+                },
+            ]
+        )
+        with self.assertRaisesRegex(RuntimeError, "thiếu setup"):
+            verify_workbook(
+                self._workbook_two_shared_skus(),
+                schedule_report=report,
+            )
 
     def test_valid_carryover_is_mass_balanced_with_report(self):
         data = self._workbook_two_shared_skus(second_qty=0, first_qty=6750)
@@ -75,12 +125,21 @@ class FollowupReviewReproductions(unittest.TestCase):
             wb.close()
 
         report = {
-            "schema_version": 1,
-            "algorithm": "V8",
+            "schema_version": 2,
+            "algorithm": "priority_v8",
             "plan_month": "2026-09",
             "input_revision": {"etag": "copy-etag"},
             "mass_balance": {
-                "100001": {"planned_qty": 6750, "scheduled_qty": 4500, "carryover_qty": 2250}
+                "100001": {
+                    "planned_qty": 6750,
+                    "scheduled_qty": 4500,
+                    "carryover_qty": 2250,
+                },
+                "100002": {
+                    "planned_qty": 0,
+                    "scheduled_qty": 0,
+                    "carryover_qty": 0,
+                },
             },
             "resources": {},
         }
@@ -100,6 +159,15 @@ class FollowupReviewReproductions(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "âm"):
             verify_workbook(out.getvalue())
+
+    def test_overcapacity_reports_business_error_not_valueerror(self):
+        with self.assertRaisesRegex(RuntimeError, r"Resource KHS \+ PET 9000 ngày 01/09"):
+            verify_workbook(
+                self._workbook_two_shared_skus(
+                    first_qty=13500,
+                    second_qty=6750,
+                )
+            )
 
     def test_cleanup_retries_read_503_and_uses_fresh_snapshot_etag_and_patch(self):
         class FakeGraph:
@@ -167,7 +235,11 @@ class FollowupReviewReproductions(unittest.TestCase):
             "planned_qty": 500.0,
             "earliest_date": headers[0],
             "preferred_date": headers[0],
-            "demand_by_day": {headers[0]: 200.0, headers[1]: 200.0, headers[2]: 200.0},
+            "demand_by_day": {
+                headers[0]: 200.0,
+                headers[1]: 200.0,
+                headers[2]: 200.0,
+            },
             "quantum_qty": 100.0,
             "quantum_shift": 2.0,
             "required_units": 5,
@@ -184,8 +256,19 @@ class FollowupReviewReproductions(unittest.TestCase):
             [event["demand_due_date"] for event in meta["unserved_due"]],
             [headers[1], headers[2]],
         )
-        self.assertTrue(all("production_deadline_date" in event for event in meta["unserved_due"]))
-        self.assertTrue(all(event["code"] == "A" and event["uom"] == "Thùng" for event in meta["unserved_due"]))
+        self.assertTrue(
+            all("production_deadline_date" in event for event in meta["unserved_due"])
+        )
+        self.assertTrue(
+            all(
+                event["code"] == "A" and event["uom"] == "Thùng"
+                for event in meta["unserved_due"]
+            )
+        )
+        self.assertEqual(
+            [event["demand_due_date"] for event in meta["shortage_by_day"]],
+            [headers[1], headers[2]],
+        )
 
 
 if __name__ == "__main__":
