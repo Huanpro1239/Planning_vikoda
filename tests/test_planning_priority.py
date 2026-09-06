@@ -8,8 +8,8 @@ from sync_planning_metrics_all_months import _demand_days, resolve_plan_year as 
 from sync_planning_schedule_priority import (
     _risk_snapshot,
     shortage_aware_weekly_unit_targets,
-    shortage_first_campaign_candidate,
 )
+from sync_planning_schedule_priority_v2 import shortage_first_campaign_candidate_v2
 
 
 class PlanningPriorityTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class PlanningPriorityTests(unittest.TestCase):
             fc=0,
             row=2,
         )
-        candidate, _ = shortage_first_campaign_candidate(
+        candidate, _ = shortage_first_campaign_candidate_v2(
             [same_group, urgent], headers, 0.0, 3.0, "A"
         )
         self.assertEqual(candidate["code"], "URGENT")
@@ -92,7 +92,7 @@ class PlanningPriorityTests(unittest.TestCase):
             fc=0,
             row=2,
         )
-        candidate, _ = shortage_first_campaign_candidate(
+        candidate, _ = shortage_first_campaign_candidate_v2(
             [same_group, urgent], headers, 0.0, 3.0, "A"
         )
         self.assertEqual(candidate["code"], "SAME")
