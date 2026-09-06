@@ -1,1 +1,1 @@
-run 2026-09-06 RGB Galon V9 final review candidate
+run 2026-09-06 RGB V10 quantum optimizer final review
