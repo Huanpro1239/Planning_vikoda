@@ -54,6 +54,7 @@ def build_schedule_report(
     products = list(info["products"])
     schedule = info["schedule"]
     carryover = dict(info.get("carryover") or {})
+    utilization = dict(info.get("utilization") or {})
     uom_by_code = _read_uom_by_code(workbook_bytes)
 
     mass_balance = {}
@@ -89,6 +90,7 @@ def build_schedule_report(
                 meta[field] = enriched
         resources[resource] = {
             "capacity_shifts_per_day": float(capacity),
+            "utilization": float(utilization.get(resource, 0) or 0),
             "meta": meta,
         }
 
