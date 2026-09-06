@@ -89,6 +89,54 @@ def _validate_mass_balance_values(code, planned, scheduled, carryover):
     return planned, scheduled, carryover
 
 
+def _enrich_resource_meta(meta, uom_by_code):
+    """Carry deadline provenance from production timeline into late records."""
+    meta = dict(meta or {})
+    timeline_by_unit = {}
+    for raw in meta.get("timeline") or []:
+        if not isinstance(raw, dict) or raw.get("kind") != "production":
+            continue
+        code = str(raw.get("code") or "")
+        unit_no = raw.get("unit_no")
+        if code and unit_no is not None:
+            timeline_by_unit[(code, str(unit_no))] = raw
+
+    for field in (
+        "unserved_due",
+        "late_completed",
+        "deadline_misses",
+        "shortage_by_day",
+        "timeline",
+    ):
+        records = meta.get(field)
+        if not isinstance(records, list):
+            continue
+        enriched = []
+        for record in records:
+            if not isinstance(record, dict):
+                enriched.append(record)
+                continue
+            item = dict(record)
+            code = str(item.get("code") or "")
+            if code and not item.get("uom"):
+                item["uom"] = uom_by_code.get(code, "")
+
+            if field in {"late_completed", "deadline_misses"}:
+                source = timeline_by_unit.get((code, str(item.get("unit_no"))))
+                if source:
+                    for key in (
+                        "demand_deadline_shift",
+                        "production_deadline_shift",
+                        "demand_due_date",
+                        "production_deadline_date",
+                    ):
+                        if item.get(key) is None and source.get(key) is not None:
+                            item[key] = source[key]
+            enriched.append(item)
+        meta[field] = enriched
+    return meta
+
+
 def build_schedule_report(
     workbook_bytes,
     info,
@@ -126,21 +174,10 @@ def build_schedule_report(
 
     resources = {}
     for resource, capacity in sorted((info.get("line_capacity") or {}).items()):
-        meta = dict((info.get("optimizer_meta") or {}).get(resource, {}) or {})
-        for field in ("unserved_due", "late_completed", "deadline_misses", "shortage_by_day", "timeline"):
-            records = meta.get(field)
-            if isinstance(records, list):
-                enriched = []
-                for record in records:
-                    if not isinstance(record, dict):
-                        enriched.append(record)
-                        continue
-                    item = dict(record)
-                    code = str(item.get("code") or "")
-                    if code and not item.get("uom"):
-                        item["uom"] = uom_by_code.get(code, "")
-                    enriched.append(item)
-                meta[field] = enriched
+        meta = _enrich_resource_meta(
+            (info.get("optimizer_meta") or {}).get(resource, {}) or {},
+            uom_by_code,
+        )
         resources[resource] = {
             "capacity_shifts_per_day": float(capacity),
             "utilization": float(utilization.get(resource, 0) or 0),
