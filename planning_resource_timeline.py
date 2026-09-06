@@ -345,9 +345,10 @@ def ensure_resource_timelines(info):
     """
     Return timeline/validation metadata for every serial resource in schedule info.
 
-    KHS/PET uses the scheduler-native timeline. RGB/Galon receive a timeline
-    derived from the exact daily schedule and are rejected if no physically
-    valid within-day sequence with all setup can be found.
+    A scheduler-native timeline is always preferred and independently
+    revalidated. Legacy RGB/Galon allocators without a native timeline fall
+    back to exact daily reconstruction; if setup cannot physically fit, the
+    report is rejected rather than inventing provenance.
     """
     headers = list(info.get("headers") or [])
     products = list(info.get("products") or [])
@@ -371,8 +372,13 @@ def ensure_resource_timelines(info):
 
         raw_meta = dict(optimizer_meta.get(resource, {}) or {})
         scheduler_setup = float(raw_meta.get("setup_shifts", 0) or 0)
-        timeline = raw_meta.get("timeline")
-        if resource in {"RGB", "Galon"}:
+        native_timeline = raw_meta.get("timeline")
+
+        if isinstance(native_timeline, list) and native_timeline:
+            timeline = native_timeline
+            derived_setup = scheduler_setup
+            provenance = "scheduler_native"
+        elif resource in {"RGB", "Galon"}:
             timeline, derived_setup, _ = build_daily_serial_timeline(
                 headers,
                 products,
@@ -380,8 +386,11 @@ def ensure_resource_timelines(info):
                 float(capacity),
                 resource,
             )
+            provenance = "independent_daily_reconstruction"
         else:
+            timeline = native_timeline
             derived_setup = scheduler_setup
+            provenance = "missing"
 
         validation = validate_resource_timeline(
             headers,
@@ -394,6 +403,7 @@ def ensure_resource_timelines(info):
         actual_setup = float(validation.get("setup_shifts", derived_setup) or 0)
         result[resource] = {
             "timeline": timeline,
+            "timeline_provenance": provenance,
             "scheduler_setup_shifts": scheduler_setup,
             "setup_shifts": actual_setup,
             "setup_delta_shifts": actual_setup - scheduler_setup,
