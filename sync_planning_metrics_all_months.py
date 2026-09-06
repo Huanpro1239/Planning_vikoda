@@ -15,6 +15,16 @@ def _demand_days(plan_year, plan_month):
     )
 
 
+def resolve_plan_year(report_date, plan_month):
+    year = report_date.year
+    delta = plan_month - report_date.month
+    if delta <= -6:
+        year += 1
+    elif delta >= 6:
+        year -= 1
+    return year
+
+
 def calculate_row_all_months(
     *,
     fc,
@@ -84,7 +94,8 @@ def calculate_row_all_months(
     }
 
 
-# sync_planning_metrics_direct.calculate_metrics_from_no_kho gọi metrics.calculate_row ở runtime.
+# sync_planning_metrics_direct.calculate_metrics_from_no_kho gọi các hàm metrics.* ở runtime.
+metrics._resolve_plan_year = resolve_plan_year
 metrics.calculate_row = calculate_row_all_months
 
 
