@@ -13,8 +13,8 @@ URGENT_BUFFER_DAYS = 1
 _ORIGINAL_BUILD_SCHEDULE = priority.base.build_schedule
 
 
-def _next_unit_info(headers, product, capacity, scheduled_units):
-    """Return (deadline_shift, critical, release_shift) for the next quantum."""
+def _next_unit_detail(headers, product, capacity, scheduled_units):
+    """Return structured deadline/release data for the next production quantum."""
     unit_no = scheduled_units + 1
     required_units = int(product.get("required_units", 0) or 0)
     if unit_no > required_units:
@@ -34,18 +34,64 @@ def _next_unit_info(headers, product, capacity, scheduled_units):
             math.ceil(required_qty / quantum_qty - priority.base.EPSILON)
         )
         if unit_no <= cumulative_units:
-            # Urgent supply phải hoàn thành trước ngày dự kiến thiếu 1 ngày.
-            # Riêng thiếu ngay ngày đầu tháng thì cho phép hoàn thành trong ngày 1.
-            raw_deadline = (index + 1) * capacity
-            buffered_deadline = max(
+            # Business due date: the day demand makes this quantum necessary.
+            demand_deadline_shift = (index + 1) * capacity
+            # Production deadline: one production day earlier when possible.
+            production_deadline_shift = max(
                 capacity,
-                raw_deadline - URGENT_BUFFER_DAYS * capacity,
+                demand_deadline_shift - URGENT_BUFFER_DAYS * capacity,
             )
-            return (buffered_deadline, True, 0.0)
+            production_index = max(
+                0,
+                min(
+                    len(headers) - 1,
+                    int(
+                        math.ceil(
+                            production_deadline_shift / capacity
+                            - priority.base.EPSILON
+                        )
+                    )
+                    - 1,
+                ),
+            )
+            return {
+                "unit_no": unit_no,
+                "critical": True,
+                "release_shift": 0.0,
+                "demand_deadline_shift": demand_deadline_shift,
+                "production_deadline_shift": production_deadline_shift,
+                "demand_due_date": current_day,
+                "production_deadline_date": headers[production_index],
+            }
 
     # Quantum dư do làm tròn hoặc safety build: không được chen trước urgent.
     release_index = priority.base._earliest_index(headers, product)
-    return (len(headers) * capacity, False, release_index * capacity)
+    return {
+        "unit_no": unit_no,
+        "critical": False,
+        "release_shift": release_index * capacity,
+        "demand_deadline_shift": None,
+        "production_deadline_shift": len(headers) * capacity,
+        "demand_due_date": None,
+        "production_deadline_date": headers[-1] if headers else None,
+    }
+
+
+def _next_unit_info(headers, product, capacity, scheduled_units):
+    """Backward-compatible tuple used by the priority functions."""
+    detail = _next_unit_detail(
+        headers,
+        product,
+        capacity,
+        scheduled_units,
+    )
+    if detail is None:
+        return None
+    return (
+        detail["production_deadline_shift"],
+        detail["critical"],
+        detail["release_shift"],
+    )
 
 
 def _candidate_key(
@@ -111,6 +157,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
     usage = defaultdict(float)
     carryover = {}
     campaigns = []
+    timeline = []
     deadline_misses = []
 
     scheduled_units = {product["code"]: 0 for product in products}
@@ -216,26 +263,40 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
                 > month_end_shift + priority.base.EPSILON
             ):
                 break
+            setup_start = cursor_shift
+            setup_end = cursor_shift + priority.base.SETUP_SHIFTS
             priority.base._add_interval_usage(
                 usage,
                 headers,
-                cursor_shift,
+                setup_start,
                 priority.base.SETUP_SHIFTS,
                 capacity,
             )
-            cursor_shift += priority.base.SETUP_SHIFTS
+            timeline.append(
+                {
+                    "kind": "setup",
+                    "from_code": last_code,
+                    "to_code": chosen["code"],
+                    "start_shift": setup_start,
+                    "end_shift": setup_end,
+                    "duration_shifts": priority.base.SETUP_SHIFTS,
+                }
+            )
+            cursor_shift = setup_end
             setup_total += priority.base.SETUP_SHIFTS
 
         duration = float(chosen["quantum_shift"])
         if cursor_shift + duration > month_end_shift + priority.base.EPSILON:
             break
 
-        deadline, critical, _ = _next_unit_info(
+        detail = _next_unit_detail(
             headers,
             chosen,
             capacity,
             scheduled_units[chosen["code"]],
         )
+        deadline = detail["production_deadline_shift"]
+        critical = detail["critical"]
         start_shift = cursor_shift
         produced = priority.base._add_production_interval(
             schedule,
@@ -254,14 +315,35 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
 
         cursor_shift += duration
         scheduled_units[chosen["code"]] += 1
+        timeline.append(
+            {
+                "kind": "production",
+                "code": chosen["code"],
+                "uom": str(chosen.get("uom") or ""),
+                "unit_no": scheduled_units[chosen["code"]],
+                "qty": priority.base._clean_number(produced),
+                "start_shift": start_shift,
+                "end_shift": cursor_shift,
+                "duration_shifts": duration,
+                "critical": bool(critical),
+                "demand_due_date": detail["demand_due_date"],
+                "production_deadline_date": detail["production_deadline_date"],
+                "demand_deadline_shift": detail["demand_deadline_shift"],
+                "production_deadline_shift": detail["production_deadline_shift"],
+            }
+        )
 
         if critical and cursor_shift > deadline + priority.base.EPSILON:
             deadline_misses.append(
                 {
                     "code": chosen["code"],
+                    "uom": str(chosen.get("uom") or ""),
+                    "unit_no": scheduled_units[chosen["code"]],
                     "qty": priority.base._clean_number(expected),
                     "deadline_shift": deadline,
                     "finish_shift": cursor_shift,
+                    "demand_due_date": detail["demand_due_date"],
+                    "production_deadline_date": detail["production_deadline_date"],
                 }
             )
 
@@ -287,7 +369,7 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
     unserved_due = []
     urgent_carryover = {}
     safety_carryover = {}
-    shortage_by_day = defaultdict(float)
+    shortage_groups = defaultdict(float)
 
     for product in products:
         missing_units = units_left(product)
@@ -301,67 +383,78 @@ def allocate_shared_deadline_guarded(headers, products, capacity):
         probe_units = scheduled_units[code]
         urgent_qty = 0.0
         safety_qty = 0.0
-        earliest_deadline = None
         for _ in range(missing_units):
-            info = _next_unit_info(
+            detail = _next_unit_detail(
                 headers,
                 product,
                 capacity,
                 probe_units,
             )
             probe_units += 1
-            if info is None:
+            if detail is None:
                 continue
-            deadline, critical, _ = info
-            if critical:
+            if detail["critical"]:
                 urgent_qty += quantum_qty
-                earliest_deadline = (
-                    deadline
-                    if earliest_deadline is None
-                    else min(earliest_deadline, deadline)
-                )
+                event = {
+                    "code": code,
+                    "uom": str(product.get("uom") or ""),
+                    "unit_no": detail["unit_no"],
+                    "qty": priority.base._clean_number(quantum_qty),
+                    # Legacy aliases retained for older consumers.
+                    "deadline_shift": detail["production_deadline_shift"],
+                    "due_date": detail["production_deadline_date"],
+                    # Explicit business/prod deadlines for operations.
+                    "demand_deadline_shift": detail["demand_deadline_shift"],
+                    "production_deadline_shift": detail["production_deadline_shift"],
+                    "demand_due_date": detail["demand_due_date"],
+                    "production_deadline_date": detail["production_deadline_date"],
+                }
+                unserved_due.append(event)
+                shortage_groups[
+                    (
+                        code,
+                        str(product.get("uom") or ""),
+                        detail["demand_due_date"],
+                    )
+                ] += quantum_qty
             else:
                 safety_qty += quantum_qty
 
         if urgent_qty > priority.base.EPSILON:
             urgent_carryover[code] = priority.base._clean_number(urgent_qty)
-            deadline_index = max(
-                0,
-                min(
-                    len(headers) - 1,
-                    int(math.ceil(earliest_deadline / capacity - priority.base.EPSILON)) - 1,
-                ),
-            )
-            due_day = headers[deadline_index]
-            shortage_by_day[due_day] += urgent_qty
-            unserved_due.append(
-                {
-                    "code": code,
-                    "qty": priority.base._clean_number(urgent_qty),
-                    "deadline_shift": earliest_deadline,
-                    "due_date": due_day,
-                }
-            )
-
         if safety_qty > priority.base.EPSILON:
             safety_carryover[code] = priority.base._clean_number(safety_qty)
+
+    shortage_by_day = [
+        {
+            "code": code,
+            "uom": uom,
+            "demand_due_date": due_date,
+            "qty": priority.base._clean_number(qty),
+        }
+        for (code, uom, due_date), qty in sorted(
+            shortage_groups.items(),
+            key=lambda item: (item[0][2], item[0][0]),
+        )
+    ]
 
     return schedule, usage, carryover, {
         "mode": "shared_machine_deadline_guarded",
         "setup_shifts": setup_total,
         "campaigns": campaigns,
+        "timeline": timeline,
         # Backward-compatible field: late-completed urgent quantum only.
         "deadline_misses": deadline_misses,
         "late_completed": list(deadline_misses),
         "unserved_due": unserved_due,
         "urgent_carryover": urgent_carryover,
         "safety_carryover": safety_carryover,
-        "shortage_by_day": {
-            day: priority.base._clean_number(qty)
-            for day, qty in sorted(shortage_by_day.items())
-        },
+        # List by SKU/UOM/date; never sums unlike units into one scalar.
+        "shortage_by_day": shortage_by_day,
         "urgent_buffer_days": URGENT_BUFFER_DAYS,
         "physical_lines": sorted(SHARED_MACHINE_LINES),
+        "capacity_shifts_per_day": capacity,
+        "horizon_shifts": month_end_shift,
     }
 
 
