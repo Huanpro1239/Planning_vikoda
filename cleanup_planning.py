@@ -1,6 +1,6 @@
 import time
 
-from graph_retry import install_retry_after_support, retry_delay_seconds
+from graph_retry import install_retry_after_support, retry_delay_seconds as retry_wait_seconds
 from planning_cleanup import remove_sheet_formulas
 from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
 
@@ -14,13 +14,8 @@ def cleanup_with_retry(
     cleanup_func=remove_sheet_formulas,
     sleep_func=time.sleep,
     max_attempts=6,
-    retry_delay_seconds_default=10,
-    retry_delay_seconds=None,
+    retry_delay_seconds=10,
 ):
-    # Backward-compatible keyword used by older callers/tests.
-    if retry_delay_seconds is not None:
-        retry_delay_seconds_default = retry_delay_seconds
-
     for attempt in range(1, max_attempts + 1):
         try:
             # Read + compute + write are one retryable transaction. In
@@ -48,7 +43,7 @@ def cleanup_with_retry(
             if not is_retryable_graph_error(exc) or attempt == max_attempts:
                 raise
 
-            delay = retry_delay_seconds(exc, retry_delay_seconds_default)
+            delay = retry_wait_seconds(exc, retry_delay_seconds)
             print(
                 f"[{PLANNING_SHEET}] Graph tạm lỗi/file thay đổi; "
                 f"thử lại ({attempt}/{max_attempts}) sau {delay:g}s."
