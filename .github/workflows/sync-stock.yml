@@ -2,6 +2,20 @@ name: Sync SharePoint Stock
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish workbook chính thức sau khi proposal đã được review"
+        required: true
+        type: boolean
+        default: false
+      approval_proposal_id:
+        description: "Bắt buộc khi proposal đang review_required"
+        required: false
+        type: string
+      approval_reason:
+        description: "Lý do chấp nhận review_required/shortage; bắt buộc khi review_required"
+        required: false
+        type: string
   repository_dispatch:
     types:
       - sharepoint_stock_updated
@@ -39,20 +53,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run single-snapshot validated planning pipeline
-        run: python -X utf8 sync_planning_pipeline.py
+      - name: Generate proposal or controlled publish
+        shell: bash
+        env:
+          REQUEST_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'true' || 'false' }}
+          APPROVAL_PROPOSAL_ID: ${{ inputs.approval_proposal_id }}
+          APPROVAL_REASON: ${{ inputs.approval_reason }}
+          APPROVED_BY: ${{ github.actor }}
+        run: |
+          if [[ "$REQUEST_PUBLISH" == "true" ]]; then
+            python -X utf8 sync_planning_pipeline.py \
+              --publish \
+              --approval-proposal-id "$APPROVAL_PROPOSAL_ID" \
+              --approval-reason "$APPROVAL_REASON" \
+              --approved-by "$APPROVED_BY"
+          else
+            python -X utf8 sync_planning_pipeline.py --approved-by "$APPROVED_BY"
+          fi
 
-      - name: Upload planning audit report
+      - name: Upload planning proposal and audit
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: planning-audit-${{ github.run_id }}
           path: |
+            planning_proposal.xlsx
             planning_schedule_report.json
             planning_input_revision.json
-          if-no-files-found: error
+            planning_publish_decision.json
+          if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sync states
+      - name: Save sync states after authorized publish
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.publish }}
         shell: bash
         run: |
           if git diff --quiet -- state.json planning_runtime.json; then
