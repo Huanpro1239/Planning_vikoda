@@ -5,6 +5,9 @@ from io import BytesIO
 from lxml import etree
 
 
+PLANNING_SHEET = "Ke_hoach_SX"
+
+
 def _find_sheet_xml_path(archive, sheet_name):
     workbook_root = etree.fromstring(archive.read("xl/workbook.xml"))
     relationship_ns = (
