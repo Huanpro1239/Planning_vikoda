@@ -67,6 +67,8 @@ class WeeklyCalculatedRow:
     q_rounded: float
     production_days: float
     start_datetime: datetime | None
+    p_service_need: float
+    q_service_rounded: float
 
     @property
     def start_date(self) -> date | None:
@@ -74,8 +76,15 @@ class WeeklyCalculatedRow:
 
     @property
     def schedulable_qty(self) -> float:
-        """Giống Excel: chỉ Q dương mới được đưa vào lịch ngày."""
         return max(0.0, self.q_rounded)
+
+    @property
+    def service_qty(self) -> float:
+        return max(0.0, self.q_service_rounded)
+
+    @property
+    def buffer_qty(self) -> float:
+        return max(0.0, self.schedulable_qty - self.service_qty)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +94,7 @@ class DailyPlanRow:
     chuyen: str
     date: date
     qty: float
-
+    phase: str = "full"
 
 def _roundup_away_from_zero(value: float) -> int:
     """Semantics tương đương Excel ``ROUNDUP(value, 0)``."""
