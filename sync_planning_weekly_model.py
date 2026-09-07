@@ -371,12 +371,47 @@ def _validate_shared_machine(analysis: WeeklyAnalysis, policy: PlannerPolicy | N
 
 
 def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis, *, input_revision=None):
-    mass, carryovers = _mass_balance(analysis)
+    mass, service_carryovers, buffer_carryovers = _mass_balance(analysis)
     lines = sorted({calc.input.chuyen for calc in analysis.calculated})
     shared_machine = _validate_shared_machine(analysis)
     shared_name = shared_machine["resource"]
+
+    if analysis.policy_warnings:
+        service_state = "policy_metadata_missing"
+    elif service_carryovers:
+        service_state = "stockout_risk"
+    else:
+        service_state = "rules_complete"
+
+    if not buffer_carryovers:
+        safety_state = "complete"
+    elif service_carryovers:
+        safety_state = "not_achieved_with_service_shortfall"
+    else:
+        safety_state = "partially_achieved"
+
+    monthly_state = (
+        "complete"
+        if not service_carryovers and not buffer_carryovers
+        else (
+            "service_complete_buffer_shortfall"
+            if not service_carryovers
+            else "service_carryover"
+        )
+    )
+
     status = {
-        "monthly_quantity": {"ok": not carryovers, "state": "complete" if not carryovers else "carryover", "carryover_skus": carryovers},
+        # Compatibility name retained, but OK now means the mandatory sales
+        # plan is covered. Buffer shortfall is reported separately.
+        "monthly_quantity": {
+            "ok": not service_carryovers,
+            "state": monthly_state,
+            "carryover_skus": sorted(
+                set(service_carryovers) | set(buffer_carryovers)
+            ),
+            "service_carryover_skus": service_carryovers,
+            "buffer_carryover_skus": buffer_carryovers,
+        },
         "resource_validation": {
             "ok": shared_machine["ok"],
             "state": shared_machine["state"],
@@ -384,19 +419,45 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
             "failed_resources": [] if shared_machine["ok"] else [shared_name],
             "shared_machine": shared_machine,
         },
-        "service": {"ok": not analysis.policy_warnings, "state": "rules_complete" if not analysis.policy_warnings else "policy_metadata_missing", "stockout_skus": []},
-    }
-    resources = {line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}} for line in lines}
-    resources[shared_name] = {"meta": shared_machine}
-    return {
-        "schema_version": 4, "algorithm": "ke_hoach_sx_tuan_v1",
-        "plan_month": f"{analysis.period_year:04d}-{analysis.period_month:02d}",
-        "input_revision": dict(input_revision or {}), "input_sha256": hashlib.sha256(workbook_bytes).hexdigest(),
-        "mass_balance": mass, "resources": resources,
-        "inventory": {}, "policy_warnings": list(analysis.policy_warnings), "status": status,
-        "publish_status": "ready_for_publish" if all(part["ok"] for part in status.values()) else "review_required",
+        "service": {
+            "ok": not analysis.policy_warnings and not service_carryovers,
+            "state": service_state,
+            "stockout_skus": service_carryovers,
+        },
+        "safety_stock": {
+            "ok": not buffer_carryovers,
+            "state": safety_state,
+            "shortfall_skus": buffer_carryovers,
+        },
     }
 
+    publish_ready = (
+        status["monthly_quantity"]["ok"]
+        and status["resource_validation"]["ok"]
+        and status["service"]["ok"]
+    )
+
+    resources = {
+        line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}}
+        for line in lines
+    }
+    resources[shared_name] = {"meta": shared_machine}
+
+    return {
+        "schema_version": 5,
+        "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+        "plan_month": f"{analysis.period_year:04d}-{analysis.period_month:02d}",
+        "input_revision": dict(input_revision or {}),
+        "input_sha256": hashlib.sha256(workbook_bytes).hexdigest(),
+        "mass_balance": mass,
+        "resources": resources,
+        "inventory": {},
+        "policy_warnings": list(analysis.policy_warnings),
+        "status": status,
+        "publish_status": (
+            "ready_for_publish" if publish_ready else "review_required"
+        ),
+    }
 
 def prepare_weekly_schedule_update(workbook_bytes: bytes, *, plan_year: int, plan_month: int, input_revision=None):
     analysis = analyze_weekly_workbook(workbook_bytes, plan_year=plan_year, plan_month=plan_month)
@@ -414,12 +475,27 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
     analysis = analyze_weekly_workbook(workbook_bytes, plan_year=plan_year, plan_month=plan_month)
     if analysis.changed_cells:
         raise RuntimeError(f"Workbook chưa khớp weekly engine: {analysis.changed_cells} ô sai.")
-    expected_mass, carryovers = _mass_balance(analysis)
+    expected_mass, service_carryovers, buffer_carryovers = _mass_balance(analysis)
     actual_mass = schedule_report.get("mass_balance") or {}
     for code, expected in expected_mass.items():
         actual = actual_mass.get(code) or {}
-        for key in ("planned_qty", "scheduled_qty", "carryover_qty"):
-            if not math.isclose(float(actual.get(key, 0) or 0), float(expected[key]), rel_tol=1e-9, abs_tol=BALANCE_EPS):
+        for key in (
+            "planned_qty",
+            "scheduled_qty",
+            "carryover_qty",
+            "service_target_qty",
+            "service_scheduled_qty",
+            "service_carryover_qty",
+            "buffer_target_qty",
+            "buffer_scheduled_qty",
+            "buffer_carryover_qty",
+        ):
+            if not math.isclose(
+                float(actual.get(key, 0) or 0),
+                float(expected[key]),
+                rel_tol=1e-9,
+                abs_tol=BALANCE_EPS,
+            ):
                 raise RuntimeError(f"Mass balance {code}.{key} không khớp workbook.")
     expected_warnings = sorted((w["code"], w["type"]) for w in analysis.policy_warnings)
     report_warnings = sorted((str(w.get("code")), str(w.get("type"))) for w in schedule_report.get("policy_warnings", []) if isinstance(w, dict))
@@ -432,4 +508,12 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
         or report_resource.get("state") != expected_resource["state"]
     ):
         raise RuntimeError("resource_validation không khớp shared-machine schedule.")
-    return {"validated": True, "algorithm": "ke_hoach_sx_tuan_v1", "checked_skus": len(analysis.calculated), "carryover_skus": carryovers, "policy_warning_count": len(analysis.policy_warnings), "publish_status": schedule_report.get("publish_status")}
+    return {
+        "validated": True,
+        "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+        "checked_skus": len(analysis.calculated),
+        "service_carryover_skus": service_carryovers,
+        "buffer_carryover_skus": buffer_carryovers,
+        "policy_warning_count": len(analysis.policy_warnings),
+        "publish_status": schedule_report.get("publish_status"),
+    }
