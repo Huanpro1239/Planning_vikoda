@@ -82,8 +82,8 @@ def prepare_pipeline_output(
     """Compute one validated proposal from one complete SharePoint snapshot.
 
     Network I/O remains outside this function. The planning engine is the
-    data-driven implementation of the ``Ke hoach SX tuan`` model; legacy V8/V10/V9
-    schedulers are no longer on the production pipeline path.
+    data-driven implementation of the ``Ke hoach SX tuan`` model with Service First:
+    sales/debt are mandatory and safety stock uses only remaining capacity.
     """
     missing_sources = [key for key in SOURCE_KEYS if key not in source_bytes]
     if missing_sources:
@@ -221,7 +221,7 @@ def prepare_pipeline_output(
     after_snapshot = _planning_snapshot(final_bytes)
     report["pipeline"] = {
         "mode": "offline_single_snapshot",
-        "engine": "ke_hoach_sx_tuan_v1",
+        "engine": "ke_hoach_sx_tuan_v2_service_first",
         "steps": steps,
         "source_period": source_key,
         "plan_period": plan_key,

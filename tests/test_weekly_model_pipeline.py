@@ -68,7 +68,7 @@ class WeeklyModelPipelineTests(unittest.TestCase):
             plan_month=4,
             input_revision={"target": {"etag": "snapshot-a"}},
         )
-        self.assertEqual(report["algorithm"], "ke_hoach_sx_tuan_v1")
+        self.assertEqual(report["algorithm"], "ke_hoach_sx_tuan_v2_service_first")
         self.assertEqual(report["publish_status"], "ready_for_publish")
         self.assertEqual(report["policy_warnings"], [])
         self.assertTrue(

@@ -98,6 +98,24 @@ def _same(current: Any, target: Any) -> bool:
     return current == target
 
 
+
+def _scheduled_by_code(plan: list[Any]) -> dict[int, float]:
+    result: dict[int, float] = defaultdict(float)
+    for item in plan:
+        result[int(item.ma_sp)] += float(item.qty)
+    return result
+
+
+def _committed_qty(calc: WeeklyCalculatedRow, scheduled_by_code: dict[int, float]) -> float:
+    """Quantity actually committed to the daily plan for this snapshot."""
+    scheduled = max(0.0, float(scheduled_by_code.get(calc.input.ma_sp, 0.0)))
+    return min(calc.schedulable_qty, scheduled)
+
+
+def _committed_days(calc: WeeklyCalculatedRow, scheduled_by_code: dict[int, float]) -> float:
+    committed = _committed_qty(calc, scheduled_by_code)
+    return committed / calc.input.sl_ca / calc.input.shifts_per_day
+
 def _read_inputs(workbook_bytes: bytes, *, plan_year: int, plan_month: int):
     wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
@@ -174,6 +192,7 @@ def analyze_weekly_workbook(workbook_bytes: bytes, *, plan_year: int, plan_month
     lookup: dict[tuple[int, date], float] = defaultdict(float)
     for item in daily:
         lookup[(item.ma_sp, item.date)] += float(item.qty)
+    scheduled_by_code = _scheduled_by_code(daily)
     wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
         ws = wb[PLANNING_SHEET]
@@ -181,7 +200,14 @@ def analyze_weekly_workbook(workbook_bytes: bytes, *, plan_year: int, plan_month
         days = calendar.monthrange(plan_year, plan_month)[1]
         for calc in calculated:
             r = calc.input.source_row
-            for c, target in ((15, calc.p_need), (16, calc.q_rounded), (17, calc.production_days), (18, calc.start_datetime)):
+            committed = _committed_qty(calc, scheduled_by_code)
+            committed_days = _committed_days(calc, scheduled_by_code)
+            for c, target in (
+                (15, calc.p_need),
+                (16, committed),
+                (17, committed_days),
+                (18, calc.start_datetime),
+            ):
                 if not _same(ws.cell(r, c).value, target):
                     changed += 1
             for d in range(1, days + 1):
@@ -201,10 +227,15 @@ def patch_weekly_workbook(workbook_bytes: bytes, analysis: WeeklyAnalysis) -> by
         for item in analysis.daily_plan:
             lookup[(item.ma_sp, item.date)] += float(item.qty)
         days = calendar.monthrange(analysis.period_year, analysis.period_month)[1]
+        scheduled_by_code = _scheduled_by_code(analysis.daily_plan)
         for calc in analysis.calculated:
             r = calc.input.source_row
-            ws.cell(r, 15, calc.p_need); ws.cell(r, 16, calc.q_rounded)
-            ws.cell(r, 17, calc.production_days); ws.cell(r, 18, calc.start_datetime)
+            committed = _committed_qty(calc, scheduled_by_code)
+            committed_days = _committed_days(calc, scheduled_by_code)
+            # O keeps the desired need including target stock. P/Q are the
+            # production commitment that physically fits the computed schedule.
+            ws.cell(r, 15, calc.p_need); ws.cell(r, 16, committed)
+            ws.cell(r, 17, committed_days); ws.cell(r, 18, calc.start_datetime)
             for d in range(1, days + 1):
                 qty = lookup.get((calc.input.ma_sp, date(analysis.period_year, analysis.period_month, d)), 0.0)
                 ws.cell(r, START_COLUMN + d - 1).value = qty if qty > EPS else None
@@ -214,21 +245,61 @@ def patch_weekly_workbook(workbook_bytes: bytes, analysis: WeeklyAnalysis) -> by
 
 
 def _mass_balance(analysis: WeeklyAnalysis):
+    """Mass balance with explicit service and safety-stock layers."""
+
     scheduled: dict[str, float] = defaultdict(float)
     for item in analysis.daily_plan:
         scheduled[str(item.ma_sp)] += float(item.qty)
-    mass, carryovers = {}, []
+
+    mass, service_carryovers, buffer_carryovers = {}, [], []
     for calc in analysis.calculated:
         code = str(calc.input.ma_sp)
-        planned = max(0.0, float(calc.q_rounded)); done = scheduled.get(code, 0.0)
-        if done > planned + BALANCE_EPS:
-            raise RuntimeError(f"Mã {code} scheduled={done} vượt Q={planned}.")
-        carry = max(0.0, planned - done)
-        if carry <= BALANCE_EPS: carry = 0.0
-        if carry: carryovers.append(code)
-        mass[code] = {"uom": calc.input.don_vi_tinh, "planned_qty": planned, "scheduled_qty": done, "carryover_qty": carry, "balanced_qty": done + carry}
-    return mass, sorted(carryovers)
+        desired = calc.schedulable_qty
+        service_target = calc.service_qty
+        done = scheduled.get(code, 0.0)
 
+        if done > desired + BALANCE_EPS:
+            raise RuntimeError(f"Mã {code} scheduled={done} vượt Q={desired}.")
+
+        service_done = min(done, service_target)
+        service_carry = max(0.0, service_target - service_done)
+        buffer_target = calc.buffer_qty
+        buffer_done = max(0.0, done - service_target)
+        buffer_done = min(buffer_done, buffer_target)
+        buffer_carry = max(0.0, buffer_target - buffer_done)
+        total_carry = max(0.0, desired - done)
+
+        if service_carry <= BALANCE_EPS:
+            service_carry = 0.0
+        if buffer_carry <= BALANCE_EPS:
+            buffer_carry = 0.0
+        if total_carry <= BALANCE_EPS:
+            total_carry = 0.0
+
+        if service_carry:
+            service_carryovers.append(code)
+        if buffer_carry:
+            buffer_carryovers.append(code)
+
+        mass[code] = {
+            "uom": calc.input.don_vi_tinh,
+            "planned_qty": desired,
+            "scheduled_qty": done,
+            "carryover_qty": total_carry,
+            "balanced_qty": done + total_carry,
+            "service_target_qty": service_target,
+            "service_scheduled_qty": service_done,
+            "service_carryover_qty": service_carry,
+            "buffer_target_qty": buffer_target,
+            "buffer_scheduled_qty": buffer_done,
+            "buffer_carryover_qty": buffer_carry,
+        }
+
+    return (
+        mass,
+        sorted(service_carryovers),
+        sorted(buffer_carryovers),
+    )
 
 def _validate_shared_machine(analysis: WeeklyAnalysis, policy: PlannerPolicy | None = None):
     """Kiểm tra capacity vật lý của máy chung KHS + PET 9000.
@@ -300,12 +371,47 @@ def _validate_shared_machine(analysis: WeeklyAnalysis, policy: PlannerPolicy | N
 
 
 def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis, *, input_revision=None):
-    mass, carryovers = _mass_balance(analysis)
+    mass, service_carryovers, buffer_carryovers = _mass_balance(analysis)
     lines = sorted({calc.input.chuyen for calc in analysis.calculated})
     shared_machine = _validate_shared_machine(analysis)
     shared_name = shared_machine["resource"]
+
+    if analysis.policy_warnings:
+        service_state = "policy_metadata_missing"
+    elif service_carryovers:
+        service_state = "stockout_risk"
+    else:
+        service_state = "rules_complete"
+
+    if not buffer_carryovers:
+        safety_state = "complete"
+    elif service_carryovers:
+        safety_state = "not_achieved_with_service_shortfall"
+    else:
+        safety_state = "partially_achieved"
+
+    monthly_state = (
+        "complete"
+        if not service_carryovers and not buffer_carryovers
+        else (
+            "service_complete_buffer_shortfall"
+            if not service_carryovers
+            else "service_carryover"
+        )
+    )
+
     status = {
-        "monthly_quantity": {"ok": not carryovers, "state": "complete" if not carryovers else "carryover", "carryover_skus": carryovers},
+        # Compatibility name retained, but OK now means the mandatory sales
+        # plan is covered. Buffer shortfall is reported separately.
+        "monthly_quantity": {
+            "ok": not service_carryovers,
+            "state": monthly_state,
+            "carryover_skus": sorted(
+                set(service_carryovers) | set(buffer_carryovers)
+            ),
+            "service_carryover_skus": service_carryovers,
+            "buffer_carryover_skus": buffer_carryovers,
+        },
         "resource_validation": {
             "ok": shared_machine["ok"],
             "state": shared_machine["state"],
@@ -313,19 +419,45 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
             "failed_resources": [] if shared_machine["ok"] else [shared_name],
             "shared_machine": shared_machine,
         },
-        "service": {"ok": not analysis.policy_warnings, "state": "rules_complete" if not analysis.policy_warnings else "policy_metadata_missing", "stockout_skus": []},
-    }
-    resources = {line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}} for line in lines}
-    resources[shared_name] = {"meta": shared_machine}
-    return {
-        "schema_version": 4, "algorithm": "ke_hoach_sx_tuan_v1",
-        "plan_month": f"{analysis.period_year:04d}-{analysis.period_month:02d}",
-        "input_revision": dict(input_revision or {}), "input_sha256": hashlib.sha256(workbook_bytes).hexdigest(),
-        "mass_balance": mass, "resources": resources,
-        "inventory": {}, "policy_warnings": list(analysis.policy_warnings), "status": status,
-        "publish_status": "ready_for_publish" if all(part["ok"] for part in status.values()) else "review_required",
+        "service": {
+            "ok": not analysis.policy_warnings and not service_carryovers,
+            "state": service_state,
+            "stockout_skus": service_carryovers,
+        },
+        "safety_stock": {
+            "ok": not buffer_carryovers,
+            "state": safety_state,
+            "shortfall_skus": buffer_carryovers,
+        },
     }
 
+    publish_ready = (
+        status["monthly_quantity"]["ok"]
+        and status["resource_validation"]["ok"]
+        and status["service"]["ok"]
+    )
+
+    resources = {
+        line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}}
+        for line in lines
+    }
+    resources[shared_name] = {"meta": shared_machine}
+
+    return {
+        "schema_version": 5,
+        "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+        "plan_month": f"{analysis.period_year:04d}-{analysis.period_month:02d}",
+        "input_revision": dict(input_revision or {}),
+        "input_sha256": hashlib.sha256(workbook_bytes).hexdigest(),
+        "mass_balance": mass,
+        "resources": resources,
+        "inventory": {},
+        "policy_warnings": list(analysis.policy_warnings),
+        "status": status,
+        "publish_status": (
+            "ready_for_publish" if publish_ready else "review_required"
+        ),
+    }
 
 def prepare_weekly_schedule_update(workbook_bytes: bytes, *, plan_year: int, plan_month: int, input_revision=None):
     analysis = analyze_weekly_workbook(workbook_bytes, plan_year=plan_year, plan_month=plan_month)
@@ -343,12 +475,27 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
     analysis = analyze_weekly_workbook(workbook_bytes, plan_year=plan_year, plan_month=plan_month)
     if analysis.changed_cells:
         raise RuntimeError(f"Workbook chưa khớp weekly engine: {analysis.changed_cells} ô sai.")
-    expected_mass, carryovers = _mass_balance(analysis)
+    expected_mass, service_carryovers, buffer_carryovers = _mass_balance(analysis)
     actual_mass = schedule_report.get("mass_balance") or {}
     for code, expected in expected_mass.items():
         actual = actual_mass.get(code) or {}
-        for key in ("planned_qty", "scheduled_qty", "carryover_qty"):
-            if not math.isclose(float(actual.get(key, 0) or 0), float(expected[key]), rel_tol=1e-9, abs_tol=BALANCE_EPS):
+        for key in (
+            "planned_qty",
+            "scheduled_qty",
+            "carryover_qty",
+            "service_target_qty",
+            "service_scheduled_qty",
+            "service_carryover_qty",
+            "buffer_target_qty",
+            "buffer_scheduled_qty",
+            "buffer_carryover_qty",
+        ):
+            if not math.isclose(
+                float(actual.get(key, 0) or 0),
+                float(expected[key]),
+                rel_tol=1e-9,
+                abs_tol=BALANCE_EPS,
+            ):
                 raise RuntimeError(f"Mass balance {code}.{key} không khớp workbook.")
     expected_warnings = sorted((w["code"], w["type"]) for w in analysis.policy_warnings)
     report_warnings = sorted((str(w.get("code")), str(w.get("type"))) for w in schedule_report.get("policy_warnings", []) if isinstance(w, dict))
@@ -361,4 +508,12 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
         or report_resource.get("state") != expected_resource["state"]
     ):
         raise RuntimeError("resource_validation không khớp shared-machine schedule.")
-    return {"validated": True, "algorithm": "ke_hoach_sx_tuan_v1", "checked_skus": len(analysis.calculated), "carryover_skus": carryovers, "policy_warning_count": len(analysis.policy_warnings), "publish_status": schedule_report.get("publish_status")}
+    return {
+        "validated": True,
+        "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+        "checked_skus": len(analysis.calculated),
+        "service_carryover_skus": service_carryovers,
+        "buffer_carryover_skus": buffer_carryovers,
+        "policy_warning_count": len(analysis.policy_warnings),
+        "publish_status": schedule_report.get("publish_status"),
+    }
