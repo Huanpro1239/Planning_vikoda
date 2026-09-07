@@ -1,6 +1,9 @@
 name: Sync SharePoint Stock
 
 on:
+  schedule:
+    # 06:00 AM VN (UTC+7) = 23:00 UTC hàng ngày
+    - cron: "0 23 * * *"
   workflow_dispatch:
     inputs:
       publish:
@@ -56,10 +59,10 @@ jobs:
       - name: Generate proposal or controlled publish
         shell: bash
         env:
-          REQUEST_PUBLISH: ${{ (github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
+          REQUEST_PUBLISH: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
           APPROVAL_PROPOSAL_ID: ${{ inputs.approval_proposal_id }}
           APPROVAL_REASON: ${{ inputs.approval_reason }}
-          APPROVED_BY: ${{ github.event_name == 'repository_dispatch' && 'power-automate' || github.actor }}
+          APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'power-automate' || github.actor) }}
         run: |
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
             python -X utf8 sync_planning_pipeline.py \
@@ -85,7 +88,7 @@ jobs:
           retention-days: 14
 
       - name: Save sync states after authorized publish
-        if: ${{ success() && (github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        if: ${{ success() && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
           if git diff --quiet -- state.json planning_runtime.json; then
