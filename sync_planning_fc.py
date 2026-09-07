@@ -1,3 +1,5 @@
+import hashlib
+import json
 import math
 import posixpath
 import re
@@ -71,6 +73,31 @@ def _values_equal(current, target):
         )
 
     return current == target
+
+
+def compute_fc_hash(workbook_bytes):
+    """Compute deterministic SHA-256 hash of all data in sheet FC."""
+    values_workbook = load_workbook(
+        BytesIO(workbook_bytes),
+        data_only=True,
+        read_only=True,
+    )
+    try:
+        if FC_SHEET not in values_workbook.sheetnames:
+            return ""
+        fc_sheet = values_workbook[FC_SHEET]
+        selector = str(fc_sheet[FC_SELECTOR_CELL].value or "").strip()
+        data = [("selector", selector)]
+        for row in fc_sheet.iter_rows(values_only=True):
+            if any(cell not in (None, "") for cell in row):
+                data.append(tuple(
+                    _clean_number(c) if isinstance(c, (int, float)) else str(c or "").strip()
+                    for c in row
+                ))
+        canonical = json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+    finally:
+        values_workbook.close()
 
 
 def _find_sheet_xml_path(archive, sheet_name):
@@ -368,6 +395,7 @@ def read_planning_fc_targets(workbook_bytes):
             "source_column_letter": source_column_letter,
             "targets": targets,
             "changed_count": changed_count,
+            "fc_hash": compute_fc_hash(workbook_bytes),
         }
     finally:
         values_workbook.close()

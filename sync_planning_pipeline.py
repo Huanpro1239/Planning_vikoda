@@ -153,14 +153,45 @@ def _save_states_after_success(source_items, report, proposed_runtime_state):
     conversion_hash = report.get("pipeline", {}).get("conversion_hash")
     if not conversion_hash:
         raise RuntimeError("Pipeline report thiếu conversion_hash; không ghi state.")
+    fc_hash = report.get("pipeline", {}).get("fc_hash")
 
-    sync_stock.save_state(source_etags, conversion_hash)
+    sync_stock.save_state(source_etags, conversion_hash, fc_hash=fc_hash)
     metrics.save_runtime_state(proposed_runtime_state)
     save_schedule_report(report)
     AUDIT_REVISION_FILE.write_text(
         json.dumps(report.get("input_revision") or {}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def detect_input_changes(old_state, source_items, pipeline_info):
+    """Detect which inputs changed compared to state.json.
+
+    Inputs tracked:
+    1. 5 inventory source files (ETags)
+    2. Sheet Danh_muc conversion factors (conversion_hash)
+    3. Sheet FC forecast targets & selector (fc_hash)
+    """
+    old_sources = old_state.get("sources", {}) if isinstance(old_state, dict) else {}
+    changed_inputs = []
+
+    for key in SOURCES:
+        old_etag = old_sources.get(key)
+        new_etag = source_items.get(key, {}).get("eTag")
+        if old_etag != new_etag:
+            changed_inputs.append(f"source:{key}")
+
+    old_conv = old_state.get("conversion_hash") if isinstance(old_state, dict) else None
+    new_conv = pipeline_info.get("conversion_hash")
+    if old_conv != new_conv:
+        changed_inputs.append("sheet:Danh_muc")
+
+    old_fc = old_state.get("fc_hash") if isinstance(old_state, dict) else None
+    new_fc = pipeline_info.get("fc_hash")
+    if old_fc != new_fc:
+        changed_inputs.append("sheet:FC")
+
+    return changed_inputs
 
 
 def _blocked_decision(report, publisher, basis, reason):
@@ -263,6 +294,8 @@ def run_pipeline_with_retry(
     sleep_func=time.sleep,
     max_attempts=6,
     retry_delay_seconds=10,
+    skip_if_unchanged=False,
+    force=False,
 ):
     """
     Read all inputs -> compute entire workbook -> validate -> optional ETag upload.
@@ -334,6 +367,44 @@ def run_pipeline_with_retry(
                     "report": report,
                     "input_revision": revision,
                 }
+
+            old_state = sync_stock.load_state()
+            pipeline_info = report.get("pipeline", {})
+            changed_inputs = detect_input_changes(old_state, source_items, pipeline_info)
+
+            if skip_if_unchanged and not force and not changed_inputs:
+                print(
+                    "[PIPELINE] Không có thay đổi đầu vào (5 nguồn tồn kho, "
+                    "sheet Danh_muc, sheet FC đều không đổi)."
+                )
+                print(
+                    "[PIPELINE] Bỏ qua publish để tránh lặp vòng (Loop Prevention)."
+                )
+                decision = {
+                    "state": "skipped_unchanged",
+                    "basis": "no_input_changes",
+                    "publish_status": report.get("publish_status"),
+                    "proposal_id": report.get("proposal_id"),
+                    "publisher": publisher or None,
+                    "reason": "Tất cả nguồn tồn kho và sheet FC/Danh_muc không đổi so với state.json.",
+                }
+                report["publish_decision"] = decision
+                _save_proposal_artifacts(final_bytes, report)
+                _save_publish_decision(decision)
+                return {
+                    "uploaded": False,
+                    "would_change": False,
+                    "publish_blocked": False,
+                    "publish_mode": "publish",
+                    "report": report,
+                    "input_revision": revision,
+                    "skipped_unchanged": True,
+                }
+
+            if changed_inputs:
+                print(
+                    f"[PIPELINE] Phát hiện thay đổi đầu vào: {', '.join(changed_inputs)}."
+                )
 
             authorized, decision = _publish_decision(
                 report,
@@ -411,6 +482,16 @@ def _parse_args(argv=None):
         action="store_true",
         help="Cho phép publish theo policy. Mặc định chỉ tạo proposal read-only.",
     )
+    parser.add_argument(
+        "--skip-if-unchanged",
+        action="store_true",
+        help="Bỏ qua publish nếu không có thay đổi ở nguồn tồn kho, sheet Danh_muc hoặc sheet FC.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bắt buộc publish kể cả khi không có thay đổi đầu vào.",
+    )
     parser.add_argument("--approval-proposal-id", default="")
     parser.add_argument("--approval-reason", default="")
     parser.add_argument("--approved-by", default=os.getenv("GITHUB_ACTOR", ""))
@@ -439,6 +520,8 @@ def main(argv=None):
         publish_mode="publish" if args.publish else "proposal",
         review_approval=review_approval,
         publisher=args.approved_by,
+        skip_if_unchanged=args.skip_if_unchanged,
+        force=args.force,
     )
     if result.get("publish_blocked"):
         raise SystemExit(2)

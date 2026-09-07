@@ -63,15 +63,24 @@ jobs:
           APPROVAL_PROPOSAL_ID: ${{ inputs.approval_proposal_id }}
           APPROVAL_REASON: ${{ inputs.approval_reason }}
           APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'power-automate' || github.actor) }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          EXTRA_FLAGS=""
+          if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+            EXTRA_FLAGS="--skip-if-unchanged"
+          elif [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            EXTRA_FLAGS="--force"
+          fi
+
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
             python -X utf8 sync_planning_pipeline.py \
               --publish \
               --approval-proposal-id "$APPROVAL_PROPOSAL_ID" \
               --approval-reason "$APPROVAL_REASON" \
-              --approved-by "$APPROVED_BY"
+              --approved-by "$APPROVED_BY" \
+              $EXTRA_FLAGS
           else
-            python -X utf8 sync_planning_pipeline.py --approved-by "$APPROVED_BY"
+            python -X utf8 sync_planning_pipeline.py --approved-by "$APPROVED_BY" $EXTRA_FLAGS
           fi
 
       - name: Upload planning proposal and audit

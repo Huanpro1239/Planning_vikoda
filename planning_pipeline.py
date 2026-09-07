@@ -228,6 +228,7 @@ def prepare_pipeline_output(
         "plan_period": plan_key,
         "selector": selector,
         "conversion_hash": conversion_hash,
+        "fc_hash": fc_info.get("fc_hash", ""),
         "state_would_change": bool(state_changed),
         "stock_rows_changed": stock_info.get("changed_count", 0),
         "fc_rows_changed": fc_info.get("changed_count", 0),

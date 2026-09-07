@@ -132,6 +132,7 @@ def read_planning_fc_targets_robust(workbook_bytes):
             "source_column_letter": source_column_letter,
             "targets": targets,
             "changed_count": changed_count,
+            "fc_hash": fc.compute_fc_hash(workbook_bytes),
         }
     finally:
         values_workbook.close()

@@ -235,14 +235,17 @@ def load_state():
     return data
 
 
-def save_state(source_etags, conversion_hash):
+def save_state(source_etags, conversion_hash, fc_hash=None):
+    payload = {
+        "sync_version": SYNC_VERSION,
+        "conversion_hash": conversion_hash,
+        "sources": source_etags,
+    }
+    if fc_hash is not None:
+        payload["fc_hash"] = fc_hash
     STATE_FILE.write_text(
         json.dumps(
-            {
-                "sync_version": SYNC_VERSION,
-                "conversion_hash": conversion_hash,
-                "sources": source_etags,
-            },
+            payload,
             ensure_ascii=False,
             indent=2,
         )

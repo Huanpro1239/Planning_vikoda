@@ -89,5 +89,34 @@ class SyncPlanningFcTests(unittest.TestCase):
             )
 
 
+    def test_compute_fc_hash_deterministic_and_sensitive_to_fc_only(self):
+        from sync_planning_fc import compute_fc_hash
+
+        wb_bytes1 = self.make_workbook(selector="Tháng 9")
+        wb_bytes2 = self.make_workbook(selector="Tháng 9")
+        hash1 = compute_fc_hash(wb_bytes1)
+        hash2 = compute_fc_hash(wb_bytes2)
+        self.assertEqual(hash1, hash2)
+        self.assertEqual(len(hash1), 64)
+
+        # Selector changes
+        wb_month10 = self.make_workbook(selector="Tháng 10")
+        self.assertNotEqual(hash1, compute_fc_hash(wb_month10))
+
+        # FC value changes
+        wb = load_workbook(BytesIO(wb_bytes1))
+        wb["FC"]["M2"] = 99999
+        buf = BytesIO()
+        wb.save(buf)
+        self.assertNotEqual(hash1, compute_fc_hash(buf.getvalue()))
+
+        # Non-FC sheet changes (e.g. Ke_hoach_SX only) -> FC hash must NOT change!
+        wb = load_workbook(BytesIO(wb_bytes1))
+        wb["Ke_hoach_SX"]["L2"] = 88888
+        buf = BytesIO()
+        wb.save(buf)
+        self.assertEqual(hash1, compute_fc_hash(buf.getvalue()))
+
+
 if __name__ == "__main__":
     unittest.main()
