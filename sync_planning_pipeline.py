@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 import time
+from io import BytesIO
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 from graph_retry import install_retry_after_support, retry_delay_seconds as retry_wait_seconds
 from planning_pipeline import prepare_pipeline_output
@@ -18,6 +20,7 @@ PROPOSAL_WORKBOOK_FILE = Path("planning_proposal.xlsx")
 PUBLISH_DECISION_FILE = Path("planning_publish_decision.json")
 READY_PUBLISH_STATUSES = {"ready_for_publish", "feasible"}  # feasible = legacy tests/reports
 REVIEW_REQUIRED_STATUS = "review_required"
+VOLATILE_XLSX_PARTS = {"docProps/core.xml"}
 SOURCES = {
     "actual_stock": sync_stock.SOURCE_ACTUAL_PATH,
     "factory_vikoda": sync_stock.SOURCE_FACTORY_VIKODA_PATH,
@@ -61,13 +64,45 @@ def _read_snapshot(graph, drive_id):
     return target_item, target_bytes, source_items, source_bytes, revision
 
 
+def _proposal_output_sha256(final_bytes):
+    """Hash stable XLSX payload, ignoring volatile Office core metadata.
+
+    openpyxl refreshes docProps/core.xml timestamps every save, and ZIP entry
+    timestamps may also differ between identical calculations. Those packaging
+    details must not change proposal identity. Raw output_sha256 is still kept
+    separately for exact-byte audit.
+    """
+    raw_sha256 = hashlib.sha256(final_bytes).hexdigest()
+    try:
+        with ZipFile(BytesIO(final_bytes), "r") as archive:
+            names = sorted(
+                name
+                for name in archive.namelist()
+                if name not in VOLATILE_XLSX_PARTS
+            )
+            if not names:
+                return raw_sha256
+            digest = hashlib.sha256()
+            for name in names:
+                name_bytes = name.encode("utf-8")
+                data = archive.read(name)
+                digest.update(len(name_bytes).to_bytes(4, "big"))
+                digest.update(name_bytes)
+                digest.update(len(data).to_bytes(8, "big"))
+                digest.update(data)
+            return digest.hexdigest()
+    except (BadZipFile, OSError):
+        return raw_sha256
+
+
 def _proposal_id(report, final_bytes):
     output_sha256 = hashlib.sha256(final_bytes).hexdigest()
+    proposal_output_sha256 = _proposal_output_sha256(final_bytes)
     payload = {
         "algorithm": report.get("algorithm"),
         "plan_month": report.get("plan_month"),
         "input_revision": report.get("input_revision") or {},
-        "output_sha256": output_sha256,
+        "output_sha256": proposal_output_sha256,
     }
     canonical = json.dumps(
         payload,
@@ -75,13 +110,21 @@ def _proposal_id(report, final_bytes):
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest(), output_sha256
+    return (
+        hashlib.sha256(canonical).hexdigest(),
+        output_sha256,
+        proposal_output_sha256,
+    )
 
 
 def _with_proposal_identity(report, final_bytes):
     result = dict(report)
-    proposal_id, output_sha256 = _proposal_id(result, final_bytes)
+    proposal_id, output_sha256, proposal_output_sha256 = _proposal_id(
+        result,
+        final_bytes,
+    )
     result["output_sha256"] = output_sha256
+    result["proposal_output_sha256"] = proposal_output_sha256
     result["proposal_id"] = proposal_id
     return result
 
