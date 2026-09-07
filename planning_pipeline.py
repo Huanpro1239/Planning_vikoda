@@ -5,22 +5,19 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from planning_cleanup import remove_sheet_formulas
-from planning_schedule_report import (
-    attach_output_hash,
-    build_schedule_report,
-    json_safe,
-)
+from planning_schedule_report import attach_output_hash, json_safe
 from sync_planning_calendar_all_months import prepare_calendar_update_all_months
 from sync_planning_fc import prepare_planning_fc_update
 import sync_planning_metrics as metrics
 import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direct hooks
 import sync_planning_metrics_compat as metrics_compat
-from sync_planning_schedule_production import install_production_output_cleanup
-import sync_planning_schedule_priority as priority
 from sync_planning_stock_inputs import prepare_stock_input_update
+from sync_planning_weekly_model import (
+    prepare_weekly_schedule_update,
+    verify_weekly_workbook,
+)
 import sync_stock
 from sync_stock_compat import read_conversion_factors_robust
-from verify_planning_month import verify_workbook
 
 
 SOURCE_KEYS = (
@@ -82,24 +79,22 @@ def prepare_pipeline_output(
     runtime_state,
     input_revision=None,
 ):
-    """
-    Compute the complete planning output on one in-memory workbook snapshot.
+    """Compute one validated proposal from one complete SharePoint snapshot.
 
-    This function performs no network calls and no file writes. The caller may
-    persist the returned bytes only after validation succeeds.
+    Network I/O remains outside this function. The planning engine is the
+    data-driven implementation of the ``Ke hoach SX tuan`` model; legacy V8/V10/V9
+    schedulers are no longer on the production pipeline path.
     """
     missing_sources = [key for key in SOURCE_KEYS if key not in source_bytes]
     if missing_sources:
         raise RuntimeError("Thiếu nguồn dry-run: " + ", ".join(missing_sources))
-
-    install_production_output_cleanup()
 
     initial_bytes = target_workbook_bytes
     before_snapshot = _planning_snapshot(initial_bytes)
     work = initial_bytes
     steps = []
 
-    # 1) Recompute Ton_kho from the same raw source snapshots production uses.
+    # 1) Recompute Ton_kho from the same raw SharePoint snapshots used by production.
     conversion_factors, conversion_hash = read_conversion_factors_robust(work)
     actual_stock = sync_stock.read_actual_stock(source_bytes["actual_stock"])
     factory_vikoda = sync_stock.read_single_value_source(
@@ -151,26 +146,27 @@ def prepare_pipeline_output(
     )
     steps.append("Ton_kho")
 
-    # 2) Refresh J/K from Ton_kho and L from selected FC month.
+    # 2) J/K come from Ton_kho and L from the selected FC month.
     work, stock_info = prepare_stock_input_update(work)
     work, fc_info = prepare_planning_fc_update(work)
     steps.extend(["J_K", "FC_L"])
 
-    # 3) Resolve planning month/year from actual-stock report snapshot.
+    # 3) Resolve period from the current source snapshot, never wall clock.
     report_date, actual_receipts, consignments = metrics.read_actual_inputs(
         source_bytes["actual_stock"]
     )
     selector, plan_month, planning_rows = metrics.read_planning_rows(work)
     plan_year = metrics._resolve_plan_year(report_date, plan_month)
 
-    # 4) Calendar is computed using the same resolved plan year, not wall clock.
+    # 4) Calendar must match the same resolved period.
     work, calendar_info = prepare_calendar_update_all_months(
         work,
         plan_year=plan_year,
     )
     steps.append("calendar")
 
-    # Re-read rows after calendar/layout migration and load master Leadtime.
+    # Re-read after layout/calendar migration. This also installs Leadtime from
+    # Danh_muc!J as the single source of truth for the M/N base calculation.
     selector, plan_month, planning_rows = metrics.read_planning_rows(work)
     conversion_factors, _ = metrics_compat.read_conversion_factors_and_leadtime(work)
     system_receipts = metrics.read_system_receipts(
@@ -179,7 +175,8 @@ def prepare_pipeline_output(
         set(planning_rows),
     )
 
-    # 5) Calculate M:R from a copy of runtime state. Dry-run never mutates state.
+    # 5) M/N base inputs remain driven by SharePoint/state. The weekly engine
+    # then recalculates O:R and the daily schedule from these runtime values.
     next_state = copy.deepcopy(runtime_state or {})
     metric_values, state_changed, source_key, plan_key = metrics.calculate_metrics(
         report_date=report_date,
@@ -195,37 +192,36 @@ def prepare_pipeline_output(
         work, metric_patched = metrics.patch_workbook(work, metric_values)
     else:
         metric_patched = 0
-    steps.append("M_R")
+    steps.append("M_N_base")
 
-    # 6) Build production schedule on the same bytes; no upload occurs here.
-    # KHS/PET remains V8, RGB uses V10 quantum-level service optimization,
-    # and Galon uses V9 serialized setup-aware scheduling.
-    scheduled_bytes, schedule_info = priority.base.prepare_schedule_update(
+    # 6) Production planning uses only the Ke hoach SX tuan algorithm.
+    scheduled_bytes, report, weekly_analysis = prepare_weekly_schedule_update(
         work,
         plan_year=plan_year,
-    )
-    steps.append("schedule")
-
-    report = build_schedule_report(
-        work,
-        schedule_info,
+        plan_month=plan_month,
         input_revision=dict(input_revision or {}),
-        algorithm="priority_v8_rgb_v10_galon_v9",
     )
+    steps.append("ke_hoach_sx_tuan")
 
-    # 7) Cleanup formulas on the local copy, then validate exact final bytes.
+    # 7) Clean formulas on the proposal copy and validate the exact output bytes.
     final_bytes, formulas_removed = remove_sheet_formulas(
         scheduled_bytes,
         "Ke_hoach_SX",
     )
     steps.append("cleanup")
     report = attach_output_hash(report, final_bytes)
-    verify_info = verify_workbook(final_bytes, schedule_report=report)
+    verify_info = verify_weekly_workbook(
+        final_bytes,
+        schedule_report=report,
+        plan_year=plan_year,
+        plan_month=plan_month,
+    )
     steps.append("verify")
 
     after_snapshot = _planning_snapshot(final_bytes)
     report["pipeline"] = {
         "mode": "offline_single_snapshot",
+        "engine": "ke_hoach_sx_tuan_v1",
         "steps": steps,
         "source_period": source_key,
         "plan_period": plan_key,
@@ -237,13 +233,11 @@ def prepare_pipeline_output(
         "calendar_cells_changed": calendar_info.get("changed_count", 0),
         "metric_rows_changed": metric_changes,
         "metric_rows_patched": metric_patched,
-        "schedule_cells_changed": schedule_info.get("changed_count", 0),
+        "schedule_cells_changed": weekly_analysis.changed_cells,
+        "policy_warning_count": len(weekly_analysis.policy_warnings),
         "formulas_removed": formulas_removed,
         "planning_changes": _diff_snapshot(before_snapshot, after_snapshot),
         "verify": verify_info,
     }
 
-    # The pipeline block is appended after build_schedule_report(), so normalize
-    # it again here. This makes dry-run artifacts and post-upload audit saving
-    # safe even when before/after R values are datetime objects.
     return final_bytes, json_safe(report), next_state
