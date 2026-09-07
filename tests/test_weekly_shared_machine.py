@@ -2,7 +2,12 @@ import unittest
 from collections import defaultdict
 from datetime import date
 
+from sync_planning_weekly_model import (
+    WeeklyAnalysis,
+    build_weekly_schedule_report,
+)
 from weekly_planning_engine import (
+    DailyPlanRow,
     PlannerPolicy,
     WeeklyInputRow,
     build_daily_plan,
@@ -102,6 +107,41 @@ class WeeklySharedMachineTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "chung một máy"):
             build_daily_plan(rows, policy=PlannerPolicy())
+
+
+    def test_report_cannot_mark_parallel_shared_machine_as_passed(self):
+        calculated = calculate_rows(
+            [
+                make_row(9301, "KHS", 2, qty=200.0, quy_cach=1.0),
+                make_row(9302, "PET 9000", 3, qty=200.0, quy_cach=1.0),
+            ],
+            period_year=2026,
+            period_month=9,
+        )
+        # Deliberately construct an impossible plan: both products consume the
+        # full two-shift machine on the same day.
+        impossible = [
+            DailyPlanRow(9301, 2, "KHS", date(2026, 9, 1), 200.0),
+            DailyPlanRow(9302, 3, "PET 9000", date(2026, 9, 1), 200.0),
+        ]
+        analysis = WeeklyAnalysis(
+            calculated=calculated,
+            daily_plan=impossible,
+            policy_warnings=[],
+            changed_cells=0,
+            period_year=2026,
+            period_month=9,
+        )
+        report = build_weekly_schedule_report(
+            b"synthetic",
+            analysis,
+            input_revision={"target": {"etag": "synthetic"}},
+        )
+        resource = report["status"]["resource_validation"]
+        self.assertFalse(resource["ok"])
+        self.assertEqual(resource["state"], "shared_machine_over_capacity")
+        self.assertEqual(resource["shared_machine"]["over_capacity_dates"], ["2026-09-01"])
+        self.assertEqual(report["publish_status"], "review_required")
 
 
 if __name__ == "__main__":
