@@ -143,6 +143,50 @@ class WeeklySharedMachineTests(unittest.TestCase):
         self.assertEqual(resource["shared_machine"]["over_capacity_dates"], ["2026-09-01"])
         self.assertEqual(report["publish_status"], "review_required")
 
+    def test_schedule_dates_never_drift_outside_planning_month(self):
+        # ton_dau_thuc_te = 4000 with avg_daily_sales = 100 means stockout is 40 days away (in October)
+        rows = calculate_rows(
+            [
+                WeeklyInputRow(
+                    source_row=2, ma_sp=9401, ten_sp="A", don_vi_tinh="DV",
+                    sl_me=100.0, sl_ca=100.0, chuyen="KHS", nhom_sp="KHS", phan_loai="Không đường",
+                    quy_cach=1.0, shifts_per_day=1.0,
+                    ton_dau_thuc_te=4000.0, ton_dau_so_sach=0.0, fc=2600.0, ton_cuoi_du_kien=1000.0,
+                    no_kho=0.0, avg_daily_sales=100.0, leadtime=0.0, debt_formula_mode="SUBTRACT_BOOK_ON_DEBT",
+                )
+            ],
+            period_year=2026,
+            period_month=9,
+        )
+        # Column R (start_datetime) reflects the raw stockout date (in October)
+        self.assertEqual(rows[0].start_datetime.month, 10)
+
+        # But daily plan must remain strictly inside September 2026!
+        plan = build_daily_plan(rows, policy=PlannerPolicy())
+        self.assertTrue(len(plan) > 0)
+        for item in plan:
+            self.assertEqual(item.date.year, 2026)
+            self.assertEqual(item.date.month, 9)
+
+    def test_schedule_works_across_all_month_lengths(self):
+        # 28 days (Feb 2025), 29 days (Feb 2028), 30 days (Apr 2026), 31 days (May 2026)
+        cases = [(2025, 2, 28), (2028, 2, 29), (2026, 4, 30), (2026, 5, 31)]
+        for year, month, expected_days in cases:
+            rows = calculate_rows(
+                [
+                    make_row(9501, "KHS", 2, qty=100.0, quy_cach=1.0, shifts=1.0),
+                    make_row(9502, "PET 9000", 3, qty=100.0, quy_cach=1.0, shifts=1.0),
+                ],
+                period_year=year,
+                period_month=month,
+            )
+            plan = build_daily_plan(rows, policy=PlannerPolicy())
+            dates = {item.date for item in plan}
+            for d in dates:
+                self.assertEqual(d.year, year)
+                self.assertEqual(d.month, month)
+                self.assertLessEqual(d.day, expected_days)
+
 
 if __name__ == "__main__":
     unittest.main()

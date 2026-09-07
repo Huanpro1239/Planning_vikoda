@@ -69,6 +69,8 @@ class WeeklyCalculatedRow:
     start_datetime: datetime | None
     p_service_need: float
     q_service_rounded: float
+    period_year: int = 0
+    period_month: int = 0
 
     @property
     def start_date(self) -> date | None:
@@ -178,6 +180,8 @@ def calculate_row(
         start_datetime=start_datetime,
         p_service_need=p_service_need,
         q_service_rounded=q_service_rounded,
+        period_year=period_year,
+        period_month=period_month,
     )
 
 def calculate_rows(
@@ -194,6 +198,12 @@ def calculate_rows(
 
 def _month_dates(year: int, month: int) -> list[date]:
     return [date(year, month, d) for d in range(1, monthrange(year, month)[1] + 1)]
+
+
+def _get_period_dates(row: WeeklyCalculatedRow) -> list[date]:
+    year = row.period_year or (row.start_datetime.year if row.start_datetime else 2026)
+    month = row.period_month or (row.start_datetime.month if row.start_datetime else 1)
+    return _month_dates(year, month)
 
 
 def _schedule_serialized_lines(
@@ -237,9 +247,10 @@ def _schedule_serialized_lines(
     previous_end_shift = 0.0
 
     # Đánh giá tổng công suất khả dụng so với tổng nhu cầu của máy chung trong tháng.
-    first_date = selected[0].start_datetime.date()
-    month_dates = _month_dates(first_date.year, first_date.month)
+    month_dates = _get_period_dates(selected[0])
     total_capacity_shifts = len(month_dates) * shared_shifts_per_day
+    first_date = month_dates[0]
+    last_date = month_dates[-1]
 
     total_service_shifts = sum(r.service_qty / r.input.sl_ca for r in selected)
     total_buffer_shifts = sum(r.buffer_qty / r.input.sl_ca for r in selected)
@@ -269,9 +280,8 @@ def _schedule_serialized_lines(
         if qty_to_schedule <= TOLERANCE:
             continue
 
-        start_day = row.start_datetime.date()
-        first = date(start_day.year, start_day.month, 1)
-        earliest_shift = (start_day - first).days * shared_shifts_per_day
+        start_day = min(last_date, max(first_date, row.start_datetime.date()))
+        earliest_shift = (start_day - first_date).days * shared_shifts_per_day
         setup_shifts = (
             policy.setup_shifts
             if previous_quy_cach is not None
@@ -282,9 +292,7 @@ def _schedule_serialized_lines(
         start_shift = max(earliest_shift, previous_end_shift) + setup_shifts
         end_shift = start_shift + qty_to_schedule / item.sl_ca
 
-        for day_no, current in enumerate(
-            _month_dates(start_day.year, start_day.month), start=1
-        ):
+        for day_no, current in enumerate(month_dates, start=1):
             day_start_shift = (day_no - 1) * shared_shifts_per_day
             day_end_shift = day_no * shared_shifts_per_day
             overlap = max(
@@ -322,8 +330,10 @@ def _schedule_galon(
             or row.start_datetime is None
         ):
             continue
-        start = row.start_datetime.date()
-        dates = _month_dates(start.year, start.month)
+        dates = _get_period_dates(row)
+        first_date = dates[0]
+        last_date = dates[-1]
+        start = min(last_date, max(first_date, row.start_datetime.date()))
 
         if item.ma_sp in policy.spread_product_codes:
             working = [d for d in dates if d.weekday() != 6]
@@ -351,7 +361,7 @@ def _schedule_galon(
                         )
                     )
         else:
-            start_day_no = start.day
+            start_day_no = (start - first_date).days + 1
             for day_no, current in enumerate(dates, start=1):
                 run_day = day_no - start_day_no
                 qty = max(
@@ -398,8 +408,7 @@ def _schedule_rgb_gas(
     for row in gas_rows:
         item = row.input
         assert row.start_datetime is not None
-        first = date(row.start_datetime.year, row.start_datetime.month, 1)
-        dates = _month_dates(first.year, first.month)
+        dates = _get_period_dates(row)
         if item.sl_me <= 0:
             raise ValueError(f"SL/mẻ phải > 0 cho SKU RGB {item.ma_sp}")
         total_units = ceil(row.q_rounded / item.sl_me - TOLERANCE)
@@ -479,8 +488,10 @@ def _schedule_rgb_nogas(
         assert row.start_datetime is not None
         if item.sl_me <= 0:
             raise ValueError(f"SL/mẻ phải > 0 cho SKU RGB {item.ma_sp}")
-        start = row.start_datetime.date()
-        dates = _month_dates(start.year, start.month)
+        dates = _get_period_dates(row)
+        first_date = dates[0]
+        last_date = dates[-1]
+        start = min(last_date, max(first_date, row.start_datetime.date()))
         total_units = ceil(row.q_rounded / item.sl_me - TOLERANCE)
         lookup = _daily_lookup(existing + output)
 
@@ -513,12 +524,14 @@ def _schedule_rgb_nogas(
             for d in active
             if avail_by_day[d] > 0 and (d.weekday() != 6 or allow_sun)
         ]
-        active_weeks = max(1, ceil((len(dates) - start.day + 1) / 7))
+        start_offset = (start - first_date).days
+        active_weeks = max(1, ceil((len(dates) - start_offset) / 7))
         done_units = 0
         for current in active:
             if current not in eligible:
                 continue
-            wk = min(active_weeks, ceil((current.day - start.day + 1) / 7))
+            cur_offset = (current - first_date).days
+            wk = min(active_weeks, ceil((cur_offset - start_offset + 1) / 7))
             need_units = max(0, total_units - done_units)
             future = [d for d in eligible if d > current]
             future_cap = sum(avail_by_day[d] for d in future)
