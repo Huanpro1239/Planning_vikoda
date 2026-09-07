@@ -245,21 +245,61 @@ def patch_weekly_workbook(workbook_bytes: bytes, analysis: WeeklyAnalysis) -> by
 
 
 def _mass_balance(analysis: WeeklyAnalysis):
+    """Mass balance with explicit service and safety-stock layers."""
+
     scheduled: dict[str, float] = defaultdict(float)
     for item in analysis.daily_plan:
         scheduled[str(item.ma_sp)] += float(item.qty)
-    mass, carryovers = {}, []
+
+    mass, service_carryovers, buffer_carryovers = {}, [], []
     for calc in analysis.calculated:
         code = str(calc.input.ma_sp)
-        planned = max(0.0, float(calc.q_rounded)); done = scheduled.get(code, 0.0)
-        if done > planned + BALANCE_EPS:
-            raise RuntimeError(f"Mã {code} scheduled={done} vượt Q={planned}.")
-        carry = max(0.0, planned - done)
-        if carry <= BALANCE_EPS: carry = 0.0
-        if carry: carryovers.append(code)
-        mass[code] = {"uom": calc.input.don_vi_tinh, "planned_qty": planned, "scheduled_qty": done, "carryover_qty": carry, "balanced_qty": done + carry}
-    return mass, sorted(carryovers)
+        desired = calc.schedulable_qty
+        service_target = calc.service_qty
+        done = scheduled.get(code, 0.0)
 
+        if done > desired + BALANCE_EPS:
+            raise RuntimeError(f"Mã {code} scheduled={done} vượt Q={desired}.")
+
+        service_done = min(done, service_target)
+        service_carry = max(0.0, service_target - service_done)
+        buffer_target = calc.buffer_qty
+        buffer_done = max(0.0, done - service_target)
+        buffer_done = min(buffer_done, buffer_target)
+        buffer_carry = max(0.0, buffer_target - buffer_done)
+        total_carry = max(0.0, desired - done)
+
+        if service_carry <= BALANCE_EPS:
+            service_carry = 0.0
+        if buffer_carry <= BALANCE_EPS:
+            buffer_carry = 0.0
+        if total_carry <= BALANCE_EPS:
+            total_carry = 0.0
+
+        if service_carry:
+            service_carryovers.append(code)
+        if buffer_carry:
+            buffer_carryovers.append(code)
+
+        mass[code] = {
+            "uom": calc.input.don_vi_tinh,
+            "planned_qty": desired,
+            "scheduled_qty": done,
+            "carryover_qty": total_carry,
+            "balanced_qty": done + total_carry,
+            "service_target_qty": service_target,
+            "service_scheduled_qty": service_done,
+            "service_carryover_qty": service_carry,
+            "buffer_target_qty": buffer_target,
+            "buffer_scheduled_qty": buffer_done,
+            "buffer_carryover_qty": buffer_carry,
+        }
+
+    return (
+        mass,
+        sorted(service_carryovers),
+        sorted(buffer_carryovers),
+    )
 
 def _validate_shared_machine(analysis: WeeklyAnalysis, policy: PlannerPolicy | None = None):
     """Kiểm tra capacity vật lý của máy chung KHS + PET 9000.
