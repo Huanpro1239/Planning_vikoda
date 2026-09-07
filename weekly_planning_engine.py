@@ -163,7 +163,12 @@ def _schedule_serialized_lines(
     rows: list[WeeklyCalculatedRow],
     policy: PlannerPolicy,
 ) -> list[DailyPlanRow]:
-    """Xếp campaign nối tiếp cho các line KHS/PET theo S và setup quy cách."""
+    """Xếp KHS/PET 9000 trên *một* máy chung, tuyệt đối không chạy song song.
+
+    Các campaign được đưa vào một timeline duy nhất theo ngày bắt đầu S và
+    source row. Đổi Quy cách giữa hai campaign liên tiếp, kể cả khi đổi từ
+    KHS sang PET 9000 hoặc ngược lại, đều tiêu tốn setup_shifts.
+    """
 
     selected = [
         row
@@ -172,12 +177,27 @@ def _schedule_serialized_lines(
         and row.q_rounded > TOLERANCE
         and row.start_datetime is not None
     ]
+    if not selected:
+        return []
+
+    shared_shifts_per_day = selected[0].input.shifts_per_day
+    if shared_shifts_per_day <= 0:
+        raise ValueError("Máy chung KHS/PET 9000 phải có số ca/ngày > 0.")
+    if any(
+        abs(row.input.shifts_per_day - shared_shifts_per_day) > TOLERANCE
+        for row in selected[1:]
+    ):
+        raise ValueError(
+            "KHS và PET 9000 chung một máy nên phải dùng cùng lịch số ca/ngày."
+        )
+
+    # S là tín hiệu ưu tiên. Không sort tách theo line, vì như vậy mỗi line sẽ
+    # có timeline riêng và có thể vô tình chạy song song.
     selected.sort(
-        key=lambda r: (r.input.chuyen, r.start_datetime.date(), r.input.source_row)
+        key=lambda r: (r.start_datetime, r.input.source_row, r.input.chuyen)
     )
 
     output: list[DailyPlanRow] = []
-    previous_line: str | None = None
     previous_quy_cach: float | None = None
     previous_end_shift = 0.0
 
@@ -186,25 +206,25 @@ def _schedule_serialized_lines(
         assert row.start_datetime is not None
         start_day = row.start_datetime.date()
         first = date(start_day.year, start_day.month, 1)
-        earliest_shift = (start_day - first).days * item.shifts_per_day
+        earliest_shift = (start_day - first).days * shared_shifts_per_day
         setup_shifts = (
             policy.setup_shifts
-            if previous_line == item.chuyen
-            and previous_quy_cach is not None
+            if previous_quy_cach is not None
             and abs(previous_quy_cach - item.quy_cach) > TOLERANCE
             else 0.0
         )
-        if previous_line == item.chuyen:
-            start_shift = max(earliest_shift, previous_end_shift) + setup_shifts
-        else:
-            start_shift = max(earliest_shift, 0.0) + setup_shifts
+
+        # Một previous_end_shift duy nhất cho toàn bộ KHS + PET 9000.
+        # Vì vậy campaign kế tiếp không thể bắt đầu trước khi campaign trước
+        # trên cùng máy đã kết thúc.
+        start_shift = max(earliest_shift, previous_end_shift) + setup_shifts
         end_shift = start_shift + row.q_rounded / item.sl_ca
 
         for day_no, current in enumerate(
             _month_dates(start_day.year, start_day.month), start=1
         ):
-            day_start_shift = (day_no - 1) * item.shifts_per_day
-            day_end_shift = day_no * item.shifts_per_day
+            day_start_shift = (day_no - 1) * shared_shifts_per_day
+            day_end_shift = day_no * shared_shifts_per_day
             overlap = max(
                 0.0,
                 min(end_shift, day_end_shift) - max(start_shift, day_start_shift),
@@ -215,7 +235,6 @@ def _schedule_serialized_lines(
                     DailyPlanRow(item.ma_sp, item.source_row, item.chuyen, current, qty)
                 )
 
-        previous_line = item.chuyen
         previous_quy_cach = item.quy_cach
         previous_end_shift = end_shift
 
