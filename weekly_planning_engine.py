@@ -245,7 +245,7 @@ def _schedule_serialized_lines(
         doh = (inp.ton_dau_thuc_te / inp.avg_daily_sales) if inp.avg_daily_sales > TOLERANCE else 999.0
         net_doh = doh - inp.leadtime
         st = r.start_datetime or datetime(2026, 1, 1)
-        return (has_debt, net_doh, st, inp.source_row)
+        return (st, has_debt, net_doh, inp.source_row)
 
     selected.sort(key=priority_key)
 
