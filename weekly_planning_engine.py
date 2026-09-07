@@ -103,31 +103,43 @@ def _roundup_away_from_zero(value: float) -> int:
     return ceil(value) if value > 0 else -ceil(abs(value))
 
 
+def _round_production(value: float, row: WeeklyInputRow) -> float:
+    if abs(value) <= TOLERANCE:
+        return 0.0
+    basis = row.sl_me if row.phan_loai == "Có đường" else row.sl_ca
+    if basis <= 0:
+        raise ValueError(f"Basis làm tròn <= 0 cho SKU {row.ma_sp}")
+    return _roundup_away_from_zero(value / basis) * basis
+
+
 def calculate_row(
     row: WeeklyInputRow,
     *,
     period_year: int,
     period_month: int,
 ) -> WeeklyCalculatedRow:
-    """Tính P/Q/R/S từ một dòng dữ liệu runtime."""
+    """Tính mục tiêu đầy đủ và nhu cầu bắt buộc theo Service First.
+
+    Mục tiêu đầy đủ vẫn dùng công thức workbook hiện hành. Khi không có nợ,
+    phần tồn cuối dự kiến được tách thành safety-stock buffer. Phần service
+    phải được ưu tiên trước; buffer chỉ dùng capacity còn lại.
+    """
 
     if row.no_kho > 0:
         if row.debt_formula_mode == "SUBTRACT_BOOK_ON_DEBT":
-            p_need = row.fc + row.no_kho - row.ton_dau_so_sach
+            p_service_need = row.fc + row.no_kho - row.ton_dau_so_sach
         elif row.debt_formula_mode == "IGNORE_BOOK_ON_DEBT":
-            p_need = row.fc + row.no_kho
+            p_service_need = row.fc + row.no_kho
         else:  # pragma: no cover
             raise ValueError(f"debt_formula_mode không hợp lệ: {row.debt_formula_mode}")
+        # Giữ nguyên rule nợ đã kiểm chứng: nhánh nợ không cộng tồn cuối.
+        p_need = p_service_need
     else:
-        p_need = row.fc + row.ton_cuoi_du_kien - row.ton_dau_so_sach + row.no_kho
+        p_service_need = row.fc - row.ton_dau_so_sach + row.no_kho
+        p_need = p_service_need + row.ton_cuoi_du_kien
 
-    if abs(p_need) <= TOLERANCE:
-        q_rounded = 0.0
-    else:
-        basis = row.sl_me if row.phan_loai == "Có đường" else row.sl_ca
-        if basis <= 0:
-            raise ValueError(f"Basis làm tròn <= 0 cho SKU {row.ma_sp}")
-        q_rounded = _roundup_away_from_zero(p_need / basis) * basis
+    q_service_rounded = _round_production(p_service_need, row)
+    q_rounded = _round_production(p_need, row)
 
     if row.sl_ca <= 0 or row.shifts_per_day <= 0:
         raise ValueError(f"SL/ca và ca/ngày phải > 0 cho SKU {row.ma_sp}")
@@ -149,8 +161,9 @@ def calculate_row(
         q_rounded=q_rounded,
         production_days=production_days,
         start_datetime=start_datetime,
+        p_service_need=p_service_need,
+        q_service_rounded=q_service_rounded,
     )
-
 
 def calculate_rows(
     rows: list[WeeklyInputRow],
