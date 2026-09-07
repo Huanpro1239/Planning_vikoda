@@ -35,6 +35,7 @@ class PlannerPolicy:
     rgb_nogas_group: str = "RGB không gas"
     pet_blocking_line: str = "PET 9000"
     spread_product_codes: frozenset[int] = field(default_factory=frozenset)
+    allow_capacity_trim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,9 +239,15 @@ def _schedule_serialized_lines(
             "KHS và PET 9000 chung một máy nên phải dùng cùng lịch số ca/ngày."
         )
 
-    selected.sort(
-        key=lambda r: (r.start_datetime, r.input.source_row, r.input.chuyen)
-    )
+    def priority_key(r: WeeklyCalculatedRow):
+        inp = r.input
+        has_debt = 0 if inp.no_kho > TOLERANCE else 1
+        doh = (inp.ton_dau_thuc_te / inp.avg_daily_sales) if inp.avg_daily_sales > TOLERANCE else 999.0
+        net_doh = doh - inp.leadtime
+        st = r.start_datetime or datetime(2026, 1, 1)
+        return (has_debt, net_doh, st, inp.source_row)
+
+    selected.sort(key=priority_key)
 
     output: list[DailyPlanRow] = []
     previous_quy_cach: float | None = None
@@ -255,28 +262,63 @@ def _schedule_serialized_lines(
     total_service_shifts = sum(r.service_qty / r.input.sl_ca for r in selected)
     total_buffer_shifts = sum(r.buffer_qty / r.input.sl_ca for r in selected)
 
-    total_setup_shifts = 0.0
-    prev_mold = None
-    for r in selected:
-        if prev_mold is not None and abs(prev_mold - r.input.quy_cach) > TOLERANCE:
-            total_setup_shifts += policy.setup_shifts
-        prev_mold = r.input.quy_cach
+    # Dự phòng setup bảo thủ để thỏa mãn cả timeline engine lẫn chặn dưới verify_planning_month
+    conservative_setup_shifts = max(0, len(selected) - 1) * policy.setup_shifts
+    avail_prod_shifts = max(0.0, total_capacity_shifts - conservative_setup_shifts)
 
     has_enough_capa = (
-        (total_service_shifts + total_buffer_shifts + total_setup_shifts)
+        (total_service_shifts + total_buffer_shifts + conservative_setup_shifts)
         <= total_capacity_shifts + TOLERANCE
     )
+    service_fits = (
+        (total_service_shifts + conservative_setup_shifts)
+        <= total_capacity_shifts + TOLERANCE
+    )
+
+    allocated_qty: dict[int, float] = {}
+    phase = "full"
+    if has_enough_capa:
+        phase = "full"
+        for r in selected:
+            allocated_qty[r.input.ma_sp] = r.schedulable_qty
+    elif service_fits:
+        phase = "service"
+        for r in selected:
+            allocated_qty[r.input.ma_sp] = r.service_qty
+    elif policy.allow_capacity_trim:
+        # Service vượt quá công suất máy: Cân đối cắt giảm để vừa khít công suất
+        phase = "capacity_balanced"
+        scale = avail_prod_shifts / total_service_shifts if total_service_shifts > TOLERANCE else 1.0
+        for r in selected:
+            inp = r.input
+            basis = inp.sl_me if is_sugar_classification(inp.phan_loai) else inp.sl_ca
+            raw_target = r.service_qty * scale
+            min_target = basis if r.service_qty > TOLERANCE else 0.0
+            rounded = max(min_target, _roundup_away_from_zero(raw_target / basis) * basis)
+            allocated_qty[inp.ma_sp] = min(r.service_qty, rounded)
+
+        while True:
+            cur_shifts = sum(allocated_qty[r.input.ma_sp] / r.input.sl_ca for r in selected)
+            if cur_shifts <= avail_prod_shifts + TOLERANCE:
+                break
+            candidates = [
+                r for r in selected
+                if allocated_qty[r.input.ma_sp] > (r.input.sl_me if is_sugar_classification(r.input.phan_loai) else r.input.sl_ca) + TOLERANCE
+            ]
+            if not candidates:
+                break
+            largest = max(candidates, key=lambda r: allocated_qty[r.input.ma_sp] / r.input.sl_ca)
+            basis = largest.input.sl_me if is_sugar_classification(largest.input.phan_loai) else largest.input.sl_ca
+            allocated_qty[largest.input.ma_sp] -= basis
+    else:
+        phase = "service"
+        for r in selected:
+            allocated_qty[r.input.ma_sp] = r.service_qty
 
     for row in selected:
         item = row.input
         assert row.start_datetime is not None
-        # Nếu không đủ capa: không tính phần tồn cuối dự kiến (buffer).
-        # Toàn bộ SKU chạy liên tục 1 đợt duy nhất theo service_qty để bảo đảm 100% bán hàng & nợ,
-        # tránh xẻ nhỏ SKU làm 2 đợt hoặc chạy vụn vặt ở cuối tháng.
-        # Nếu đủ capa: chạy đầy đủ cả service lẫn buffer (schedulable_qty) trong 1 đợt liên tục.
-        qty_to_schedule = (
-            row.schedulable_qty if has_enough_capa else row.service_qty
-        )
+        qty_to_schedule = allocated_qty.get(item.ma_sp, 0.0)
         if qty_to_schedule <= TOLERANCE:
             continue
 
@@ -308,7 +350,7 @@ def _schedule_serialized_lines(
                         item.chuyen,
                         current,
                         qty,
-                        phase="full" if has_enough_capa else "service",
+                        phase=phase,
                     )
                 )
 

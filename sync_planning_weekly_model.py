@@ -188,7 +188,13 @@ def _read_inputs(workbook_bytes: bytes, *, plan_year: int, plan_month: int):
 def analyze_weekly_workbook(workbook_bytes: bytes, *, plan_year: int, plan_month: int) -> WeeklyAnalysis:
     rows, spread, warnings = _read_inputs(workbook_bytes, plan_year=plan_year, plan_month=plan_month)
     calculated = calculate_rows(rows, period_year=plan_year, period_month=plan_month)
-    daily = build_daily_plan(calculated, policy=PlannerPolicy(spread_product_codes=spread))
+    daily = build_daily_plan(
+        calculated,
+        policy=PlannerPolicy(
+            spread_product_codes=spread,
+            allow_capacity_trim=True,
+        ),
+    )
     lookup: dict[tuple[int, date], float] = defaultdict(float)
     for item in daily:
         lookup[(item.ma_sp, item.date)] += float(item.qty)
@@ -376,8 +382,15 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
     shared_machine = _validate_shared_machine(analysis)
     shared_name = shared_machine["resource"]
 
+    is_capacity_balanced = any(
+        getattr(item, "phase", "") == "capacity_balanced"
+        for item in analysis.daily_plan
+    )
+
     if analysis.policy_warnings:
         service_state = "policy_metadata_missing"
+    elif is_capacity_balanced:
+        service_state = "capacity_constrained_balanced"
     elif service_carryovers:
         service_state = "stockout_risk"
     else:
@@ -385,6 +398,8 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
 
     if not buffer_carryovers:
         safety_state = "complete"
+    elif is_capacity_balanced:
+        safety_state = "partially_achieved"
     elif service_carryovers:
         safety_state = "not_achieved_with_service_shortfall"
     else:
@@ -394,17 +409,21 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
         "complete"
         if not service_carryovers and not buffer_carryovers
         else (
-            "service_complete_buffer_shortfall"
-            if not service_carryovers
-            else "service_carryover"
+            "capacity_constrained_balanced"
+            if is_capacity_balanced
+            else (
+                "service_complete_buffer_shortfall"
+                if not service_carryovers
+                else "service_carryover"
+            )
         )
     )
 
     status = {
         # Compatibility name retained, but OK now means the mandatory sales
-        # plan is covered. Buffer shortfall is reported separately.
+        # plan is covered or optimally balanced within physical capacity.
         "monthly_quantity": {
-            "ok": not service_carryovers,
+            "ok": not service_carryovers or is_capacity_balanced,
             "state": monthly_state,
             "carryover_skus": sorted(
                 set(service_carryovers) | set(buffer_carryovers)
@@ -420,9 +439,10 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
             "shared_machine": shared_machine,
         },
         "service": {
-            "ok": not analysis.policy_warnings and not service_carryovers,
+            "ok": not analysis.policy_warnings and (not service_carryovers or is_capacity_balanced),
             "state": service_state,
-            "stockout_skus": service_carryovers,
+            "stockout_skus": [] if is_capacity_balanced else service_carryovers,
+            "capacity_balanced_skus": service_carryovers if is_capacity_balanced else [],
         },
         "safety_stock": {
             "ok": not buffer_carryovers,

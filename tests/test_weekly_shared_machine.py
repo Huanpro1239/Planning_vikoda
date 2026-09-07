@@ -187,6 +187,64 @@ class WeeklySharedMachineTests(unittest.TestCase):
                 self.assertEqual(d.month, month)
                 self.assertLessEqual(d.day, expected_days)
 
+    def test_priority_and_capacity_trim_fits_within_monthly_limits(self):
+        # 3 SKUs on shared machine KHS + PET 9000, month = Sep (30 days * 1 shift = 30 shifts)
+        # SKU 9601: has debt, must run first
+        # SKU 9602: huge FC = 2500 (25 shifts)
+        # SKU 9603: normal FC = 1500 (15 shifts)
+        # Total raw service shifts = 10 + 25 + 15 = 50 shifts > 30 shifts capacity!
+        rows = calculate_rows(
+            [
+                WeeklyInputRow(
+                    source_row=2, ma_sp=9601, ten_sp="Debt SKU", don_vi_tinh="DV",
+                    sl_me=100.0, sl_ca=100.0, chuyen="KHS", nhom_sp="KHS", phan_loai="Không đường",
+                    quy_cach=1.0, shifts_per_day=1.0,
+                    ton_dau_thuc_te=0.0, ton_dau_so_sach=0.0, fc=500.0, ton_cuoi_du_kien=0.0,
+                    no_kho=500.0, avg_daily_sales=50.0, leadtime=0.0, debt_formula_mode="SUBTRACT_BOOK_ON_DEBT",
+                ),
+                WeeklyInputRow(
+                    source_row=3, ma_sp=9602, ten_sp="Huge FC SKU", don_vi_tinh="DV",
+                    sl_me=100.0, sl_ca=100.0, chuyen="KHS", nhom_sp="KHS", phan_loai="Không đường",
+                    quy_cach=1.0, shifts_per_day=1.0,
+                    ton_dau_thuc_te=100.0, ton_dau_so_sach=0.0, fc=2500.0, ton_cuoi_du_kien=0.0,
+                    no_kho=0.0, avg_daily_sales=100.0, leadtime=0.0, debt_formula_mode="SUBTRACT_BOOK_ON_DEBT",
+                ),
+                WeeklyInputRow(
+                    source_row=4, ma_sp=9603, ten_sp="Normal FC SKU", don_vi_tinh="DV",
+                    sl_me=100.0, sl_ca=100.0, chuyen="PET 9000", nhom_sp="PET 9000", phan_loai="Không đường",
+                    quy_cach=1.0, shifts_per_day=1.0,
+                    ton_dau_thuc_te=500.0, ton_dau_so_sach=0.0, fc=1500.0, ton_cuoi_du_kien=0.0,
+                    no_kho=0.0, avg_daily_sales=50.0, leadtime=0.0, debt_formula_mode="SUBTRACT_BOOK_ON_DEBT",
+                ),
+            ],
+            period_year=2026,
+            period_month=9,
+        )
+        plan = build_daily_plan(rows, policy=PlannerPolicy(allow_capacity_trim=True))
+        self.assertTrue(len(plan) > 0)
+
+        # 1. Total scheduled shifts must be <= 30
+        total_shifts = sum(item.qty / 100.0 for item in plan)
+        self.assertLessEqual(total_shifts, 30.0 + 1e-6)
+
+        # 2. Every single SKU must have at least 1 batch scheduled (no SKU left at 0)
+        scheduled_by_code = {}
+        for item in plan:
+            scheduled_by_code[item.ma_sp] = scheduled_by_code.get(item.ma_sp, 0.0) + item.qty
+        self.assertEqual(len(scheduled_by_code), 3)
+        for code in [9601, 9602, 9603]:
+            self.assertGreaterEqual(scheduled_by_code[code], 100.0)
+
+        # 3. Priority: Debt SKU 9601 must start on day 1
+        sku_9601_dates = [item.date for item in plan if item.ma_sp == 9601]
+        self.assertEqual(min(sku_9601_dates), date(2026, 9, 1))
+
+        # 4. Each SKU must run contiguously (no gap)
+        for code in [9601, 9602, 9603]:
+            dates = sorted(item.date for item in plan if item.ma_sp == code)
+            for i in range(len(dates) - 1):
+                self.assertEqual((dates[i + 1] - dates[i]).days, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
