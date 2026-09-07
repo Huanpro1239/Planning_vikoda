@@ -98,6 +98,24 @@ def _same(current: Any, target: Any) -> bool:
     return current == target
 
 
+
+def _scheduled_by_code(plan: list[Any]) -> dict[int, float]:
+    result: dict[int, float] = defaultdict(float)
+    for item in plan:
+        result[int(item.ma_sp)] += float(item.qty)
+    return result
+
+
+def _committed_qty(calc: WeeklyCalculatedRow, scheduled_by_code: dict[int, float]) -> float:
+    """Quantity actually committed to the daily plan for this snapshot."""
+    scheduled = max(0.0, float(scheduled_by_code.get(calc.input.ma_sp, 0.0)))
+    return min(calc.schedulable_qty, scheduled)
+
+
+def _committed_days(calc: WeeklyCalculatedRow, scheduled_by_code: dict[int, float]) -> float:
+    committed = _committed_qty(calc, scheduled_by_code)
+    return committed / calc.input.sl_ca / calc.input.shifts_per_day
+
 def _read_inputs(workbook_bytes: bytes, *, plan_year: int, plan_month: int):
     wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
@@ -174,6 +192,7 @@ def analyze_weekly_workbook(workbook_bytes: bytes, *, plan_year: int, plan_month
     lookup: dict[tuple[int, date], float] = defaultdict(float)
     for item in daily:
         lookup[(item.ma_sp, item.date)] += float(item.qty)
+    scheduled_by_code = _scheduled_by_code(daily)
     wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
         ws = wb[PLANNING_SHEET]
@@ -181,7 +200,14 @@ def analyze_weekly_workbook(workbook_bytes: bytes, *, plan_year: int, plan_month
         days = calendar.monthrange(plan_year, plan_month)[1]
         for calc in calculated:
             r = calc.input.source_row
-            for c, target in ((15, calc.p_need), (16, calc.q_rounded), (17, calc.production_days), (18, calc.start_datetime)):
+            committed = _committed_qty(calc, scheduled_by_code)
+            committed_days = _committed_days(calc, scheduled_by_code)
+            for c, target in (
+                (15, calc.p_need),
+                (16, committed),
+                (17, committed_days),
+                (18, calc.start_datetime),
+            ):
                 if not _same(ws.cell(r, c).value, target):
                     changed += 1
             for d in range(1, days + 1):
@@ -201,10 +227,15 @@ def patch_weekly_workbook(workbook_bytes: bytes, analysis: WeeklyAnalysis) -> by
         for item in analysis.daily_plan:
             lookup[(item.ma_sp, item.date)] += float(item.qty)
         days = calendar.monthrange(analysis.period_year, analysis.period_month)[1]
+        scheduled_by_code = _scheduled_by_code(analysis.daily_plan)
         for calc in analysis.calculated:
             r = calc.input.source_row
-            ws.cell(r, 15, calc.p_need); ws.cell(r, 16, calc.q_rounded)
-            ws.cell(r, 17, calc.production_days); ws.cell(r, 18, calc.start_datetime)
+            committed = _committed_qty(calc, scheduled_by_code)
+            committed_days = _committed_days(calc, scheduled_by_code)
+            # O keeps the desired need including target stock. P/Q are the
+            # production commitment that physically fits the computed schedule.
+            ws.cell(r, 15, calc.p_need); ws.cell(r, 16, committed)
+            ws.cell(r, 17, committed_days); ws.cell(r, 18, calc.start_datetime)
             for d in range(1, days + 1):
                 qty = lookup.get((calc.input.ma_sp, date(analysis.period_year, analysis.period_month, d)), 0.0)
                 ws.cell(r, START_COLUMN + d - 1).value = qty if qty > EPS else None
