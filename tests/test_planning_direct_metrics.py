@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sync_planning_metrics import (
     _bootstrap_opening_debt,
-    calculate_row,
+    calculate_row_default as calculate_row,
     excel_roundup_integer,
 )
 

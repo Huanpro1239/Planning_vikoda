@@ -302,44 +302,47 @@ def read_actual_stock(source_bytes):
         read_only=True,
     )
 
-    worksheet = workbook.worksheets[0]
-    print(f"[Tồn thực tế] Sheet nguồn: {worksheet.title}")
+    try:
+        worksheet = workbook.worksheets[0]
+        print(f"[Tồn thực tế] Sheet nguồn: {worksheet.title}")
 
-    result = {}
+        result = {}
 
-    for row in range(1, worksheet.max_row + 1):
-        code = normalize_code(
-            worksheet.cell(row=row, column=3).value
-        )
-        if not code:
-            continue
+        for row in range(1, worksheet.max_row + 1):
+            code = normalize_code(
+                worksheet.cell(row=row, column=3).value
+            )
+            if not code:
+                continue
 
-        if code in result:
-            raise RuntimeError(
-                f"[Tồn thực tế] Mã {code} bị lặp trong cột C."
+            if code in result:
+                raise RuntimeError(
+                    f"[Tồn thực tế] Mã {code} bị lặp trong cột C."
+                )
+
+            value_n = to_number(
+                worksheet.cell(row=row, column=14).value,
+                f"N{row}",
+            )
+            value_o = to_number(
+                worksheet.cell(row=row, column=15).value,
+                f"O{row}",
             )
 
-        value_n = to_number(
-            worksheet.cell(row=row, column=14).value,
-            f"N{row}",
-        )
-        value_o = to_number(
-            worksheet.cell(row=row, column=15).value,
-            f"O{row}",
-        )
+            result[code] = clean_number(value_n + value_o)
 
-        result[code] = clean_number(value_n + value_o)
+        if not result:
+            raise RuntimeError(
+                "[Tồn thực tế] Không đọc được mã từ cột C."
+            )
 
-    if not result:
-        raise RuntimeError(
-            "[Tồn thực tế] Không đọc được mã từ cột C."
+        print(
+            f"[Tồn thực tế] Đọc {len(result)} mã; "
+            "Ton_kho!D = N + O."
         )
-
-    print(
-        f"[Tồn thực tế] Đọc {len(result)} mã; "
-        "Ton_kho!D = N + O."
-    )
-    return result
+        return result
+    finally:
+        workbook.close()
 
 
 def read_single_value_source(
@@ -360,61 +363,64 @@ def read_single_value_source(
         keep_vba=True,
     )
 
-    if sheet_name not in workbook.sheetnames:
-        raise RuntimeError(
-            f"[{label}] Không tìm thấy {sheet_name} "
-            f"trong {source_name}."
-        )
-
-    worksheet = workbook[sheet_name]
-    result = {}
-
-    for row in range(1, worksheet.max_row + 1):
-        raw_code = worksheet.cell(
-            row=row,
-            column=code_column,
-        ).value
-
-        code = normalize_code(
-            raw_code,
-            vkd_to_vikoda=vkd_to_vikoda,
-        )
-
-        if not code:
-            continue
-
-        if code in result:
+    try:
+        if sheet_name not in workbook.sheetnames:
             raise RuntimeError(
-                f"[{label}] Mã {code} bị lặp sau chuẩn hóa."
+                f"[{label}] Không tìm thấy {sheet_name} "
+                f"trong {source_name}."
             )
 
-        value = to_number(
-            worksheet.cell(
+        worksheet = workbook[sheet_name]
+        result = {}
+
+        for row in range(1, worksheet.max_row + 1):
+            raw_code = worksheet.cell(
                 row=row,
-                column=value_column,
-            ).value,
-            f"{value_column_letter}{row}",
+                column=code_column,
+            ).value
+
+            code = normalize_code(
+                raw_code,
+                vkd_to_vikoda=vkd_to_vikoda,
+            )
+
+            if not code:
+                continue
+
+            if code in result:
+                raise RuntimeError(
+                    f"[{label}] Mã {code} bị lặp sau chuẩn hóa."
+                )
+
+            value = to_number(
+                worksheet.cell(
+                    row=row,
+                    column=value_column,
+                ).value,
+                f"{value_column_letter}{row}",
+            )
+
+            result[code] = clean_number(value)
+
+        if not result:
+            raise RuntimeError(
+                f"[{label}] Không đọc được mã sản phẩm."
+            )
+
+        mode = (
+            " (chuẩn hóa 2xxxxxxxx → 1xxxxxxxx)"
+            if vkd_to_vikoda
+            else ""
         )
 
-        result[code] = clean_number(value)
-
-    if not result:
-        raise RuntimeError(
-            f"[{label}] Không đọc được mã sản phẩm."
+        print(
+            f"[{label}] Đọc {len(result)} mã từ "
+            f"{source_name}!{sheet_name}{mode}."
         )
 
-    mode = (
-        " (chuẩn hóa 2xxxxxxxx → 1xxxxxxxx)"
-        if vkd_to_vikoda
-        else ""
-    )
-
-    print(
-        f"[{label}] Đọc {len(result)} mã từ "
-        f"{source_name}!{sheet_name}{mode}."
-    )
-
-    return result
+        return result
+    finally:
+        workbook.close()
 
 
 def read_conversion_factors(dest_bytes):
@@ -424,57 +430,60 @@ def read_conversion_factors(dest_bytes):
         read_only=True,
     )
 
-    if MASTER_SHEET not in workbook.sheetnames:
-        raise RuntimeError(
-            f"Không tìm thấy sheet {MASTER_SHEET!r} trong file đích."
-        )
-
-    worksheet = workbook[MASTER_SHEET]
-    factors = {}
-
-    for row in range(2, worksheet.max_row + 1):
-        code = normalize_code(
-            worksheet.cell(row=row, column=1).value
-        )
-        if not code:
-            continue
-
-        if code in factors:
+    try:
+        if MASTER_SHEET not in workbook.sheetnames:
             raise RuntimeError(
-                f"[{MASTER_SHEET}] Mã {code} bị lặp trong cột A."
+                f"Không tìm thấy sheet {MASTER_SHEET!r} trong file đích."
             )
 
-        factor = to_number(
-            worksheet.cell(row=row, column=9).value,
-            f"{MASTER_SHEET}!I{row}",
-        )
+        worksheet = workbook[MASTER_SHEET]
+        factors = {}
 
-        if factor <= 0:
-            raise RuntimeError(
-                f"[{MASTER_SHEET}] Quy cách của mã {code} "
-                f"phải > 0, hiện là {factor!r}."
+        for row in range(2, worksheet.max_row + 1):
+            code = normalize_code(
+                worksheet.cell(row=row, column=1).value
+            )
+            if not code:
+                continue
+
+            if code in factors:
+                raise RuntimeError(
+                    f"[{MASTER_SHEET}] Mã {code} bị lặp trong cột A."
+                )
+
+            factor = to_number(
+                worksheet.cell(row=row, column=9).value,
+                f"{MASTER_SHEET}!I{row}",
             )
 
-        factors[code] = factor
+            if factor <= 0:
+                raise RuntimeError(
+                    f"[{MASTER_SHEET}] Quy cách của mã {code} "
+                    f"phải > 0, hiện là {factor!r}."
+                )
 
-    if not factors:
-        raise RuntimeError(
-            f"[{MASTER_SHEET}] Không đọc được mã/quy cách từ A:I."
+            factors[code] = factor
+
+        if not factors:
+            raise RuntimeError(
+                f"[{MASTER_SHEET}] Không đọc được mã/quy cách từ A:I."
+            )
+
+        payload = json.dumps(
+            {k: factors[k] for k in sorted(factors)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        conversion_hash = hashlib.sha256(payload).hexdigest()
+
+        print(
+            f"[{MASTER_SHEET}] Đọc {len(factors)} quy cách từ cột I."
         )
 
-    payload = json.dumps(
-        {k: factors[k] for k in sorted(factors)},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-    conversion_hash = hashlib.sha256(payload).hexdigest()
-
-    print(
-        f"[{MASTER_SHEET}] Đọc {len(factors)} quy cách từ cột I."
-    )
-
-    return factors, conversion_hash
+        return factors, conversion_hash
+    finally:
+        workbook.close()
 
 
 def load_shared_strings(archive):

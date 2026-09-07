@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from planning_cleanup import remove_sheet_formulas
 from planning_schedule_report import attach_output_hash, json_safe
 from sync_planning_calendar_all_months import prepare_calendar_update_all_months
+import sync_planning_fc_compat  # noqa: F401 - installs dimension-tolerant FC reader
 from sync_planning_fc import prepare_planning_fc_update
 import sync_planning_metrics as metrics
 import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direct hooks

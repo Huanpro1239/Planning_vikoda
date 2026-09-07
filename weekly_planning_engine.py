@@ -96,6 +96,21 @@ class DailyPlanRow:
     qty: float
     phase: str = "full"
 
+SUGAR_CLASSIFICATION = "Có đường"
+
+
+def is_sugar_classification(classification: str) -> bool:
+    """Nhận diện SKU 'Có đường' bất kể hoa/thường/khoảng trắng.
+
+    Trước đây engine so khớp chính xác chuỗi ``"Có đường"`` trong khi
+    ``sync_planning_metrics`` và ``verify_planning_month`` dùng ``casefold()``.
+    Sự lệch pha này khiến một SKU khai báo ``"có đường"`` (viết thường) bị
+    engine tính theo SL/ca còn verifier lại kỳ vọng SL/mẻ, dẫn tới verify sai.
+    Chuẩn hóa về một cách so khớp duy nhất cho cả ba nơi.
+    """
+    return str(classification or "").strip().casefold() == SUGAR_CLASSIFICATION.casefold()
+
+
 def _roundup_away_from_zero(value: float) -> int:
     """Semantics tương đương Excel ``ROUNDUP(value, 0)``."""
     if abs(value) <= TOLERANCE:
@@ -106,7 +121,7 @@ def _roundup_away_from_zero(value: float) -> int:
 def _round_production(value: float, row: WeeklyInputRow) -> float:
     if abs(value) <= TOLERANCE:
         return 0.0
-    basis = row.sl_me if row.phan_loai == "Có đường" else row.sl_ca
+    basis = row.sl_me if is_sugar_classification(row.phan_loai) else row.sl_ca
     if basis <= 0:
         raise ValueError(f"Basis làm tròn <= 0 cho SKU {row.ma_sp}")
     return _roundup_away_from_zero(value / basis) * basis

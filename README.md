@@ -70,4 +70,26 @@ Publish dùng **ETag / If-Match**. Nếu dữ liệu thay đổi trong lúc tín
 python -m unittest discover -s tests -v
 ```
 
+Hoặc dùng `make test`. Bộ test chạy hoàn toàn offline, không cần SharePoint.
+
+## Chạy offline (không cần SharePoint)
+
+Dùng để nghiệm thu/kiểm tra proposal từ các bản sao tải về máy. Script chỉ ĐỌC
+file nguồn và GHI proposal + report vào thư mục `--out`, không upload, không đổi
+state gốc:
+
+```bash
+python run_offline.py \
+    --target "Sắp kế hoạch.xlsx" \
+    --actual "Bao cao ton thuc te hien tai.xlsx" \
+    --factory-vikoda NXT_Vikoda.xlsm \
+    --factory-vkd NXT_VKD.xlsm \
+    --accounting-vikoda XNT_ketoan_Vikoda.xlsm \
+    --accounting-vkd XNT_ketoan_VKD.xlsm \
+    --out ./out --verify
+```
+
+Kết quả tính bằng đúng engine `ke_hoach_sx_tuan_v2_service_first` mà GitHub
+Actions sử dụng.
+
 Repository chỉ giữ engine và test của luồng production hiện hành. Các scheduler V2–V10, dry-run và workflow thử nghiệm cũ đã được loại khỏi nhánh hiện hành.

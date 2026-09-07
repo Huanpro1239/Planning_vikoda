@@ -1,4 +1,5 @@
-msal
-requests
-openpyxl
-lxml
+# Pin lower bounds cho build tái lập. Nâng cấp có kiểm soát khi cần.
+msal>=1.28,<2
+requests>=2.31,<3
+openpyxl>=3.1,<4
+lxml>=5.0

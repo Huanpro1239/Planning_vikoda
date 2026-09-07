@@ -47,7 +47,8 @@ class VerifyPlanningMonthTests(unittest.TestCase):
         planning.append([
             130100096, "A", "Thùng", 4500, 4500, "KHS", "Lon", "Không đường",
             3, planning_actual, planning_book, planning_fc, 1801.92307692308, 0,
-            2836, 4500, 1 / 3, None,
+            # O = p_need engine (không nợ) = FC - tồn_sổ(K) + tồn_cuối(M).
+            planning_fc - planning_book + 1801.92307692308, 4500, 1 / 3, None,
         ] + [4500] + [None] * 29)
         if stale_after_end:
             planning["AW2"] = 123
@@ -57,7 +58,7 @@ class VerifyPlanningMonthTests(unittest.TestCase):
         return output.getvalue()
 
     def test_passes_when_stock_fc_and_calendar_match(self):
-        info = verify_workbook(self.make_workbook())
+        info = verify_workbook(self.make_workbook(), plan_year=2026)
         self.assertEqual(info["plan_month"], 9)
         self.assertEqual(info["source_column"], 13)
         self.assertEqual(info["stock_checked"], 1)
@@ -65,15 +66,15 @@ class VerifyPlanningMonthTests(unittest.TestCase):
 
     def test_fails_when_j_k_are_stale(self):
         with self.assertRaisesRegex(RuntimeError, "J:K chưa theo"):
-            verify_workbook(self.make_workbook(planning_actual=8444, planning_book=13161.8333333333))
+            verify_workbook(self.make_workbook(planning_actual=8444, planning_book=13161.8333333333), plan_year=2026)
 
     def test_fails_when_l_still_contains_august_fc(self):
         with self.assertRaisesRegex(RuntimeError, "L chưa theo"):
-            verify_workbook(self.make_workbook(planning_fc=5343.6))
+            verify_workbook(self.make_workbook(planning_fc=5343.6), plan_year=2026)
 
     def test_fails_when_data_survives_after_last_day(self):
         with self.assertRaisesRegex(RuntimeError, "Còn dữ liệu sau ngày cuối tháng"):
-            verify_workbook(self.make_workbook(stale_after_end=True))
+            verify_workbook(self.make_workbook(stale_after_end=True), plan_year=2026)
 
 
     def test_fails_when_middle_calendar_header_is_corrupt(self):
@@ -82,7 +83,7 @@ class VerifyPlanningMonthTests(unittest.TestCase):
         output = BytesIO()
         workbook.save(output)
         with self.assertRaisesRegex(RuntimeError, "Tiêu đề ngày sai"):
-            verify_workbook(output.getvalue())
+            verify_workbook(output.getvalue(), plan_year=2026)
 
     def test_fails_when_daily_production_exceeds_P(self):
         workbook = load_workbook(BytesIO(self.make_workbook()))
@@ -90,7 +91,7 @@ class VerifyPlanningMonthTests(unittest.TestCase):
         output = BytesIO()
         workbook.save(output)
         with self.assertRaisesRegex(RuntimeError, "Tổng SX ngày"):
-            verify_workbook(output.getvalue())
+            verify_workbook(output.getvalue(), plan_year=2026)
 
 
 if __name__ == "__main__":

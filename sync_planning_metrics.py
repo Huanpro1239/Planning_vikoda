@@ -437,6 +437,12 @@ def calculate_row(
     }
 
 
+# Handle ổn định tới công thức M:R "trực tiếp" gốc. Các module *_all_months rebind
+# thuộc tính module ``calculate_row`` sang biến thể khác ở runtime; giữ tham chiếu
+# này để test/nghiệp vụ có thể gọi đúng bản gốc bất kể thứ tự import.
+calculate_row_default = calculate_row
+
+
 def _bootstrap_opening_debt(
     *, current_debt, actual_receipt, system_receipt
 ):

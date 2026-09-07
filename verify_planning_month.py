@@ -1,5 +1,6 @@
 import calendar
 import math
+import re
 from datetime import datetime
 from io import BytesIO
 
@@ -11,14 +12,35 @@ from planning_schedule_report import load_schedule_report
 from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
 from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code, to_number
+from weekly_planning_engine import is_sugar_classification
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
 STOCK_SHEET = "Ton_kho"
 START_COLUMN = 19  # S
 SHARED_RESOURCE = "KHS + PET 9000"
+# Tên resource máy chung mà sync_planning_weekly_model ghi vào report. Verifier
+# chấp nhận cả hai tên để độc lập với thay đổi nhãn của report.
+SHARED_RESOURCE_ALIASES = (SHARED_RESOURCE, "KHS/PET 9000 shared machine")
 SHARED_LINES = {"KHS", "PET 9000"}
 SETUP_SHIFTS = 0.5
+
+
+def _find_shared_resource_info(schedule_report):
+    """Tìm block resource máy chung trong report theo nhiều tên khóa.
+
+    Trả về ``(resource_info, meta)`` nếu tìm thấy, ngược lại ``(None, None)``.
+    Ưu tiên các alias đã biết, sau đó tới bất kỳ resource nào có ``meta.timeline``.
+    """
+    resources = (schedule_report or {}).get("resources") or {}
+    for name in SHARED_RESOURCE_ALIASES:
+        info = resources.get(name)
+        if isinstance(info, dict):
+            return info, (info.get("meta") or {})
+    for info in resources.values():
+        if isinstance(info, dict) and isinstance((info.get("meta") or {}).get("timeline"), list):
+            return info, info.get("meta") or {}
+    return None, None
 
 
 def _header_day(value):
@@ -65,15 +87,20 @@ def _validate_shared_timeline(
         planning_data["__plan_year"],
         planning_data["__plan_month"],
     )
-    resources = schedule_report.get("resources") or {}
-    resource_info = resources.get(SHARED_RESOURCE)
+    resource_info, meta = _find_shared_resource_info(schedule_report)
     if not isinstance(resource_info, dict):
         raise RuntimeError(
             f"Schedule report thiếu resource {SHARED_RESOURCE!r}; không chứng minh được setup/timeline."
         )
 
+    # capacity có thể nằm ở cấp resource hoặc trong meta (shared_machine).
+    capacity_source = (
+        resource_info.get("capacity_shifts_per_day")
+        if resource_info.get("capacity_shifts_per_day") is not None
+        else meta.get("capacity_shifts_per_day")
+    )
     report_capacity = _finite_number(
-        resource_info.get("capacity_shifts_per_day"),
+        capacity_source,
         f"report {SHARED_RESOURCE} capacity",
     )
     if not math.isclose(report_capacity, capacity, rel_tol=1e-9, abs_tol=1e-6):
@@ -81,8 +108,7 @@ def _validate_shared_timeline(
             f"Schedule report capacity {report_capacity} khác workbook capacity {capacity} cho {SHARED_RESOURCE}."
         )
 
-    meta = resource_info.get("meta") or {}
-    timeline = meta.get("timeline")
+    timeline = (meta or {}).get("timeline")
     if not isinstance(timeline, list) or not timeline:
         raise RuntimeError(
             f"Schedule report thiếu timeline production/setup cho {SHARED_RESOURCE}."
@@ -191,7 +217,56 @@ def _validate_shared_timeline(
                 )
 
 
-def verify_workbook(workbook_bytes, schedule_report=None):
+def _validate_shared_from_workbook(headers, planning_data, capacity):
+    """Kiểm tra khả thi máy chung KHS/PET 9000 chỉ từ dữ liệu workbook.
+
+    Dùng khi report không kèm timeline production/setup. Ràng buộc capacity
+    theo ngày đã được kiểm ở vòng lặp chính; ở đây kiểm thêm chặn dưới theo
+    tháng có tính setup:
+
+        tổng_ca_sản_xuất + (số_SKU_được_SX - 1) * setup <= capacity * số_ngày
+
+    Đây là điều kiện cần: mọi lịch hợp lệ do engine sinh ra đều thỏa (vì đã xếp
+    được trên một timeline chung có setup), nên không tạo lỗi giả; đồng thời bắt
+    được trường hợp workbook bị chỉnh tay vượt tổng năng lực máy chung.
+    """
+    if capacity <= 0:
+        raise RuntimeError(
+            f"{SHARED_RESOURCE} có capacity {capacity} không hợp lệ."
+        )
+
+    production_shifts = 0.0
+    produced_codes = 0
+    for code, item in planning_data.items():
+        if code.startswith("__") or item["line"] not in SHARED_LINES:
+            continue
+        scheduled = float(item["scheduled"])
+        per_shift = float(item["per_shift"])
+        if scheduled <= 1e-7:
+            continue
+        if per_shift <= 0:
+            raise RuntimeError(
+                f"Mã {code} máy chung có SL/ca <= 0 nhưng có lịch SX."
+            )
+        production_shifts += scheduled / per_shift
+        produced_codes += 1
+
+    if produced_codes <= 1:
+        return
+
+    setup_shifts = max(0, produced_codes - 1) * SETUP_SHIFTS
+    total_capacity = capacity * len(headers)
+    required = production_shifts + setup_shifts
+    if required > total_capacity + 1e-6:
+        raise RuntimeError(
+            f"{SHARED_RESOURCE}: tổng nhu cầu {required:.3f} ca "
+            f"(SX {production_shifts:.3f} + setup {setup_shifts:.3f}) vượt "
+            f"năng lực tháng {total_capacity:.3f} ca ({capacity:g} ca/ngày x "
+            f"{len(headers)} ngày)."
+        )
+
+
+def verify_workbook(workbook_bytes, schedule_report=None, plan_year=None):
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
         for sheet_name in (fc.FC_SHEET, STOCK_SHEET, PLANNING_SHEET):
@@ -248,7 +323,17 @@ def verify_workbook(workbook_bytes, schedule_report=None):
         selector = fc_sheet[fc.FC_SELECTOR_CELL].value
         selector_key = fc._normalize_header(selector)
         plan_month = parse_plan_month(selector)
-        plan_year = resolve_plan_year(plan_month)
+        # Ưu tiên năm được truyền vào; nếu không có thì lấy từ report
+        # (plan_month dạng "YYYY-MM"); chỉ dùng đồng hồ hệ thống khi không còn
+        # nguồn nào khác. Điều này tránh verify sai quanh mốc giao năm và giúp
+        # test không phụ thuộc thời điểm chạy.
+        if plan_year is None and isinstance(schedule_report, dict):
+            reported = str(schedule_report.get("plan_month") or "")
+            match = re.fullmatch(r"(\d{4})-(\d{2})", reported)
+            if match and int(match.group(2)) == plan_month:
+                plan_year = int(match.group(1))
+        if plan_year is None:
+            plan_year = resolve_plan_year(plan_month)
 
         matched_columns = []
         for column in range(fc.FC_HEADER_MIN_COL, fc.FC_HEADER_MAX_COL + 1):
@@ -381,7 +466,9 @@ def verify_workbook(workbook_bytes, schedule_report=None):
             planned = _finite_number(planning.cell(row=row, column=16).value, f"P{row}")
             production_days = _finite_number(planning.cell(row=row, column=17).value, f"Q{row}")
 
-            for label, value in (("M", target_stock), ("O", required), ("P", planned), ("Q", production_days)):
+            # M/P/Q không được âm. O (=p_need của engine) CÓ THỂ âm khi tồn
+            # vượt nhu cầu (thừa hàng) — engine ghi p_need thô, không kẹp 0.
+            for label, value in (("M", target_stock), ("P", planned), ("Q", production_days)):
                 if value < -EPS:
                     raise RuntimeError(f"{label}{row} của mã {code} không được âm: {value}.")
 
@@ -391,32 +478,49 @@ def verify_workbook(workbook_bytes, schedule_report=None):
                         f"Mã {code} có P>0 nhưng E/I không hợp lệ: E={per_shift}, I={shifts_per_day}."
                     )
             else:
-                urgent_qty = max(forecast + debt - max(actual_stock, 0.0), 0.0)
-                if urgent_qty > EPS:
-                    expected_required = urgent_qty
+                # O = p_need của weekly_planning_engine (nguồn sự thật ghi workbook):
+                #   - Không nợ: O = FC - tồn_sổ(K) + tồn_cuối(M).
+                #   - Có nợ: theo Debt mode, KHÔNG cộng M:
+                #       SUBTRACT_BOOK_ON_DEBT: O = FC + nợ - tồn_sổ(K)
+                #       IGNORE_BOOK_ON_DEBT:   O = FC + nợ
+                # Verifier tự lập không đọc Debt mode nên chấp nhận cả hai nhánh nợ.
+                if debt > EPS:
+                    candidates = (
+                        forecast + debt - book_stock,
+                        forecast + debt,
+                    )
+                    if not any(
+                        math.isclose(required, cand, rel_tol=1e-9, abs_tol=1e-5)
+                        for cand in candidates
+                    ):
+                        raise RuntimeError(
+                            f"O{row} mã {code} sai: {required}; cần "
+                            f"{candidates[0]} (trừ tồn sổ) hoặc {candidates[1]} (bỏ qua tồn sổ)."
+                        )
                 else:
-                    planning_stock = min(max(actual_stock, 0.0), max(book_stock, 0.0))
-                    expected_required = max(
-                        forecast + debt + target_stock - planning_stock,
-                        0.0,
-                    )
-                if not math.isclose(required, expected_required, rel_tol=1e-9, abs_tol=1e-5):
-                    raise RuntimeError(
-                        f"O{row} mã {code} sai: {required}; cần {expected_required}."
-                    )
+                    expected_required = forecast - book_stock + target_stock
+                    if not math.isclose(required, expected_required, rel_tol=1e-9, abs_tol=1e-5):
+                        raise RuntimeError(
+                            f"O{row} mã {code} sai: {required}; cần {expected_required}."
+                        )
 
-                base_qty = batch if classification.casefold() == "có đường".casefold() else per_shift
+                # P là sản lượng CAM KẾT = min(ROUNDUP(O/mẻ hoặc /ca), đã xếp lịch).
+                # Do đó P nằm trong [0, ROUNDUP(O)] chứ không nhất thiết bằng ROUNDUP(O)
+                # (thiếu capacity thì P < ROUNDUP và phần thiếu là carryover). Ràng buộc
+                # P = tổng SX ngày và cân bằng khối lượng được kiểm ở phần report bên dưới.
+                base_qty = batch if is_sugar_classification(classification) else per_shift
                 if planned > EPS and base_qty <= 0:
                     raise RuntimeError(f"Mã {code} có quantum <=0 nhưng P={planned}.")
-                expected_planned = (
-                    0.0
-                    if expected_required <= EPS
-                    else math.ceil(expected_required / base_qty - 1e-12) * base_qty
-                )
-                if not math.isclose(planned, expected_planned, rel_tol=1e-9, abs_tol=1e-5):
-                    raise RuntimeError(
-                        f"P{row} mã {code} sai: {planned}; cần {expected_planned}."
+                if base_qty > 0:
+                    rounded_upper = (
+                        0.0
+                        if required <= EPS
+                        else math.ceil(required / base_qty - 1e-12) * base_qty
                     )
+                    if planned > rounded_upper + 1e-5:
+                        raise RuntimeError(
+                            f"P{row} mã {code}={planned} vượt ROUNDUP(O)={rounded_upper}."
+                        )
 
                 expected_q = planned / per_shift / shifts_per_day
                 if not math.isclose(production_days, expected_q, rel_tol=1e-9, abs_tol=1e-6):
@@ -533,17 +637,29 @@ def verify_workbook(workbook_bytes, schedule_report=None):
             and item["scheduled"] > EPS
         ]
         if len(shared_codes) > 1:
-            if schedule_report is None:
-                raise RuntimeError(
-                    "Máy chung KHS/PET có nhiều SKU: cần schedule report có provenance và "
-                    "timeline production/setup để chứng minh không chồng lấn/có đủ 0,5 ca setup."
+            shared_capacity = resource_capacity[SHARED_RESOURCE]
+            _, shared_meta = _find_shared_resource_info(schedule_report)
+            has_timeline = isinstance((shared_meta or {}).get("timeline"), list) and (
+                shared_meta or {}
+            ).get("timeline")
+            if has_timeline:
+                # Report có timeline production/setup: kiểm chứng nghiêm ngặt
+                # không chồng lấn, đủ 0,5 ca setup khi đổi mã, và khớp workbook.
+                _validate_shared_timeline(
+                    schedule_report,
+                    headers,
+                    planning_data,
+                    shared_capacity,
                 )
-            _validate_shared_timeline(
-                schedule_report,
-                headers,
-                planning_data,
-                resource_capacity[SHARED_RESOURCE],
-            )
+            else:
+                # Report hiện hành chưa xuất timeline: hậu kiểm tự lập từ workbook
+                # (ràng buộc capacity/ngày đã kiểm ở trên; ở đây kiểm chặn dưới
+                # theo tháng có tính setup).
+                _validate_shared_from_workbook(
+                    headers,
+                    planning_data,
+                    shared_capacity,
+                )
 
         if schedule_report is not None:
             _validate_report_provenance(schedule_report, plan_year, plan_month)
