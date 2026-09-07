@@ -230,19 +230,98 @@ def _mass_balance(analysis: WeeklyAnalysis):
     return mass, sorted(carryovers)
 
 
+def _validate_shared_machine(analysis: WeeklyAnalysis, policy: PlannerPolicy | None = None):
+    """Kiểm tra capacity vật lý của máy chung KHS + PET 9000.
+
+    Báo cáo cũ đánh dấu resource_validation=True vô điều kiện. Điều đó có thể
+    làm proposal xanh dù hai line đã bị xếp song song. Validation này quy đổi
+    sản lượng ngày về số ca và kiểm tra tổng usage của *một* máy chung.
+    """
+
+    active_policy = policy or PlannerPolicy()
+    selected = [
+        calc
+        for calc in analysis.calculated
+        if calc.input.chuyen in active_policy.serialized_lines
+        and calc.q_rounded > EPS
+    ]
+    if not selected:
+        return {
+            "ok": True,
+            "state": "not_used",
+            "resource": "KHS/PET 9000 shared machine",
+            "capacity_shifts_per_day": 0.0,
+            "peak_usage_shifts": 0.0,
+            "over_capacity_dates": [],
+        }
+
+    capacity = selected[0].input.shifts_per_day
+    if capacity <= EPS:
+        return {
+            "ok": False,
+            "state": "invalid_capacity",
+            "resource": "KHS/PET 9000 shared machine",
+            "capacity_shifts_per_day": capacity,
+            "peak_usage_shifts": 0.0,
+            "over_capacity_dates": [],
+        }
+
+    if any(abs(calc.input.shifts_per_day - capacity) > EPS for calc in selected[1:]):
+        return {
+            "ok": False,
+            "state": "inconsistent_shift_calendar",
+            "resource": "KHS/PET 9000 shared machine",
+            "capacity_shifts_per_day": capacity,
+            "peak_usage_shifts": 0.0,
+            "over_capacity_dates": [],
+        }
+
+    by_code = {calc.input.ma_sp: calc for calc in selected}
+    usage: dict[date, float] = defaultdict(float)
+    for item in analysis.daily_plan:
+        calc = by_code.get(item.ma_sp)
+        if calc is not None:
+            usage[item.date] += float(item.qty) / calc.input.sl_ca
+
+    peak = max(usage.values(), default=0.0)
+    over = sorted(
+        current.isoformat()
+        for current, used in usage.items()
+        if used > capacity + EPS
+    )
+    return {
+        "ok": not over,
+        "state": "shared_machine_passed" if not over else "shared_machine_over_capacity",
+        "resource": "KHS/PET 9000 shared machine",
+        "capacity_shifts_per_day": capacity,
+        "peak_usage_shifts": peak,
+        "over_capacity_dates": over,
+    }
+
+
 def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis, *, input_revision=None):
     mass, carryovers = _mass_balance(analysis)
     lines = sorted({calc.input.chuyen for calc in analysis.calculated})
+    shared_machine = _validate_shared_machine(analysis)
+    shared_name = shared_machine["resource"]
     status = {
         "monthly_quantity": {"ok": not carryovers, "state": "complete" if not carryovers else "carryover", "carryover_skus": carryovers},
-        "resource_validation": {"ok": True, "state": "model_rules_passed", "validated_resources": lines, "failed_resources": []},
+        "resource_validation": {
+            "ok": shared_machine["ok"],
+            "state": shared_machine["state"],
+            "validated_resources": [shared_name],
+            "failed_resources": [] if shared_machine["ok"] else [shared_name],
+            "shared_machine": shared_machine,
+        },
         "service": {"ok": not analysis.policy_warnings, "state": "rules_complete" if not analysis.policy_warnings else "policy_metadata_missing", "stockout_skus": []},
     }
+    resources = {line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}} for line in lines}
+    resources[shared_name] = {"meta": shared_machine}
     return {
         "schema_version": 4, "algorithm": "ke_hoach_sx_tuan_v1",
         "plan_month": f"{analysis.period_year:04d}-{analysis.period_month:02d}",
         "input_revision": dict(input_revision or {}), "input_sha256": hashlib.sha256(workbook_bytes).hexdigest(),
-        "mass_balance": mass, "resources": {line: {"meta": {"mode": "ke_hoach_sx_tuan_reference_rules"}} for line in lines},
+        "mass_balance": mass, "resources": resources,
         "inventory": {}, "policy_warnings": list(analysis.policy_warnings), "status": status,
         "publish_status": "ready_for_publish" if all(part["ok"] for part in status.values()) else "review_required",
     }
@@ -275,4 +354,11 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
     report_warnings = sorted((str(w.get("code")), str(w.get("type"))) for w in schedule_report.get("policy_warnings", []) if isinstance(w, dict))
     if expected_warnings != report_warnings:
         raise RuntimeError("policy_warnings không khớp workbook.")
+    expected_resource = _validate_shared_machine(analysis)
+    report_resource = (schedule_report.get("status") or {}).get("resource_validation") or {}
+    if (
+        bool(report_resource.get("ok")) != bool(expected_resource["ok"])
+        or report_resource.get("state") != expected_resource["state"]
+    ):
+        raise RuntimeError("resource_validation không khớp shared-machine schedule.")
     return {"validated": True, "algorithm": "ke_hoach_sx_tuan_v1", "checked_skus": len(analysis.calculated), "carryover_skus": carryovers, "policy_warning_count": len(analysis.policy_warnings), "publish_status": schedule_report.get("publish_status")}
