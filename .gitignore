@@ -10,4 +10,5 @@ planning_input_revision.json
 planning_publish_decision.json
 dry_run_artifacts/
 offline_out/
+latest_proposal/
 *.zip

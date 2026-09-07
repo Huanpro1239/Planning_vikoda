@@ -236,58 +236,77 @@ def _schedule_serialized_lines(
     previous_quy_cach: float | None = None
     previous_end_shift = 0.0
 
-    def schedule_phase(phase: str):
-        nonlocal previous_quy_cach, previous_end_shift
-        for row in selected:
-            item = row.input
-            assert row.start_datetime is not None
-            qty_to_schedule = (
-                row.service_qty if phase == "service" else row.buffer_qty
+    # Đánh giá tổng công suất khả dụng so với tổng nhu cầu của máy chung trong tháng.
+    first_date = selected[0].start_datetime.date()
+    month_dates = _month_dates(first_date.year, first_date.month)
+    total_capacity_shifts = len(month_dates) * shared_shifts_per_day
+
+    total_service_shifts = sum(r.service_qty / r.input.sl_ca for r in selected)
+    total_buffer_shifts = sum(r.buffer_qty / r.input.sl_ca for r in selected)
+
+    total_setup_shifts = 0.0
+    prev_mold = None
+    for r in selected:
+        if prev_mold is not None and abs(prev_mold - r.input.quy_cach) > TOLERANCE:
+            total_setup_shifts += policy.setup_shifts
+        prev_mold = r.input.quy_cach
+
+    has_enough_capa = (
+        (total_service_shifts + total_buffer_shifts + total_setup_shifts)
+        <= total_capacity_shifts + TOLERANCE
+    )
+
+    for row in selected:
+        item = row.input
+        assert row.start_datetime is not None
+        # Nếu không đủ capa: không tính phần tồn cuối dự kiến (buffer).
+        # Toàn bộ SKU chạy liên tục 1 đợt duy nhất theo service_qty để bảo đảm 100% bán hàng & nợ,
+        # tránh xẻ nhỏ SKU làm 2 đợt hoặc chạy vụn vặt ở cuối tháng.
+        # Nếu đủ capa: chạy đầy đủ cả service lẫn buffer (schedulable_qty) trong 1 đợt liên tục.
+        qty_to_schedule = (
+            row.schedulable_qty if has_enough_capa else row.service_qty
+        )
+        if qty_to_schedule <= TOLERANCE:
+            continue
+
+        start_day = row.start_datetime.date()
+        first = date(start_day.year, start_day.month, 1)
+        earliest_shift = (start_day - first).days * shared_shifts_per_day
+        setup_shifts = (
+            policy.setup_shifts
+            if previous_quy_cach is not None
+            and abs(previous_quy_cach - item.quy_cach) > TOLERANCE
+            else 0.0
+        )
+
+        start_shift = max(earliest_shift, previous_end_shift) + setup_shifts
+        end_shift = start_shift + qty_to_schedule / item.sl_ca
+
+        for day_no, current in enumerate(
+            _month_dates(start_day.year, start_day.month), start=1
+        ):
+            day_start_shift = (day_no - 1) * shared_shifts_per_day
+            day_end_shift = day_no * shared_shifts_per_day
+            overlap = max(
+                0.0,
+                min(end_shift, day_end_shift) - max(start_shift, day_start_shift),
             )
-            if qty_to_schedule <= TOLERANCE:
-                continue
-
-            start_day = row.start_datetime.date()
-            first = date(start_day.year, start_day.month, 1)
-            earliest_shift = (start_day - first).days * shared_shifts_per_day
-            setup_shifts = (
-                policy.setup_shifts
-                if previous_quy_cach is not None
-                and abs(previous_quy_cach - item.quy_cach) > TOLERANCE
-                else 0.0
-            )
-
-            start_shift = max(earliest_shift, previous_end_shift) + setup_shifts
-            end_shift = start_shift + qty_to_schedule / item.sl_ca
-
-            for day_no, current in enumerate(
-                _month_dates(start_day.year, start_day.month), start=1
-            ):
-                day_start_shift = (day_no - 1) * shared_shifts_per_day
-                day_end_shift = day_no * shared_shifts_per_day
-                overlap = max(
-                    0.0,
-                    min(end_shift, day_end_shift) - max(start_shift, day_start_shift),
-                )
-                qty = overlap * item.sl_ca
-                if qty > TOLERANCE:
-                    output.append(
-                        DailyPlanRow(
-                            item.ma_sp,
-                            item.source_row,
-                            item.chuyen,
-                            current,
-                            qty,
-                            phase,
-                        )
+            qty = overlap * item.sl_ca
+            if qty > TOLERANCE:
+                output.append(
+                    DailyPlanRow(
+                        item.ma_sp,
+                        item.source_row,
+                        item.chuyen,
+                        current,
+                        qty,
+                        phase="full" if has_enough_capa else "service",
                     )
+                )
 
-            previous_quy_cach = item.quy_cach
-            previous_end_shift = end_shift
+        previous_quy_cach = item.quy_cach
+        previous_end_shift = end_shift
 
-    # Không cho safety stock của SKU A chiếm máy trước phần bán hàng của SKU B.
-    schedule_phase("service")
-    schedule_phase("buffer")
     return output
 
 def _schedule_galon(

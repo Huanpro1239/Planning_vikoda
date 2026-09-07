@@ -103,32 +103,38 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
         self.assertGreater(a["buffer_carryover_qty"], 0.0)
         self.assertEqual(b["service_carryover_qty"], 0.0)
 
-    def test_shared_machine_schedules_all_service_before_buffer(self):
+    def test_shared_machine_tight_capacity_drops_buffer_and_schedules_contiguously(self):
         analysis = self._analysis()
+        days_by_sku = defaultdict(list)
         phases_by_day = defaultdict(set)
-        first_buffer_day = None
-        last_service_day = None
 
         for item in analysis.daily_plan:
             if item.chuyen not in {"KHS", "PET 9000"}:
                 continue
+            days_by_sku[item.ma_sp].append(item.date)
             phases_by_day[item.date].add(item.phase)
-            if item.phase == "buffer":
-                first_buffer_day = (
-                    item.date
-                    if first_buffer_day is None
-                    else min(first_buffer_day, item.date)
-                )
-            if item.phase == "service":
-                last_service_day = (
-                    item.date
-                    if last_service_day is None
-                    else max(last_service_day, item.date)
+
+        # When capacity is tight (70 shifts > 30 shifts), buffer is dropped
+        # to ensure contiguous runs without split campaigns or tiny fragments.
+        self.assertNotIn("buffer", [phase for phases in phases_by_day.values() for phase in phases])
+
+        # Both SKUs run 100% of their service quantity
+        self.assertEqual(sum(item.qty for item in analysis.daily_plan if item.ma_sp == 1001), 1000.0)
+        self.assertEqual(sum(item.qty for item in analysis.daily_plan if item.ma_sp == 1002), 1000.0)
+
+        # Each SKU runs contiguously in a single block without gaps or interleaving
+        for ma_sp, dates in days_by_sku.items():
+            for i in range(len(dates) - 1):
+                self.assertEqual(
+                    (dates[i + 1] - dates[i]).days,
+                    1,
+                    f"SKU {ma_sp} was interrupted between {dates[i]} and {dates[i + 1]}",
                 )
 
-        self.assertIsNotNone(first_buffer_day)
-        self.assertIsNotNone(last_service_day)
-        self.assertGreaterEqual(first_buffer_day, last_service_day)
+        # 1001 runs first (days 1-10), then 1002 (days 11-20)
+        self.assertEqual(days_by_sku[1001][-1], date(2026, 9, 10))
+        self.assertEqual(days_by_sku[1002][0], date(2026, 9, 11))
+
         # No day may exceed the one-shift shared machine.
         per_shift = {c.input.ma_sp: c.input.sl_ca for c in analysis.calculated}
         usage = defaultdict(float)
@@ -137,6 +143,31 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
                 usage[item.date] += item.qty / per_shift[item.ma_sp]
         for used in usage.values():
             self.assertLessEqual(used, 1.0 + 1e-6)
+
+    def test_shared_machine_sufficient_capacity_schedules_full_contiguously(self):
+        # Service 1000 (10 shifts) + buffer 500 (5 shifts) + service 1000 (10 shifts) = 25 shifts <= 30 shifts
+        analysis = self._analysis(service_a=1000.0, service_b=1000.0)
+        # Re-run with target_a=500 so total fits in 30 shifts
+        calculated = calculate_rows(
+            [
+                row(1001, "KHS", 2, fc=1000.0, target=500.0),
+                row(1002, "PET 9000", 3, fc=1000.0, target=0.0),
+            ],
+            period_year=2026,
+            period_month=9,
+        )
+        daily = build_daily_plan(calculated, policy=PlannerPolicy(setup_shifts=0.0))
+        days_by_sku = defaultdict(list)
+        for item in daily:
+            if item.chuyen in {"KHS", "PET 9000"}:
+                days_by_sku[item.ma_sp].append(item.date)
+
+        # When capacity is sufficient, schedules full quantity contiguously
+        self.assertEqual(sum(item.qty for item in daily if item.ma_sp == 1001), 1500.0)
+        self.assertEqual(sum(item.qty for item in daily if item.ma_sp == 1002), 1000.0)
+        for ma_sp, dates in days_by_sku.items():
+            for i in range(len(dates) - 1):
+                self.assertEqual((dates[i + 1] - dates[i]).days, 1)
 
     def test_service_shortfall_remains_review_required(self):
         analysis = self._analysis(service_a=2000.0, service_b=2000.0)
@@ -193,15 +224,15 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
         result = load_workbook(BytesIO(updated), data_only=True, read_only=True)
         try:
             plan = result["Ke_hoach_SX"]
-            # O keeps desired need (1000 + 5000); P/Q reflect what fits.
+            # O keeps desired need (1000 + 5000); P/Q reflect what fits without buffer when capacity is tight.
             self.assertEqual(plan["O2"].value, 6000)
-            self.assertEqual(plan["P2"].value, 2000)
-            self.assertEqual(plan["Q2"].value, 20)
+            self.assertEqual(plan["P2"].value, 1000)
+            self.assertEqual(plan["Q2"].value, 10)
             self.assertEqual(plan["P3"].value, 1000)
             self.assertEqual(plan["Q3"].value, 10)
             self.assertEqual(
                 sum(float(plan.cell(2, 19 + d).value or 0) for d in range(30)),
-                2000.0,
+                1000.0,
             )
         finally:
             result.close()
