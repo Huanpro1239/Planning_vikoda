@@ -1,7 +1,5 @@
-import calendar
 import math
 import re
-from datetime import datetime
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -457,7 +455,7 @@ def verify_workbook(workbook_bytes, schedule_report=None, plan_year=None):
             line = str(planning.cell(row=row, column=6).value or "").strip()
             classification = str(planning.cell(row=row, column=8).value or "").strip()
             shifts_per_day = _finite_number(planning.cell(row=row, column=9).value, f"I{row}")
-            actual_stock = _finite_number(planning.cell(row=row, column=10).value, f"J{row}")
+            _finite_number(planning.cell(row=row, column=10).value, f"J{row}")
             book_stock = _finite_number(planning.cell(row=row, column=11).value, f"K{row}")
             forecast = _finite_number(planning.cell(row=row, column=12).value, f"L{row}")
             target_stock = _finite_number(planning.cell(row=row, column=13).value, f"M{row}")

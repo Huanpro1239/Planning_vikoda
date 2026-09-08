@@ -1,6 +1,5 @@
 """Tests for KHSX_ki weekly summary aggregation, formatting, and verification."""
 import calendar
-import datetime
 from io import BytesIO
 from pathlib import Path
 import unittest
@@ -121,10 +120,6 @@ class KHSXKiTests(unittest.TestCase):
 
     def test_sku_order_independence(self):
         """Kiểm tra thứ tự SKU khác nhau giữa Ke_hoach_SX và KHSX_ki vẫn khớp chính xác."""
-        skus = [
-            {"code": 130100001, "name": "SP 1", "uom": "Thùng", "p": 5000.0, "daily": [5000.0] + [0.0] * 29},
-            {"code": 130100002, "name": "SP 2", "uom": "Thùng", "p": 10000.0, "daily": [0.0] * 7 + [10000.0] + [0.0] * 22},
-        ]
         # Tạo workbook với KHSX_ki có thứ tự đảo ngược
         wb = Workbook()
         ws_kh = wb.active

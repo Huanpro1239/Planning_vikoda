@@ -147,8 +147,7 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
 
     def test_shared_machine_sufficient_capacity_schedules_full_contiguously(self):
         # Service 1000 (10 shifts) + buffer 500 (5 shifts) + service 1000 (10 shifts) = 25 shifts <= 30 shifts
-        analysis = self._analysis(service_a=1000.0, service_b=1000.0)
-        # Re-run with target_a=500 so total fits in 30 shifts
+        # Run with target_a=500 so total fits in 30 shifts
         calculated = calculate_rows(
             [
                 row(1001, "KHS", 2, fc=1000.0, target=500.0),
