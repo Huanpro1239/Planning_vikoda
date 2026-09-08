@@ -235,7 +235,15 @@ def load_state():
     return data
 
 
-def save_state(source_etags, conversion_hash, fc_hash=None):
+def save_state(
+    source_etags,
+    conversion_hash,
+    fc_hash=None,
+    no_kho_hash=None,
+    planning_inputs_hash=None,
+    engine_version=None,
+    **kwargs,
+):
     payload = {
         "sync_version": SYNC_VERSION,
         "conversion_hash": conversion_hash,
@@ -243,6 +251,15 @@ def save_state(source_etags, conversion_hash, fc_hash=None):
     }
     if fc_hash is not None:
         payload["fc_hash"] = fc_hash
+    if no_kho_hash is not None:
+        payload["no_kho_hash"] = no_kho_hash
+    if planning_inputs_hash is not None:
+        payload["planning_inputs_hash"] = planning_inputs_hash
+    if engine_version is not None:
+        payload["engine_version"] = engine_version
+    for k, v in kwargs.items():
+        if v is not None:
+            payload[k] = v
     STATE_FILE.write_text(
         json.dumps(
             payload,
@@ -271,9 +288,9 @@ def normalize_code(value, vkd_to_vikoda=False):
     return text
 
 
-def to_number(value, cell_name):
+def to_number(value, cell_name="", default=0):
     if value is None or value == "":
-        return 0
+        return default
 
     if isinstance(value, bool):
         raise ValueError(
@@ -440,7 +457,18 @@ def read_conversion_factors(dest_bytes):
             )
 
         worksheet = workbook[MASTER_SHEET]
+        headers = [str(worksheet.cell(row=1, column=c).value or "").strip() for c in range(1, worksheet.max_column + 1)]
+        debt_col = None
+        profile_col = None
+        for idx, h in enumerate(headers, start=1):
+            hl = h.lower().replace(" ", "_")
+            if "debt" in hl:
+                debt_col = idx
+            if "profile" in hl:
+                profile_col = idx
+
         factors = {}
+        master_meta = {}
 
         for row in range(2, worksheet.max_row + 1):
             code = normalize_code(
@@ -466,6 +494,17 @@ def read_conversion_factors(dest_bytes):
                 )
 
             factors[code] = factor
+            master_meta[code] = {
+                "batch": to_number(worksheet.cell(row=row, column=4).value, default=0.0),
+                "per_shift": to_number(worksheet.cell(row=row, column=5).value, default=0.0),
+                "line": str(worksheet.cell(row=row, column=6).value or "").strip(),
+                "group": str(worksheet.cell(row=row, column=7).value or "").strip(),
+                "classification": str(worksheet.cell(row=row, column=8).value or "").strip(),
+                "mold": factor,
+                "leadtime": to_number(worksheet.cell(row=row, column=10).value, default=0.0),
+                "debt_mode": str(worksheet.cell(row=row, column=debt_col).value or "").strip() if debt_col else "",
+                "profile": str(worksheet.cell(row=row, column=profile_col).value or "").strip() if profile_col else "",
+            }
 
         if not factors:
             raise RuntimeError(
@@ -473,8 +512,9 @@ def read_conversion_factors(dest_bytes):
             )
 
         payload = json.dumps(
-            {k: factors[k] for k in sorted(factors)},
+            {k: master_meta[k] for k in sorted(master_meta)},
             ensure_ascii=False,
+            sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
 

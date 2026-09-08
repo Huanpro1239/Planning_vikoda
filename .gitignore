@@ -12,3 +12,4 @@ dry_run_artifacts/
 offline_out/
 latest_proposal/
 *.zip
+temp_audit/

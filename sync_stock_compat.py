@@ -21,13 +21,26 @@ def read_conversion_factors_robust(dest_bytes):
             )
 
         worksheet = workbook[sync_stock.MASTER_SHEET]
+        headers = [str(c or "").strip() for c in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ())]
+        debt_col = None
+        profile_col = None
+        for idx, h in enumerate(headers):
+            hl = h.lower().replace(" ", "_")
+            if "debt" in hl:
+                debt_col = idx
+            if "profile" in hl:
+                profile_col = idx
+
         factors = {}
+        master_meta = {}
 
         for row_number, values in enumerate(
-            worksheet.iter_rows(min_row=2, max_col=9, values_only=True),
+            worksheet.iter_rows(min_row=2, values_only=True),
             start=2,
         ):
-            code = sync_stock.normalize_code(values[0] if values else None)
+            if not values:
+                continue
+            code = sync_stock.normalize_code(values[0])
             if not code:
                 continue
 
@@ -47,6 +60,17 @@ def read_conversion_factors_robust(dest_bytes):
                 )
 
             factors[code] = factor
+            master_meta[code] = {
+                "batch": sync_stock.to_number(values[3] if len(values) >= 4 else None, default=0.0),
+                "per_shift": sync_stock.to_number(values[4] if len(values) >= 5 else None, default=0.0),
+                "line": str(values[5] or "").strip() if len(values) >= 6 else "",
+                "group": str(values[6] or "").strip() if len(values) >= 7 else "",
+                "classification": str(values[7] or "").strip() if len(values) >= 8 else "",
+                "mold": factor,
+                "leadtime": sync_stock.to_number(values[9] if len(values) >= 10 else None, default=0.0),
+                "debt_mode": str(values[debt_col] or "").strip() if debt_col is not None and debt_col < len(values) else "",
+                "profile": str(values[profile_col] or "").strip() if profile_col is not None and profile_col < len(values) else "",
+            }
 
         if not factors:
             raise RuntimeError(
@@ -54,8 +78,9 @@ def read_conversion_factors_robust(dest_bytes):
             )
 
         payload = json.dumps(
-            {k: factors[k] for k in sorted(factors)},
+            {k: master_meta[k] for k in sorted(master_meta)},
             ensure_ascii=False,
+            sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         conversion_hash = hashlib.sha256(payload).hexdigest()

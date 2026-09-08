@@ -150,12 +150,23 @@ def _save_states_after_success(source_items, report, proposed_runtime_state):
         key: source_items[key].get("eTag")
         for key in SOURCES
     }
-    conversion_hash = report.get("pipeline", {}).get("conversion_hash")
+    pipeline_info = report.get("pipeline") or {}
+    conversion_hash = pipeline_info.get("conversion_hash") or pipeline_info.get("danh_muc_hash")
     if not conversion_hash:
         raise RuntimeError("Pipeline report thiếu conversion_hash; không ghi state.")
-    fc_hash = report.get("pipeline", {}).get("fc_hash")
+    fc_hash = pipeline_info.get("fc_hash")
+    no_kho_hash = pipeline_info.get("no_kho_hash")
+    planning_inputs_hash = pipeline_info.get("planning_inputs_hash")
+    engine_version = pipeline_info.get("engine_version") or pipeline_info.get("engine")
 
-    sync_stock.save_state(source_etags, conversion_hash, fc_hash=fc_hash)
+    sync_stock.save_state(
+        source_etags,
+        conversion_hash,
+        fc_hash=fc_hash,
+        no_kho_hash=no_kho_hash,
+        planning_inputs_hash=planning_inputs_hash,
+        engine_version=engine_version,
+    )
     metrics.save_runtime_state(proposed_runtime_state)
     save_schedule_report(report)
     AUDIT_REVISION_FILE.write_text(
@@ -169,8 +180,11 @@ def detect_input_changes(old_state, source_items, pipeline_info):
 
     Inputs tracked:
     1. 5 inventory source files (ETags)
-    2. Sheet Danh_muc conversion factors (conversion_hash)
+    2. Sheet Danh_muc conversion factors & master policy (conversion_hash / danh_muc_hash)
     3. Sheet FC forecast targets & selector (fc_hash)
+    4. Sheet No kho debts (no_kho_hash)
+    5. Sheet Ke_hoach_SX planning inputs (planning_inputs_hash)
+    6. Engine version / algorithm (engine_version)
     """
     old_sources = old_state.get("sources", {}) if isinstance(old_state, dict) else {}
     changed_inputs = []
@@ -182,7 +196,7 @@ def detect_input_changes(old_state, source_items, pipeline_info):
             changed_inputs.append(f"source:{key}")
 
     old_conv = old_state.get("conversion_hash") if isinstance(old_state, dict) else None
-    new_conv = pipeline_info.get("conversion_hash")
+    new_conv = pipeline_info.get("conversion_hash") or pipeline_info.get("danh_muc_hash")
     if old_conv != new_conv:
         changed_inputs.append("sheet:Danh_muc")
 
@@ -190,6 +204,21 @@ def detect_input_changes(old_state, source_items, pipeline_info):
     new_fc = pipeline_info.get("fc_hash")
     if old_fc != new_fc:
         changed_inputs.append("sheet:FC")
+
+    old_no_kho = old_state.get("no_kho_hash") if isinstance(old_state, dict) else None
+    new_no_kho = pipeline_info.get("no_kho_hash")
+    if new_no_kho is not None and old_no_kho != new_no_kho:
+        changed_inputs.append("sheet:No_kho")
+
+    old_planning = old_state.get("planning_inputs_hash") if isinstance(old_state, dict) else None
+    new_planning = pipeline_info.get("planning_inputs_hash")
+    if new_planning is not None and old_planning != new_planning:
+        changed_inputs.append("sheet:Ke_hoach_SX")
+
+    old_engine = old_state.get("engine_version") if isinstance(old_state, dict) else None
+    new_engine = pipeline_info.get("engine_version") or pipeline_info.get("engine")
+    if new_engine is not None and old_engine != new_engine:
+        changed_inputs.append("engine_version")
 
     return changed_inputs
 
@@ -233,9 +262,15 @@ def _publish_decision(report, review_approval, publisher):
     service = sections.get("service") or {}
 
     # Review approval is intentionally narrow: it may accept a validated service
-    # shortage, but it never waives monthly mass-balance/carryover or physical
-    # resource validation. Hard workbook validation has already passed earlier.
-    if not bool(monthly.get("ok")) or not bool(resource.get("ok")):
+    # shortage, but it never waives physical resource validation or unhandled carryovers.
+    if not bool(resource.get("ok")):
+        return False, _blocked_decision(
+            report,
+            publisher,
+            "non_waivable_validation",
+            "review_required do resource validation không được phép override.",
+        )
+    if not bool(monthly.get("ok")) and monthly.get("state") == "carryover":
         return False, _blocked_decision(
             report,
             publisher,

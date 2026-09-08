@@ -1,3 +1,5 @@
+import hashlib
+import json
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -68,6 +70,29 @@ def read_debt_from_no_kho(dest_bytes):
         return debts
     finally:
         workbook.close()
+
+
+def hash_debt_sheet(dest_bytes):
+    """Tính SHA-256 fingerprint của sheet No kho dựa trên mã sản phẩm và số lượng nợ."""
+    workbook = load_workbook(
+        BytesIO(dest_bytes),
+        data_only=True,
+        read_only=True,
+    )
+    try:
+        if DEBT_SHEET not in workbook.sheetnames:
+            return {}, ""
+    finally:
+        workbook.close()
+
+    debts = read_debt_from_no_kho(dest_bytes)
+    payload = json.dumps(
+        {k: debts[k] for k in sorted(debts)},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return debts, hashlib.sha256(payload).hexdigest()
 
 
 def read_planning_rows_with_no_kho(dest_bytes):

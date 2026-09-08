@@ -165,7 +165,11 @@ def calculate_row(
 
     start_datetime: datetime | None
     if row.avg_daily_sales <= 0:
-        start_datetime = None
+        if q_rounded > TOLERANCE:
+            # Khi FC = 0 nhưng có nhu cầu sản xuất (ví dụ trả nợ kho), bắt đầu ngay từ ngày đầu kỳ
+            start_datetime = datetime(period_year, period_month, 1)
+        else:
+            start_datetime = None
     else:
         first = datetime(period_year, period_month, 1)
         candidate = first + timedelta(
@@ -253,7 +257,7 @@ def _schedule_serialized_lines(
     previous_quy_cach: float | None = None
     previous_end_shift = 0.0
 
-    # Đánh giá tổng công suất khả dụng so với tổng nhu cầu của máy chung trong tháng.
+    # Đánh giá công suất khả dụng trên timeline thực tế (bao gồm start_datetime và setup)
     month_dates = _get_period_dates(selected[0])
     total_capacity_shifts = len(month_dates) * shared_shifts_per_day
     first_date = month_dates[0]
@@ -261,27 +265,60 @@ def _schedule_serialized_lines(
 
     total_service_shifts = sum(r.service_qty / r.input.sl_ca for r in selected)
     total_buffer_shifts = sum(r.buffer_qty / r.input.sl_ca for r in selected)
-
-    # Dự phòng setup bảo thủ để thỏa mãn cả timeline engine lẫn chặn dưới verify_planning_month
     conservative_setup_shifts = max(0, len(selected) - 1) * policy.setup_shifts
     avail_prod_shifts = max(0.0, total_capacity_shifts - conservative_setup_shifts)
 
-    has_enough_capa = (
-        (total_service_shifts + total_buffer_shifts + conservative_setup_shifts)
+    def _simulate_timeline(qtys: dict[int, float]) -> tuple[float, dict[int, float], dict[int, float]]:
+        cur = 0.0
+        prev_qc = None
+        starts = {}
+        ends = {}
+        for r in selected:
+            inp = r.input
+            q = qtys.get(inp.ma_sp, 0.0)
+            if q <= TOLERANCE:
+                continue
+            st_day = min(last_date, max(first_date, r.start_datetime.date()))
+            earliest = (st_day - first_date).days * shared_shifts_per_day
+            stp = (
+                policy.setup_shifts
+                if prev_qc is not None and abs(prev_qc - inp.quy_cach) > TOLERANCE
+                else 0.0
+            )
+            st = max(earliest, cur) + stp
+            dur = q / inp.sl_ca
+            en = st + dur
+            starts[inp.ma_sp] = st
+            ends[inp.ma_sp] = en
+            cur = en
+            prev_qc = inp.quy_cach
+        return cur, starts, ends
+
+    full_qtys = {r.input.ma_sp: r.schedulable_qty for r in selected}
+    full_end_shift, _, _ = _simulate_timeline(full_qtys)
+    service_qtys = {r.input.ma_sp: r.service_qty for r in selected}
+    service_end_shift, _, _ = _simulate_timeline(service_qtys)
+
+    timeline_has_enough_capa = (
+        full_end_shift <= total_capacity_shifts + TOLERANCE
+        and (total_service_shifts + total_buffer_shifts + conservative_setup_shifts)
         <= total_capacity_shifts + TOLERANCE
     )
-    service_fits = (
-        (total_service_shifts + conservative_setup_shifts)
+    timeline_service_fits = (
+        service_end_shift <= total_capacity_shifts + TOLERANCE
+        and (total_service_shifts + conservative_setup_shifts)
         <= total_capacity_shifts + TOLERANCE
     )
 
     allocated_qty: dict[int, float] = {}
     phase = "full"
-    if has_enough_capa:
+
+    if timeline_has_enough_capa:
         phase = "full"
-        for r in selected:
-            allocated_qty[r.input.ma_sp] = r.schedulable_qty
-    elif service_fits:
+        allocated_qty = dict(full_qtys)
+    elif timeline_service_fits:
+        # Khi timeline hoặc tháng không đủ cho cả buffer, ưu tiên Service First:
+        # Đảm bảo 100% service cho toàn bộ SKU trên timeline, bỏ buffer để không chiếm lịch service.
         phase = "service"
         for r in selected:
             allocated_qty[r.input.ma_sp] = r.service_qty
@@ -298,8 +335,8 @@ def _schedule_serialized_lines(
             allocated_qty[inp.ma_sp] = min(r.service_qty, rounded)
 
         while True:
-            cur_shifts = sum(allocated_qty[r.input.ma_sp] / r.input.sl_ca for r in selected)
-            if cur_shifts <= avail_prod_shifts + TOLERANCE:
+            cur_shifts, _, _ = _simulate_timeline(allocated_qty)
+            if cur_shifts <= total_capacity_shifts + TOLERANCE and sum(allocated_qty[r.input.ma_sp] / r.input.sl_ca for r in selected) <= avail_prod_shifts + TOLERANCE:
                 break
             candidates = [
                 r for r in selected
