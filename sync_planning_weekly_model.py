@@ -49,16 +49,37 @@ def _num(value: Any) -> float:
     return result
 
 
+DEBT_HEADER_NAMES: frozenset[str] = frozenset({
+    "debt mode",
+    "cách tính nợ",
+    "cach tinh no",
+})
+PROFILE_HEADER_NAMES: frozenset[str] = frozenset({
+    "schedule profile",
+    "profile lịch",
+    "profile lich",
+    "lịch sản xuất",
+    "lich san xuat",
+})
+
+
 def _code(value: Any) -> int:
     return int(float(value))
 
 
-def _header_col(ws, names: set[str]) -> int | None:
+def find_header_col(headers: list[Any], names: set[str] | frozenset[str]) -> int | None:
+    """Tìm chỉ số cột (0-indexed) trong danh sách tiêu đề khớp với một trong các tên."""
     wanted = {_norm(name) for name in names}
-    for col in range(1, ws.max_column + 1):
-        if _norm(ws.cell(1, col).value) in wanted:
-            return col
+    for idx, h in enumerate(headers):
+        if _norm(h) in wanted:
+            return idx
     return None
+
+
+def _header_col(ws, names: set[str] | frozenset[str]) -> int | None:
+    headers = [ws.cell(1, col).value for col in range(1, ws.max_column + 1)]
+    idx = find_header_col(headers, names)
+    return idx + 1 if idx is not None else None
 
 
 def _debt_mode(value: Any) -> str | None:
@@ -72,6 +93,14 @@ def _debt_mode(value: Any) -> str | None:
     raise RuntimeError(f"Debt mode không hợp lệ: {value!r}")
 
 
+def normalize_debt_mode(value: Any) -> str | None:
+    """Chuẩn hóa debt mode an toàn cho cả engine lẫn hash fingerprint."""
+    try:
+        return _debt_mode(value)
+    except Exception:
+        return str(value or "").strip() or None
+
+
 def _profile(value: Any) -> str | None:
     text = _norm(value).replace("-", "_").replace(" ", "_")
     if not text:
@@ -81,6 +110,14 @@ def _profile(value: Any) -> str | None:
     if text in {"spread_non_sunday", "rai_khong_chu_nhat", "rải_không_chủ_nhật"}:
         return "SPREAD_NON_SUNDAY"
     raise RuntimeError(f"Schedule profile không hợp lệ: {value!r}")
+
+
+def normalize_profile(value: Any) -> str | None:
+    """Chuẩn hóa schedule profile an toàn cho cả engine lẫn hash fingerprint."""
+    try:
+        return _profile(value)
+    except Exception:
+        return str(value or "").strip() or None
 
 
 def _same(current: Any, target: Any) -> bool:
@@ -124,8 +161,8 @@ def _read_inputs(workbook_bytes: bytes, *, plan_year: int, plan_month: int):
             if name not in wb.sheetnames:
                 raise RuntimeError(f"Không tìm thấy sheet {name!r}.")
         planning, master = wb[PLANNING_SHEET], wb[MASTER_SHEET]
-        debt_col = _header_col(master, {"Debt mode", "Cách tính nợ"})
-        profile_col = _header_col(master, {"Schedule profile", "Profile lịch"})
+        debt_col = _header_col(master, DEBT_HEADER_NAMES)
+        profile_col = _header_col(master, PROFILE_HEADER_NAMES)
         master_data: dict[int, dict[str, Any]] = {}
         for r in range(2, master.max_row + 1):
             raw = master.cell(r, 1).value
@@ -542,13 +579,12 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
 
 
 def compute_planning_inputs_hash(workbook_bytes: bytes) -> str:
-    """Tính SHA-256 fingerprint của các ô đầu vào trên sheet Ke_hoach_SX.
+    """Tính SHA-256 fingerprint của các ô đầu vào do người dùng chỉnh trên sheet Ke_hoach_SX.
     Bao gồm:
     - Danh sách mã SP (cột A)
     - Số ca/ngày (cột I)
-    - Tồn cuối dự kiến (cột M)
-    Loại trừ các cột J, K (tính từ Tồn kho), L (tính từ FC), N (tính từ Nợ kho)
-    và các cột đầu ra O, P, Q, R, S+ để chống trigger lặp sau khi publish.
+    Loại trừ các cột J, K (tính từ Tồn kho), L (tính từ FC), M (tồn cuối dự kiến do pipeline tính),
+    N (tính từ Nợ kho), và các cột đầu ra O, P, Q, R, S+ để chống trigger lặp sau khi publish.
     """
     wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
     try:
@@ -562,11 +598,9 @@ def compute_planning_inputs_hash(workbook_bytes: bytes) -> str:
                 continue
             code = _code(raw_code)
             shifts = _num(ws.cell(r, 9).value)
-            end_stock = _num(ws.cell(r, 13).value)
             inputs.append({
                 "code": code,
                 "shifts_per_day": shifts,
-                "ton_cuoi_du_kien": end_stock,
             })
         payload = json.dumps(
             inputs,

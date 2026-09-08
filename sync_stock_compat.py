@@ -4,6 +4,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
+import sync_planning_weekly_model as weekly_model
 import sync_stock
 
 
@@ -22,14 +23,8 @@ def read_conversion_factors_robust(dest_bytes):
 
         worksheet = workbook[sync_stock.MASTER_SHEET]
         headers = [str(c or "").strip() for c in next(worksheet.iter_rows(min_row=1, max_row=1, values_only=True), ())]
-        debt_col = None
-        profile_col = None
-        for idx, h in enumerate(headers):
-            hl = h.lower().replace(" ", "_")
-            if "debt" in hl:
-                debt_col = idx
-            if "profile" in hl:
-                profile_col = idx
+        debt_col = weekly_model.find_header_col(headers, weekly_model.DEBT_HEADER_NAMES)
+        profile_col = weekly_model.find_header_col(headers, weekly_model.PROFILE_HEADER_NAMES)
 
         factors = {}
         master_meta = {}
@@ -60,6 +55,8 @@ def read_conversion_factors_robust(dest_bytes):
                 )
 
             factors[code] = factor
+            raw_debt_mode = values[debt_col] if debt_col is not None and debt_col < len(values) else None
+            raw_profile = values[profile_col] if profile_col is not None and profile_col < len(values) else None
             master_meta[code] = {
                 "batch": sync_stock.to_number(values[3] if len(values) >= 4 else None, default=0.0),
                 "per_shift": sync_stock.to_number(values[4] if len(values) >= 5 else None, default=0.0),
@@ -68,8 +65,8 @@ def read_conversion_factors_robust(dest_bytes):
                 "classification": str(values[7] or "").strip() if len(values) >= 8 else "",
                 "mold": factor,
                 "leadtime": sync_stock.to_number(values[9] if len(values) >= 10 else None, default=0.0),
-                "debt_mode": str(values[debt_col] or "").strip() if debt_col is not None and debt_col < len(values) else "",
-                "profile": str(values[profile_col] or "").strip() if profile_col is not None and profile_col < len(values) else "",
+                "debt_mode": weekly_model.normalize_debt_mode(raw_debt_mode) or "",
+                "profile": weekly_model.normalize_profile(raw_profile) or "",
             }
 
         if not factors:

@@ -13,6 +13,8 @@ import requests
 from lxml import etree
 from openpyxl import load_workbook
 
+import sync_planning_weekly_model as weekly_model
+
 GRAPH = "https://graph.microsoft.com/v1.0"
 HOSTNAME = "vikodacomvn.sharepoint.com"
 SITE_PATH = "/sites/Planning"
@@ -458,14 +460,10 @@ def read_conversion_factors(dest_bytes):
 
         worksheet = workbook[MASTER_SHEET]
         headers = [str(worksheet.cell(row=1, column=c).value or "").strip() for c in range(1, worksheet.max_column + 1)]
-        debt_col = None
-        profile_col = None
-        for idx, h in enumerate(headers, start=1):
-            hl = h.lower().replace(" ", "_")
-            if "debt" in hl:
-                debt_col = idx
-            if "profile" in hl:
-                profile_col = idx
+        debt_idx = weekly_model.find_header_col(headers, weekly_model.DEBT_HEADER_NAMES)
+        debt_col = debt_idx + 1 if debt_idx is not None else None
+        profile_idx = weekly_model.find_header_col(headers, weekly_model.PROFILE_HEADER_NAMES)
+        profile_col = profile_idx + 1 if profile_idx is not None else None
 
         factors = {}
         master_meta = {}
@@ -494,6 +492,8 @@ def read_conversion_factors(dest_bytes):
                 )
 
             factors[code] = factor
+            raw_debt = worksheet.cell(row=row, column=debt_col).value if debt_col else None
+            raw_profile = worksheet.cell(row=row, column=profile_col).value if profile_col else None
             master_meta[code] = {
                 "batch": to_number(worksheet.cell(row=row, column=4).value, default=0.0),
                 "per_shift": to_number(worksheet.cell(row=row, column=5).value, default=0.0),
@@ -502,8 +502,8 @@ def read_conversion_factors(dest_bytes):
                 "classification": str(worksheet.cell(row=row, column=8).value or "").strip(),
                 "mold": factor,
                 "leadtime": to_number(worksheet.cell(row=row, column=10).value, default=0.0),
-                "debt_mode": str(worksheet.cell(row=row, column=debt_col).value or "").strip() if debt_col else "",
-                "profile": str(worksheet.cell(row=row, column=profile_col).value or "").strip() if profile_col else "",
+                "debt_mode": weekly_model.normalize_debt_mode(raw_debt) or "",
+                "profile": weekly_model.normalize_profile(raw_profile) or "",
             }
 
         if not factors:
