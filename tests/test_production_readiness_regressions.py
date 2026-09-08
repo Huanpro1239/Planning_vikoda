@@ -1,6 +1,5 @@
-import json
 import unittest
-from datetime import date, datetime
+from datetime import datetime
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -16,7 +15,6 @@ from sync_planning_weekly_model import (
 )
 from weekly_planning_engine import (
     PlannerPolicy,
-    WeeklyInputRow,
     build_daily_plan,
     calculate_rows,
 )
