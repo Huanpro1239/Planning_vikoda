@@ -13,7 +13,9 @@ import sync_planning_metrics as metrics
 import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direct hooks
 import sync_planning_metrics_compat as metrics_compat
 from sync_planning_stock_inputs import prepare_stock_input_update
+import sync_planning_metrics_direct
 from sync_planning_weekly_model import (
+    compute_planning_inputs_hash,
     prepare_weekly_schedule_update,
     verify_weekly_workbook,
 )
@@ -97,6 +99,8 @@ def prepare_pipeline_output(
 
     # 1) Recompute Ton_kho from the same raw SharePoint snapshots used by production.
     conversion_factors, conversion_hash = read_conversion_factors_robust(work)
+    _, no_kho_hash = sync_planning_metrics_direct.hash_debt_sheet(work)
+    planning_inputs_hash = compute_planning_inputs_hash(work)
     actual_stock = sync_stock.read_actual_stock(source_bytes["actual_stock"])
     factory_vikoda = sync_stock.read_single_value_source(
         source_bytes["factory_vikoda"],
@@ -222,13 +226,17 @@ def prepare_pipeline_output(
     after_snapshot = _planning_snapshot(final_bytes)
     report["pipeline"] = {
         "mode": "offline_single_snapshot",
-        "engine": "ke_hoach_sx_tuan_v2_service_first",
+        "engine": "ke_hoach_sx_tuan_v2_service_first_20260908",
+        "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
         "steps": steps,
         "source_period": source_key,
         "plan_period": plan_key,
         "selector": selector,
         "conversion_hash": conversion_hash,
+        "danh_muc_hash": conversion_hash,
         "fc_hash": fc_info.get("fc_hash", ""),
+        "no_kho_hash": no_kho_hash,
+        "planning_inputs_hash": planning_inputs_hash,
         "state_would_change": bool(state_changed),
         "stock_rows_changed": stock_info.get("changed_count", 0),
         "fc_rows_changed": fc_info.get("changed_count", 0),

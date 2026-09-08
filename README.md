@@ -6,19 +6,20 @@ Hệ thống lập kế hoạch sản xuất Vikoda:
 
 ## Thuật toán hiện hành
 
-Engine: `ke_hoach_sx_tuan_v2_service_first`
+Engine: `ke_hoach_sx_tuan_v2_service_first_20260908`
 
-### 1. Service First
+### 1. Service First & Nhu cầu bắt buộc
 
 Khi capacity không đủ:
 
-1. **FC và Nợ kho được ưu tiên trước.**
-2. **Tồn cuối dự kiến là Safety-stock buffer.**
-3. Buffer chỉ được sản xuất bằng **capacity còn lại**.
-4. Không đủ buffer nhưng vẫn đủ Service → có thể `ready_for_publish`.
-5. Không đủ Service → `review_required`.
+1. **FC và Nợ kho là nhu cầu dịch vụ bắt buộc (Service Demand).**
+2. **Khi FC = 0 nhưng có nợ kho:** Ngày bắt đầu sản xuất mặc định từ ngày đầu tiên của kỳ (ngày 01) thay vì phụ thuộc phép chia tồn/FC, đảm bảo không bỏ sót lịch trả nợ.
+3. **Tồn cuối dự kiến là Safety-stock buffer:** Chỉ được sản xuất bằng **capacity còn lại**.
+4. **Bảo vệ Service trên timeline:** Buffer của SKU bắt đầu sớm không bao giờ được chiếm lịch hoặc làm thiếu hụt Service của SKU sau trên timeline sản xuất thực tế.
+5. **Không đủ buffer nhưng vẫn đủ Service:** `safety_stock = partially_achieved`, có thể `ready_for_publish`.
+6. **Không đủ Service (Service Shortfall):** Bắt buộc đánh dấu `service.ok = False`, lưu `stockout_skus`, chuyển trạng thái thành `review_required` và **chặn tuyệt đối auto-publish**.
 
-Rule Nợ kho `SUBTRACT_BOOK_ON_DEBT` và `IGNORE_BOOK_ON_DEBT` vẫn lấy từ `Danh_muc`.
+Rule Nợ kho `SUBTRACT_BOOK_ON_DEBT` và `IGNORE_BOOK_ON_DEBT` được cấu hình từ sheet `Danh_muc`.
 
 ### 2. KHS + PET 9000
 
@@ -27,56 +28,66 @@ KHS và PET 9000 là **một máy vật lý chung**:
 - Một timeline chung.
 - Không chạy song song.
 - Một capacity ca/ngày chung.
-- Đổi Quy cách giữa campaign liên tiếp tính setup.
+- Đổi Quy cách giữa campaign liên tiếp tính setup (mặc định 1 ca).
 - Service của toàn bộ SKU được xếp trước Safety-stock buffer.
 
 ## Ý nghĩa cột kế hoạch
 
 Trong `Ke_hoach_SX`:
 
-- **O**: nhu cầu đầy đủ, gồm mục tiêu tồn cuối dự kiến theo rule.
-- **P**: sản lượng sản xuất cam kết thực tế sau khi xét capacity.
-- **Q**: số ngày SX tương ứng với P.
-- **R**: ngày bắt đầu SX.
-- **S:...**: lịch SX ngày.
+- **A**: Mã sản phẩm.
+- **I**: Số ca theo ngày (shifts_per_day - đầu vào).
+- **J**: Tồn đầu thực tế (đồng bộ từ `Ton_kho!D`).
+- **K**: Tồn đầu sổ sách (đồng bộ từ `Ton_kho!E:H`).
+- **L**: FC tháng được chọn (đồng bộ từ sheet `FC`).
+- **M**: Tồn cuối dự kiến (Safety stock target - đầu vào).
+- **N**: Nợ kho (đồng bộ từ sheet `No kho!D`).
+- **O**: Nhu cầu đầy đủ, gồm mục tiêu tồn cuối dự kiến theo rule.
+- **P**: Sản lượng sản xuất cam kết thực tế sau khi xét capacity.
+- **Q**: Số ngày SX tương ứng với P.
+- **R**: Ngày bắt đầu SX.
+- **S:...**: Lịch SX chi tiết theo từng ngày trong tháng.
 
-## Trạng thái
+## Cơ chế phát hiện thay đổi (Change Detection & Loop Prevention)
 
-- `ready_for_publish`: Service đủ, resource hợp lệ, metadata hợp lệ.
-- `review_required`: thiếu Service, lỗi resource hoặc metadata.
-- `safety_stock = partially_achieved`: bán hàng đủ nhưng chưa đạt tồn cuối dự kiến.
+Hệ thống theo dõi toàn diện các đầu vào nghiệp vụ qua SHA-256 fingerprint:
+1. **5 file tồn kho nguồn:** ETag của `actual_stock`, `factory_vikoda`, `factory_vkd`, `accounting_vikoda`, `accounting_vkd`.
+2. **Sheet `Danh_muc`:** Toàn bộ cột chính sách (Quy cách/mold, Leadtime, sản lượng/mẻ, sản lượng/ca, Chuyền, Nhóm SP, Phân loại SP, Debt mode, Schedule profile).
+3. **Sheet `FC`:** Selector tháng và bảng số liệu forecast.
+4. **Sheet `No kho`:** Danh sách mã và số lượng nợ kho (cột D).
+5. **Sheet `Ke_hoach_SX`:** Tập SKU, Số ca/ngày (cột I) và Tồn cuối dự kiến (cột M).
 
-## Vận hành
+> [!NOTE]
+> Các cột kết quả đầu ra trên `Ke_hoach_SX` (O, P, Q, R, S+) được loại trừ khỏi hash đầu vào nhằm chống hiện tượng lặp vòng (Loop Prevention) sau khi publish.
 
-### Tạo Proposal
+## Trạng thái và Chính sách Duyệt Publish
 
-GitHub Actions → **Sync SharePoint Stock**:
+- `ready_for_publish`: Service đầy đủ, tài nguyên KHS/PET hợp lệ, metadata hợp lệ. Cho phép tự động publish theo lịch hoặc sự kiện.
+- `review_required`: Thiếu Service, hoặc lỗi cấu hình/tài nguyên. **Auto-publish bị chặn hoàn toàn**.
+- **Quy trình Duyệt (Review Approval):**
+  - Chỉ áp dụng cho trường hợp thiếu Service do giới hạn công suất thực tế (`stockout_risk`).
+  - Bắt buộc phải cung cấp đúng `proposal_id` của bản snapshot hiện tại và kèm theo `approval_reason` cụ thể.
+  - Lỗi vi phạm máy chung hoặc carryover chưa giải quyết tuyệt đối không thể duyệt bỏ qua.
 
-- `publish = false`
+## Vận hành CI/CD
 
-Workflow chỉ đọc SharePoint, tính workbook và tạo artifact review.
+### 1. Kích hoạt tự động
+- **Lịch hàng ngày:** Chạy định kỳ lúc 06:00 sáng VN (23:00 UTC) với cờ `--force`.
+- **Power Automate Dispatch:** Sự kiện `repository_dispatch` (`sharepoint_stock_updated`) sử dụng `--skip-if-unchanged` để bỏ qua tính lại nếu không có thay đổi đầu vào.
 
-### Publish
+### 2. Kích hoạt thủ công (Workflow Dispatch)
+- **Tạo Proposal (Read-only):** `publish = false`. Chỉ sinh file excel và report artifact trên GitHub Actions để kiểm tra.
+- **Duyệt Publish:** `publish = true`, kèm `approval_proposal_id` và `approval_reason` nếu proposal ở trạng thái `review_required`.
 
-Chỉ sau khi proposal được kiểm tra:
-
-- `publish = true`
-
-Publish dùng **ETag / If-Match**. Nếu dữ liệu thay đổi trong lúc tính, pipeline đọc lại snapshot và tính lại.
-
-## CI
-
+### 3. CI Gate
+Tất cả các workflow (gồm cả workflow sync và kiểm thử PR) đều chạy qua cổng kiểm thử bắt buộc trước khi chạm vào SharePoint:
 ```bash
-python -m unittest discover -s tests -v
+python -X utf8 -m unittest discover -s tests -v
 ```
-
-Hoặc dùng `make test`. Bộ test chạy hoàn toàn offline, không cần SharePoint.
 
 ## Chạy offline (không cần SharePoint)
 
-Dùng để nghiệm thu/kiểm tra proposal từ các bản sao tải về máy. Script chỉ ĐỌC
-file nguồn và GHI proposal + report vào thư mục `--out`, không upload, không đổi
-state gốc:
+Dùng để nghiệm thu/kiểm tra proposal từ các bản sao tải về máy. Script chỉ ĐỌC file nguồn và GHI proposal + report vào thư mục `--out`, không upload, không đổi state gốc:
 
 ```bash
 python run_offline.py \
@@ -88,8 +99,3 @@ python run_offline.py \
     --accounting-vkd XNT_ketoan_VKD.xlsm \
     --out ./out --verify
 ```
-
-Kết quả tính bằng đúng engine `ke_hoach_sx_tuan_v2_service_first` mà GitHub
-Actions sử dụng.
-
-Repository chỉ giữ engine và test của luồng production hiện hành. Các scheduler V2–V10, dry-run và workflow thử nghiệm cũ đã được loại khỏi nhánh hiện hành.

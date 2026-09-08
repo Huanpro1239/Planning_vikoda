@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import json
 import math
 import re
 from collections import defaultdict
@@ -389,8 +390,6 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
 
     if analysis.policy_warnings:
         service_state = "policy_metadata_missing"
-    elif is_capacity_balanced:
-        service_state = "capacity_constrained_balanced"
     elif service_carryovers:
         service_state = "stockout_risk"
     else:
@@ -420,10 +419,8 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
     )
 
     status = {
-        # Compatibility name retained, but OK now means the mandatory sales
-        # plan is covered or optimally balanced within physical capacity.
         "monthly_quantity": {
-            "ok": not service_carryovers or is_capacity_balanced,
+            "ok": not service_carryovers,
             "state": monthly_state,
             "carryover_skus": sorted(
                 set(service_carryovers) | set(buffer_carryovers)
@@ -439,9 +436,9 @@ def build_weekly_schedule_report(workbook_bytes: bytes, analysis: WeeklyAnalysis
             "shared_machine": shared_machine,
         },
         "service": {
-            "ok": not analysis.policy_warnings and (not service_carryovers or is_capacity_balanced),
+            "ok": not analysis.policy_warnings and not service_carryovers,
             "state": service_state,
-            "stockout_skus": [] if is_capacity_balanced else service_carryovers,
+            "stockout_skus": service_carryovers,
             "capacity_balanced_skus": service_carryovers if is_capacity_balanced else [],
         },
         "safety_stock": {
@@ -528,6 +525,11 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
         or report_resource.get("state") != expected_resource["state"]
     ):
         raise RuntimeError("resource_validation không khớp shared-machine schedule.")
+    if service_carryovers and schedule_report.get("publish_status") in ("ready_for_publish", "feasible"):
+        raise RuntimeError(
+            f"Kế hoạch còn thiếu service ({service_carryovers}) nhưng publish_status lại là "
+            f"{schedule_report.get('publish_status')}."
+        )
     return {
         "validated": True,
         "algorithm": "ke_hoach_sx_tuan_v2_service_first",
@@ -537,3 +539,41 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
         "policy_warning_count": len(analysis.policy_warnings),
         "publish_status": schedule_report.get("publish_status"),
     }
+
+
+def compute_planning_inputs_hash(workbook_bytes: bytes) -> str:
+    """Tính SHA-256 fingerprint của các ô đầu vào trên sheet Ke_hoach_SX.
+    Bao gồm:
+    - Danh sách mã SP (cột A)
+    - Số ca/ngày (cột I)
+    - Tồn cuối dự kiến (cột M)
+    Loại trừ các cột J, K (tính từ Tồn kho), L (tính từ FC), N (tính từ Nợ kho)
+    và các cột đầu ra O, P, Q, R, S+ để chống trigger lặp sau khi publish.
+    """
+    wb = load_workbook(BytesIO(workbook_bytes), data_only=True, read_only=True)
+    try:
+        if PLANNING_SHEET not in wb.sheetnames:
+            return ""
+        ws = wb[PLANNING_SHEET]
+        inputs = []
+        for r in range(2, ws.max_row + 1):
+            raw_code = ws.cell(r, 1).value
+            if raw_code in (None, ""):
+                continue
+            code = _code(raw_code)
+            shifts = _num(ws.cell(r, 9).value)
+            end_stock = _num(ws.cell(r, 13).value)
+            inputs.append({
+                "code": code,
+                "shifts_per_day": shifts,
+                "ton_cuoi_du_kien": end_stock,
+            })
+        payload = json.dumps(
+            inputs,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+    finally:
+        wb.close()
