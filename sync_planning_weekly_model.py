@@ -567,14 +567,25 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
             f"Kế hoạch còn thiếu service ({service_carryovers}) nhưng publish_status lại là "
             f"{schedule_report.get('publish_status')}."
         )
+
+    khsx_ki_verify = None
+    import sync_planning_khsx_ki
+    if sync_planning_khsx_ki.has_khsx_ki_sheet(workbook_bytes):
+        khsx_ki_verify = sync_planning_khsx_ki.verify_khsx_ki(
+            workbook_bytes,
+            plan_year=plan_year,
+            plan_month=plan_month,
+        )
+
     return {
         "validated": True,
-        "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+        "algorithm": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
         "checked_skus": len(analysis.calculated),
         "service_carryover_skus": service_carryovers,
         "buffer_carryover_skus": buffer_carryovers,
         "policy_warning_count": len(analysis.policy_warnings),
         "publish_status": schedule_report.get("publish_status"),
+        "khsx_ki": khsx_ki_verify,
     }
 
 

@@ -19,6 +19,7 @@ from sync_planning_weekly_model import (
     prepare_weekly_schedule_update,
     verify_weekly_workbook,
 )
+import sync_planning_khsx_ki
 import sync_stock
 from sync_stock_compat import read_conversion_factors_robust
 
@@ -208,6 +209,18 @@ def prepare_pipeline_output(
     )
     steps.append("ke_hoach_sx_tuan")
 
+    # 6b) Aggregate daily production into weekly schedule for KHSX_ki if present.
+    khsx_ki_info = None
+    if sync_planning_khsx_ki.has_khsx_ki_sheet(scheduled_bytes):
+        scheduled_bytes, khsx_ki_info = sync_planning_khsx_ki.patch_khsx_ki_workbook(
+            scheduled_bytes,
+            weekly_analysis=weekly_analysis,
+            plan_year=plan_year,
+            plan_month=plan_month,
+        )
+        steps.append("khsx_ki")
+        report["khsx_ki"] = khsx_ki_info
+
     # 7) Clean formulas on the proposal copy and validate the exact output bytes.
     final_bytes, formulas_removed = remove_sheet_formulas(
         scheduled_bytes,
@@ -226,9 +239,10 @@ def prepare_pipeline_output(
     after_snapshot = _planning_snapshot(final_bytes)
     report["pipeline"] = {
         "mode": "offline_single_snapshot",
-        "engine": "ke_hoach_sx_tuan_v2_service_first_20260908",
-        "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
+        "engine": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
+        "engine_version": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
         "steps": steps,
+        "khsx_ki": khsx_ki_info,
         "source_period": source_key,
         "plan_period": plan_key,
         "selector": selector,
