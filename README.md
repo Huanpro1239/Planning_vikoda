@@ -28,19 +28,19 @@ KHS và PET 9000 là **một máy vật lý chung**:
 - Một timeline chung.
 - Không chạy song song.
 - Một capacity ca/ngày chung.
-- Đổi Quy cách giữa campaign liên tiếp tính setup (mặc định 1 ca).
-- Service của toàn bộ SKU được xếp trước Safety-stock buffer.
+- Đổi Quy cách giữa campaign liên tiếp tính setup (mặc định 0.5 ca theo PlannerPolicy).
+- Service của toàn bộ SKU được ưu tiên 100% trước Safety-stock buffer; công suất còn dư sẽ được phân bổ một phần cho buffer theo thứ tự ưu tiên của SKU mà không chia nhỏ campaign.
 
 ## Ý nghĩa cột kế hoạch
 
 Trong `Ke_hoach_SX`:
 
 - **A**: Mã sản phẩm.
-- **I**: Số ca theo ngày (shifts_per_day - đầu vào).
+- **I**: Số ca theo ngày (shifts_per_day - đầu vào người dùng chỉnh).
 - **J**: Tồn đầu thực tế (đồng bộ từ `Ton_kho!D`).
 - **K**: Tồn đầu sổ sách (đồng bộ từ `Ton_kho!E:H`).
 - **L**: FC tháng được chọn (đồng bộ từ sheet `FC`).
-- **M**: Tồn cuối dự kiến (Safety stock target - đầu vào).
+- **M**: Tồn cuối dự kiến (Safety stock target - do pipeline tính toán từ FC, Leadtime và tồn đầu consignment).
 - **N**: Nợ kho (đồng bộ từ sheet `No kho!D`).
 - **O**: Nhu cầu đầy đủ, gồm mục tiêu tồn cuối dự kiến theo rule.
 - **P**: Sản lượng sản xuất cam kết thực tế sau khi xét capacity.
@@ -52,13 +52,13 @@ Trong `Ke_hoach_SX`:
 
 Hệ thống theo dõi toàn diện các đầu vào nghiệp vụ qua SHA-256 fingerprint:
 1. **5 file tồn kho nguồn:** ETag của `actual_stock`, `factory_vikoda`, `factory_vkd`, `accounting_vikoda`, `accounting_vkd`.
-2. **Sheet `Danh_muc`:** Toàn bộ cột chính sách (Quy cách/mold, Leadtime, sản lượng/mẻ, sản lượng/ca, Chuyền, Nhóm SP, Phân loại SP, Debt mode, Schedule profile).
+2. **Sheet `Danh_muc`:** Toàn bộ cột chính sách (Quy cách/mold, Leadtime, sản lượng/mẻ, sản lượng/ca, Chuyền, Nhóm SP, Phân loại SP, Debt mode / Cách tính nợ, Schedule profile / Profile lịch).
 3. **Sheet `FC`:** Selector tháng và bảng số liệu forecast.
 4. **Sheet `No kho`:** Danh sách mã và số lượng nợ kho (cột D).
-5. **Sheet `Ke_hoach_SX`:** Tập SKU, Số ca/ngày (cột I) và Tồn cuối dự kiến (cột M).
+5. **Sheet `Ke_hoach_SX`:** Tập SKU (cột A) và Số ca/ngày (cột I).
 
 > [!NOTE]
-> Các cột kết quả đầu ra trên `Ke_hoach_SX` (O, P, Q, R, S+) được loại trừ khỏi hash đầu vào nhằm chống hiện tượng lặp vòng (Loop Prevention) sau khi publish.
+> Các cột kết quả do pipeline tính và ghi trên `Ke_hoach_SX` (M, O, P, Q, R, S+) được loại trừ khỏi hash đầu vào nhằm chống hiện tượng kích hoạt lặp (Loop Prevention) sau khi publish.
 
 ## Trạng thái và Chính sách Duyệt Publish
 

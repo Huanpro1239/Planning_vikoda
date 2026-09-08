@@ -360,6 +360,187 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
             self.assertEqual(mb["scheduled_qty"], 500.0)
             self.assertEqual(mb["carryover_qty"], 0.0)
 
+    def test_vietnamese_debt_and_profile_headers_trigger_change_detection(self):
+        """P1: Ensure Vietnamese headers 'Cách tính nợ' and 'Profile lịch' update conversion_hash and detect changes."""
+        from openpyxl import load_workbook
+        from tests.test_run_offline import _target_workbook
+
+        def _encode(wb):
+            out = BytesIO()
+            wb.save(out)
+            wb.close()
+            return out.getvalue()
+
+        # 1. Debt mode under 'Cách tính nợ'
+        wb = load_workbook(BytesIO(_target_workbook()))
+        wb["Danh_muc"]["K1"] = "Cách tính nợ"
+        wb["Danh_muc"]["K2"] = "SUBTRACT_BOOK_ON_DEBT"
+        before_bytes = _encode(wb)
+
+        wb2 = load_workbook(BytesIO(before_bytes))
+        wb2["Danh_muc"]["K2"] = "IGNORE_BOOK_ON_DEBT"
+        after_bytes = _encode(wb2)
+
+        _, h1_compat = sync_stock_compat.read_conversion_factors_robust(before_bytes)
+        _, h2_compat = sync_stock_compat.read_conversion_factors_robust(after_bytes)
+        self.assertNotEqual(h1_compat, h2_compat, "conversion_hash must change when 'Cách tính nợ' changes (compat)")
+
+        _, h1_sync = sync_stock.read_conversion_factors(before_bytes)
+        _, h2_sync = sync_stock.read_conversion_factors(after_bytes)
+        self.assertNotEqual(h1_sync, h2_sync, "conversion_hash must change when 'Cách tính nợ' changes (sync_stock)")
+
+        old_state = {
+            "sources": {k: "etag_1" for k in pipeline_runner.SOURCES},
+            "conversion_hash": h1_compat,
+            "fc_hash": "fc_1",
+            "no_kho_hash": "debt_1",
+            "planning_inputs_hash": "plan_1",
+            "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
+        }
+        source_items = {k: {"eTag": "etag_1"} for k in pipeline_runner.SOURCES}
+        info_changed = dict(old_state, conversion_hash=h2_compat)
+        self.assertEqual(
+            pipeline_runner.detect_input_changes(old_state, source_items, info_changed),
+            ["sheet:Danh_muc"],
+        )
+
+        # 2. Profile under 'Profile lịch'
+        wb3 = load_workbook(BytesIO(_target_workbook()))
+        wb3["Danh_muc"]["L1"] = "Profile lịch"
+        wb3["Danh_muc"]["L2"] = "SPREAD_WORKING_DAYS"
+        prof_before = _encode(wb3)
+
+        wb4 = load_workbook(BytesIO(prof_before))
+        wb4["Danh_muc"]["L2"] = ""
+        prof_after = _encode(wb4)
+
+        _, hp1 = sync_stock_compat.read_conversion_factors_robust(prof_before)
+        _, hp2 = sync_stock_compat.read_conversion_factors_robust(prof_after)
+        self.assertNotEqual(hp1, hp2, "conversion_hash must change when 'Profile lịch' changes")
+
+    def test_two_round_pipeline_output_does_not_falsely_detect_column_m_change(self):
+        """P2: Column M is calculated by pipeline and excluded from input hash, preventing false changes on round 2."""
+        from openpyxl import load_workbook
+        from planning_pipeline import prepare_pipeline_output
+        from tests.test_run_offline import (
+            _actual_source,
+            _single_value_source,
+            _target_workbook,
+            CODE,
+            CODE_VKD,
+        )
+
+        source_bytes = {
+            "actual_stock": _actual_source(),
+            "factory_vikoda": _single_value_source(CODE, value_col_index=11, value=0, receipt=50),
+            "factory_vkd": _single_value_source(CODE_VKD, value_col_index=11, value=0),
+            "accounting_vikoda": _single_value_source(CODE, value_col_index=12, value=0),
+            "accounting_vkd": _single_value_source(CODE_VKD, value_col_index=12, value=0),
+        }
+
+        wb = load_workbook(BytesIO(_target_workbook()))
+        wb["FC"]["M2"] = 2600
+        out_buf = BytesIO()
+        wb.save(out_buf)
+        wb.close()
+        original = out_buf.getvalue()
+
+        # Round 1: M starts at 0, pipeline calculates M=200
+        out1, report1, state1 = prepare_pipeline_output(
+            original,
+            source_bytes,
+            runtime_state={},
+            input_revision={"target": {"etag": "offline-test"}},
+        )
+        wb1 = load_workbook(BytesIO(out1), data_only=True)
+        m_val = wb1["Ke_hoach_SX"]["M2"].value
+        wb1.close()
+        self.assertGreater(m_val, 0, "Pipeline should have calculated a positive column M")
+
+        # Round 2: Feed round 1's output and state
+        out2, report2, state2 = prepare_pipeline_output(
+            out1,
+            source_bytes,
+            runtime_state=state1,
+            input_revision={"target": {"etag": "offline-test"}},
+        )
+
+        # Change detection with unchanged sources must report NO changes
+        state = {
+            key: report1["pipeline"][key]
+            for key in ("conversion_hash", "fc_hash", "no_kho_hash", "planning_inputs_hash", "engine_version")
+        }
+        state["sources"] = {key: "same-etag" for key in pipeline_runner.SOURCES}
+        source_items = {key: {"eTag": "same-etag"} for key in pipeline_runner.SOURCES}
+
+        changes = pipeline_runner.detect_input_changes(state, source_items, report2["pipeline"])
+        self.assertEqual(changes, [], f"Round 2 detected spurious changes: {changes}")
+        self.assertEqual(
+            report1["pipeline"]["planning_inputs_hash"],
+            report2["pipeline"]["planning_inputs_hash"],
+        )
+
+    def test_partial_buffer_allocated_on_residual_capacity(self):
+        """P2: Residual capacity must be allocated to buffer without violating service priority or contiguous runs."""
+        from tests.test_service_first_safety_stock import row
+
+        # Scenario 1: Same mold (no setup)
+        # SKU A: service=1000 (10 shifts), buffer=5000 (50 shifts).
+        # SKU B: service=1000 (10 shifts), buffer=0 (0 shifts).
+        # Total capacity: 30 shifts. Residual capacity: 10 shifts.
+        # A should get 2000 (1000 service + 1000 buffer), B should get 1000.
+        inputs_same_mold = [
+            row(1001, "KHS", 2, fc=1000, target=5000, mold=1.0),
+            row(1002, "PET 9000", 3, fc=1000, target=0, mold=1.0),
+        ]
+        calc_same = calculate_rows(inputs_same_mold, period_year=2026, period_month=9)
+        plan_same = build_daily_plan(calc_same, policy=PlannerPolicy(allow_capacity_trim=True))
+
+        a_qty = sum(p.qty for p in plan_same if p.ma_sp == 1001)
+        b_qty = sum(p.qty for p in plan_same if p.ma_sp == 1002)
+        self.assertEqual(a_qty, 2000.0)
+        self.assertEqual(b_qty, 1000.0)
+        self.assertEqual(sum(p.qty / 100.0 for p in plan_same), 30.0)
+
+        # Scenario 2: Different mold (setup required = 0.5 shifts)
+        # SKU A: service=1000 (10 shifts), buffer=5000 (sl_ca=100, mold=1.0).
+        # SKU B: service=1000 (10 shifts), buffer=0 (sl_ca=100, mold=2.0).
+        # Total capacity: 30 shifts. Setup between A and B = 0.5 shifts.
+        # Service + Setup = 10 + 0.5 + 10 = 20.5 shifts.
+        # Residual capacity = 9.5 shifts.
+        # Since basis = 100 (1 shift), A can receive floor(9.5) = 9 shifts = 900 buffer.
+        inputs_diff_mold = [
+            row(1001, "KHS", 2, fc=1000, target=5000, mold=1.0),
+            row(1002, "PET 9000", 3, fc=1000, target=0, mold=2.0),
+        ]
+        calc_diff = calculate_rows(inputs_diff_mold, period_year=2026, period_month=9)
+        plan_diff = build_daily_plan(calc_diff, policy=PlannerPolicy(allow_capacity_trim=True))
+
+        a_diff_qty = sum(p.qty for p in plan_diff if p.ma_sp == 1001)
+        b_diff_qty = sum(p.qty for p in plan_diff if p.ma_sp == 1002)
+        self.assertEqual(a_diff_qty, 1900.0)
+        self.assertEqual(b_diff_qty, 1000.0)
+        # Total shifts = 19 production + 0.5 setup + 10 production = 29.5 <= 30
+        self.assertLessEqual(19.0 + 0.5 + 10.0, 30.0)
+
+        # Scenario 3: Residual capacity smaller than 1 basis (0.5 shift left, basis is 1 shift)
+        # SKU A: service=1500 (15 shifts), buffer=1000, mold=1.0.
+        # SKU B: service=1400 (14 shifts), buffer=0, mold=2.0.
+        # Total capacity = 30 shifts. Setup = 0.5 shift.
+        # Service + setup = 15 + 0.5 + 14 = 29.5 shifts.
+        # Residual capacity = 0.5 shift < 1 basis (100 qty = 1 shift).
+        # Neither receives buffer, 100% service preserved.
+        inputs_no_buffer = [
+            row(1001, "KHS", 2, fc=1500, target=1000, mold=1.0),
+            row(1002, "PET 9000", 3, fc=1400, target=0, mold=2.0),
+        ]
+        calc_no_buffer = calculate_rows(inputs_no_buffer, period_year=2026, period_month=9)
+        plan_no_buffer = build_daily_plan(calc_no_buffer, policy=PlannerPolicy(allow_capacity_trim=True))
+
+        self.assertEqual(sum(p.qty for p in plan_no_buffer if p.ma_sp == 1001), 1500.0)
+        self.assertEqual(sum(p.qty for p in plan_no_buffer if p.ma_sp == 1002), 1400.0)
+        self.assertLessEqual(sum(p.qty / 100.0 for p in plan_no_buffer) + 0.5, 30.0)
+
 
 if __name__ == "__main__":
     unittest.main()

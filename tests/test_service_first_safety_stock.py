@@ -114,12 +114,13 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
             days_by_sku[item.ma_sp].append(item.date)
             phases_by_day[item.date].add(item.phase)
 
-        # When capacity is tight (70 shifts > 30 shifts), buffer is dropped
-        # to ensure contiguous runs without split campaigns or tiny fragments.
+        # When capacity is tight (70 shifts > 30 shifts), service is prioritized 100%
+        # and residual capacity (10 shifts) is allocated to buffer for SKU 1001 (1000 buffer),
+        # preserving contiguous single-block campaigns.
         self.assertNotIn("buffer", [phase for phases in phases_by_day.values() for phase in phases])
 
-        # Both SKUs run 100% of their service quantity
-        self.assertEqual(sum(item.qty for item in analysis.daily_plan if item.ma_sp == 1001), 1000.0)
+        # SKU 1001 runs 1000 service + 1000 buffer = 2000; SKU 1002 runs 1000 service
+        self.assertEqual(sum(item.qty for item in analysis.daily_plan if item.ma_sp == 1001), 2000.0)
         self.assertEqual(sum(item.qty for item in analysis.daily_plan if item.ma_sp == 1002), 1000.0)
 
         # Each SKU runs contiguously in a single block without gaps or interleaving
@@ -131,9 +132,9 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
                     f"SKU {ma_sp} was interrupted between {dates[i]} and {dates[i + 1]}",
                 )
 
-        # 1001 runs first (days 1-10), then 1002 (days 11-20)
-        self.assertEqual(days_by_sku[1001][-1], date(2026, 9, 10))
-        self.assertEqual(days_by_sku[1002][0], date(2026, 9, 11))
+        # 1001 runs first (days 1-20), then 1002 (days 21-30)
+        self.assertEqual(days_by_sku[1001][-1], date(2026, 9, 20))
+        self.assertEqual(days_by_sku[1002][0], date(2026, 9, 21))
 
         # No day may exceed the one-shift shared machine.
         per_shift = {c.input.ma_sp: c.input.sl_ca for c in analysis.calculated}
@@ -224,15 +225,15 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
         result = load_workbook(BytesIO(updated), data_only=True, read_only=True)
         try:
             plan = result["Ke_hoach_SX"]
-            # O keeps desired need (1000 + 5000); P/Q reflect what fits without buffer when capacity is tight.
+            # O keeps desired need (1000 + 5000); P/Q reflect what fits including partial buffer into residual capacity.
             self.assertEqual(plan["O2"].value, 6000)
-            self.assertEqual(plan["P2"].value, 1000)
-            self.assertEqual(plan["Q2"].value, 10)
+            self.assertEqual(plan["P2"].value, 2000)
+            self.assertEqual(plan["Q2"].value, 20)
             self.assertEqual(plan["P3"].value, 1000)
             self.assertEqual(plan["Q3"].value, 10)
             self.assertEqual(
                 sum(float(plan.cell(2, 19 + d).value or 0) for d in range(30)),
-                1000.0,
+                2000.0,
             )
         finally:
             result.close()

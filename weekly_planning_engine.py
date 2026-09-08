@@ -318,10 +318,41 @@ def _schedule_serialized_lines(
         allocated_qty = dict(full_qtys)
     elif timeline_service_fits:
         # Khi timeline hoặc tháng không đủ cho cả buffer, ưu tiên Service First:
-        # Đảm bảo 100% service cho toàn bộ SKU trên timeline, bỏ buffer để không chiếm lịch service.
+        # Đảm bảo 100% service cho toàn bộ SKU trên timeline trước, sau đó phân bổ phần buffer
+        # có thể đáp ứng được vào công suất còn dư theo thứ tự ưu tiên của SKU.
         phase = "service"
         for r in selected:
             allocated_qty[r.input.ma_sp] = r.service_qty
+
+        for r in selected:
+            inp = r.input
+            needed_buffer = r.schedulable_qty - allocated_qty[inp.ma_sp]
+            if needed_buffer <= TOLERANCE:
+                continue
+            basis = inp.sl_me if is_sugar_classification(inp.phan_loai) else inp.sl_ca
+            max_steps = int(round(needed_buffer / basis))
+            if max_steps <= 0:
+                continue
+
+            low = 0
+            high = max_steps
+            best_steps = 0
+            while low <= high:
+                mid = (low + high) // 2
+                test_allocated = dict(allocated_qty)
+                test_allocated[inp.ma_sp] = allocated_qty[inp.ma_sp] + mid * basis
+                test_end, _, _ = _simulate_timeline(test_allocated)
+                if test_end <= total_capacity_shifts + TOLERANCE:
+                    best_steps = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+
+            if best_steps > 0:
+                allocated_qty[inp.ma_sp] += best_steps * basis
+
+        if all(allocated_qty[r.input.ma_sp] >= r.schedulable_qty - TOLERANCE for r in selected):
+            phase = "full"
     elif policy.allow_capacity_trim:
         # Service vượt quá công suất máy: Cân đối cắt giảm để vừa khít công suất
         phase = "capacity_balanced"
