@@ -48,6 +48,19 @@ class PlanningInputDiffTests(unittest.TestCase):
             ["source:actual_stock"],
         )
 
+        # engine_version changed
+        pipeline_info_engine = {
+            "conversion_hash": "conv_hash_1",
+            "fc_hash": "fc_hash_1",
+            "engine_version": "v_new",
+        }
+        old_state_engine = dict(old_state)
+        old_state_engine["engine_version"] = "v_old"
+        self.assertEqual(
+            pipeline_runner.detect_input_changes(old_state_engine, source_items, pipeline_info_engine),
+            ["engine_version"],
+        )
+
     def test_save_state_preserves_fc_hash(self):
         from pathlib import Path
         import tempfile
@@ -125,6 +138,59 @@ class PlanningInputDiffTests(unittest.TestCase):
             self.assertFalse(result_force.get("skipped_unchanged", False))
             self.assertTrue(result_force.get("uploaded"))
             fake_graph.upload_file.assert_called_once()
+
+    def test_skip_if_unchanged_does_not_skip_when_engine_version_changes(self):
+        fake_graph = MagicMock()
+        fake_graph.get_item_by_path.return_value = {
+            "id": "target_id",
+            "eTag": "etag_same",
+            "lastModifiedDateTime": "2026-09-07T08:00:00Z",
+        }
+        fake_graph.download_file.return_value = b"workbook_data"
+
+        old_state = {
+            "sources": {k: "etag_same" for k in pipeline_runner.SOURCES},
+            "conversion_hash": "conv_same",
+            "fc_hash": "fc_same",
+            "engine_version": "old_engine_v3",
+        }
+
+        mock_report = {
+            "publish_status": "ready_for_publish",
+            "algorithm": "new_engine_v4",
+            "plan_month": "2026-09",
+            "status": {
+                "monthly_quantity": {"ok": True},
+                "resource_validation": {"ok": True},
+                "service": {"ok": True},
+            },
+            "pipeline": {
+                "conversion_hash": "conv_same",
+                "fc_hash": "fc_same",
+                "engine_version": "new_engine_v4",
+            },
+        }
+
+        with (
+            patch.object(pipeline_runner, "prepare_pipeline_output", return_value=(b"new_data", mock_report, {})),
+            patch.object(sync_stock, "load_state", return_value=old_state),
+            patch.object(pipeline_runner.metrics, "load_runtime_state", return_value={}),
+            patch.object(pipeline_runner, "_save_proposal_artifacts"),
+            patch.object(pipeline_runner, "_save_publish_decision"),
+            patch.object(pipeline_runner, "_save_states_after_success"),
+            patch.object(pipeline_runner, "print_operational_report"),
+        ):
+            result = pipeline_runner.run_pipeline_with_retry(
+                fake_graph,
+                "drive_id",
+                publish_mode="publish",
+                skip_if_unchanged=True,
+                force=False,
+            )
+            self.assertFalse(result.get("skipped_unchanged", False))
+            self.assertTrue(result.get("uploaded"))
+            fake_graph.upload_file.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

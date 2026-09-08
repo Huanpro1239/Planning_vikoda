@@ -22,6 +22,7 @@ MASTER_SHEET = "Danh_muc"
 START_COLUMN = 19  # S
 EPS = 1e-6
 BALANCE_EPS = 1e-5
+ENGINE_VERSION = "ke_hoach_sx_tuan_v4_khsx_ki_20260908"
 
 
 @dataclass(frozen=True)
@@ -579,7 +580,7 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
 
     return {
         "validated": True,
-        "algorithm": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
+        "algorithm": ENGINE_VERSION,
         "checked_skus": len(analysis.calculated),
         "service_carryover_skus": service_carryovers,
         "buffer_carryover_skus": buffer_carryovers,

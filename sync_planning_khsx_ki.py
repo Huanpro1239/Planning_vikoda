@@ -179,15 +179,41 @@ def parse_week_columns(
     return get_layout_spec(plan_year, plan_month)
 
 
+def _snapshot_cell_style(cell) -> dict[str, Any] | None:
+    """Lưu snapshot toàn bộ định dạng hiển thị của một ô."""
+    if not getattr(cell, "has_style", False):
+        return None
+    return {
+        "font": copy(cell.font) if cell.font else None,
+        "border": copy(cell.border) if cell.border else None,
+        "fill": copy(cell.fill) if cell.fill else None,
+        "number_format": copy(cell.number_format) if cell.number_format else None,
+        "protection": copy(cell.protection) if cell.protection else None,
+        "alignment": copy(cell.alignment) if cell.alignment else None,
+    }
+
+
+def _apply_cell_style(dst_cell, style_snapshot: dict[str, Any] | None) -> None:
+    """Áp dụng snapshot định dạng vào ô đích."""
+    if not style_snapshot:
+        return
+    if style_snapshot.get("font") is not None:
+        dst_cell.font = copy(style_snapshot["font"])
+    if style_snapshot.get("border") is not None:
+        dst_cell.border = copy(style_snapshot["border"])
+    if style_snapshot.get("fill") is not None:
+        dst_cell.fill = copy(style_snapshot["fill"])
+    if style_snapshot.get("number_format") is not None:
+        dst_cell.number_format = copy(style_snapshot["number_format"])
+    if style_snapshot.get("protection") is not None:
+        dst_cell.protection = copy(style_snapshot["protection"])
+    if style_snapshot.get("alignment") is not None:
+        dst_cell.alignment = copy(style_snapshot["alignment"])
+
+
 def _copy_cell_style(src_cell, dst_cell) -> None:
     """Sao chép toàn bộ định dạng hiển thị từ một ô sang ô khác."""
-    if src_cell.has_style:
-        dst_cell.font = copy(src_cell.font)
-        dst_cell.border = copy(src_cell.border)
-        dst_cell.fill = copy(src_cell.fill)
-        dst_cell.number_format = copy(src_cell.number_format)
-        dst_cell.protection = copy(src_cell.protection)
-        dst_cell.alignment = copy(src_cell.alignment)
+    _apply_cell_style(dst_cell, _snapshot_cell_style(src_cell))
 
 
 def _clear_cell(cell) -> None:
@@ -199,20 +225,47 @@ def _clear_cell(cell) -> None:
     cell.number_format = "General"
 
 
+def _detect_current_layout(ws_ki, header_row: int = 6) -> int:
+    """Xác định cột tổng hiện tại trong sheet (10 hoặc 11)."""
+    # 1. Kiểm tra tiêu đề dòng header_row
+    c11_val = str(ws_ki.cell(header_row, 11).value or "").strip().lower()
+    c10_val = str(ws_ki.cell(header_row, 10).value or "").strip().lower()
+    if "tổng" in c11_val or "total" in c11_val:
+        return 11
+    if any(k in c10_val for k in ("tuần 6", "tuan 6", "t6", "week 6", "w6")):
+        return 11
+
+    # 2. Kiểm tra merged cells ở tiêu đề (dòng 1..5)
+    for rng in ws_ki.merged_cells.ranges:
+        if rng.min_row <= 5 and rng.min_col == 1 and rng.max_col >= 11:
+            return 11
+
+    # 3. Kiểm tra merged cells ở chân trang (dưới dòng header_row)
+    for rng in ws_ki.merged_cells.ranges:
+        if rng.min_row > header_row and rng.max_col >= 11:
+            return 11
+
+    # 4. Kiểm tra độ rộng cột K nếu đã được cấu hình >= 12
+    k_dim = ws_ki.column_dimensions.get("K")
+    if k_dim and k_dim.width and k_dim.width >= 12.0:
+        return 11
+
+    return 10
+
+
 def _update_merge(ws, row: int, start_col: int, target_end_col: int) -> None:
-    """Cập nhật dải ô hợp nhất trên một dòng cụ thể (ví dụ A1:J1 -> A1:K1) nếu dòng đó đã được hợp nhất."""
+    """Cập nhật dải ô hợp nhất trên một dòng/khối cụ thể nếu dòng đó đã được hợp nhất."""
     start_letter = get_column_letter(start_col)
     target_letter = get_column_letter(target_end_col)
-    target_ref = f"{start_letter}{row}:{target_letter}{row}"
-    found = False
     for rng in list(ws.merged_cells.ranges):
-        if rng.min_row == row and rng.max_row == row and rng.min_col == start_col:
-            found = True
+        if rng.min_row == row and rng.min_col == start_col:
+            end_row = rng.max_row
+            target_ref = f"{start_letter}{row}:{target_letter}{end_row}"
             if rng.coord == target_ref:
                 return
             ws.unmerge_cells(rng.coord)
-    if found:
-        ws.merge_cells(target_ref)
+            ws.merge_cells(target_ref)
+            return
 
 
 def _read_planning_sheet_data(
@@ -395,7 +448,51 @@ def patch_khsx_ki_workbook(
         is_6_weeks = (len(std_weeks) >= 6)
         target_end_col = 11 if is_6_weeks else 10
 
-        # 4. Cập nhật tiêu đề kỳ kế hoạch và ngày lập
+        # 4. Snapshot bố cục và định dạng hiện tại TRƯỚC KHI chỉnh sửa bất kỳ ô nào
+        input_total_col = _detect_current_layout(ws_ki, header_row=6)
+        input_is_6_weeks = (input_total_col == 11)
+
+        # Cột mẫu tuần ổn định: Cột 8 (H - Tuần 4) luôn là cột tuần thực sự trong mọi tháng 4/5/6 tuần
+        week_sample_col = 8
+
+        # Snapshot styles cho header (dòng 6)
+        total_header_style = _snapshot_cell_style(ws_ki.cell(6, input_total_col))
+        week_header_style = _snapshot_cell_style(ws_ki.cell(6, week_sample_col))
+
+        # Snapshot styles cho từng dòng SKU
+        total_sku_styles = {
+            r: _snapshot_cell_style(ws_ki.cell(r, input_total_col))
+            for r in seen_ki.values()
+        }
+        week_sku_styles = {
+            r: _snapshot_cell_style(ws_ki.cell(r, week_sample_col))
+            for r in seen_ki.values()
+        }
+
+        # Snapshot styles cho dòng TỔNG CỘNG
+        total_summary_style = None
+        week_summary_style = None
+        if total_row is not None:
+            total_summary_style = _snapshot_cell_style(ws_ki.cell(total_row, input_total_col))
+            week_summary_style = _snapshot_cell_style(ws_ki.cell(total_row, week_sample_col))
+
+        # Độ rộng cột ổn định
+        if input_is_6_weeks:
+            total_width = ws_ki.column_dimensions["K"].width or 17.0
+            week_width = (
+                ws_ki.column_dimensions["J"].width
+                or ws_ki.column_dimensions["I"].width
+                or 19.44140625
+            )
+        else:
+            total_width = ws_ki.column_dimensions["J"].width or 17.0
+            week_width = (
+                ws_ki.column_dimensions["I"].width
+                or ws_ki.column_dimensions["H"].width
+                or 19.44140625
+            )
+
+        # 5. Cập nhật tiêu đề kỳ kế hoạch và ngày lập
         period_text = f"Kỳ kế hoạch: Tháng {plan_month}"
         date_text = f"Ngày lập: 01/{plan_month:02d}/{plan_year}"
         if ws_ki.cell(3, 1).value is not None:
@@ -403,44 +500,44 @@ def patch_khsx_ki_workbook(
         if ws_ki.cell(4, 1).value is not None:
             ws_ki.cell(4, 1).value = date_text
 
-        # 5. Cập nhật các ô hợp nhất cho tiêu đề và khối chữ ký
-        for r in range(1, 5):
+        # 6. Cập nhật các ô hợp nhất cho tiêu đề và khối chữ ký/chân trang
+        for r in range(1, 6):
             _update_merge(ws_ki, r, 1, target_end_col)
-        _update_merge(ws_ki, 31, 9, target_end_col)
 
-        # 6. Thiết lập tiêu đề dòng 6 (Header) và định dạng cột tuần / tổng
+        min_footer_row = (total_row + 1) if total_row is not None else 7
+        for rng in list(ws_ki.merged_cells.ranges):
+            if rng.min_row >= min_footer_row and rng.max_col in (10, 11) and rng.min_col >= 8:
+                _update_merge(ws_ki, rng.min_row, rng.min_col, target_end_col)
+
+        # 7. Thiết lập tiêu đề dòng 6 (Header) và định dạng cột tuần / tổng
         if is_6_weeks:
-            # Sao chép style cho cột 11 (Tổng cộng mới) từ cột 10 (Tổng cộng cũ)
-            _copy_cell_style(ws_ki.cell(6, 10), ws_ki.cell(6, 11))
+            _apply_cell_style(ws_ki.cell(6, 10), week_header_style)
+            _apply_cell_style(ws_ki.cell(6, 11), total_header_style)
             ws_ki.cell(6, 11).value = "Tổng cộng"
-            # Cột 10 nhận style của cột tuần (từ cột 9)
-            _copy_cell_style(ws_ki.cell(6, 9), ws_ki.cell(6, 10))
             for w in weeks:
                 ws_ki.cell(6, w["col"]).value = w["label"]
-            ws_ki.column_dimensions["K"].width = ws_ki.column_dimensions["J"].width or 17.0
-            ws_ki.column_dimensions["J"].width = ws_ki.column_dimensions["I"].width or 15.0
+            ws_ki.column_dimensions["J"].width = week_width
+            ws_ki.column_dimensions["K"].width = total_width
         else:
-            # Tháng 4 hoặc 5 tuần: Cột 10 là Tổng cộng, dọn sạch cột 11
+            _apply_cell_style(ws_ki.cell(6, 10), total_header_style)
+            ws_ki.cell(6, 10).value = "Tổng cộng"
             for w in weeks:
                 ws_ki.cell(6, w["col"]).value = w["label"]
-            if ws_ki.cell(6, 11).has_style and getattr(ws_ki.cell(6, 11).font, "bold", False):
-                _copy_cell_style(ws_ki.cell(6, 11), ws_ki.cell(6, 10))
-            ws_ki.cell(6, 10).value = "Tổng cộng"
             _clear_cell(ws_ki.cell(6, 11))
+            ws_ki.column_dimensions["J"].width = total_width
             if "K" in ws_ki.column_dimensions:
                 del ws_ki.column_dimensions["K"]
 
         col_totals: dict[int, float] = defaultdict(float)
         sku_reports = []
 
-        # 7. Ghi dữ liệu từng dòng SKU
+        # 8. Ghi dữ liệu từng dòng SKU
         for code, r in seen_ki.items():
             if is_6_weeks:
-                _copy_cell_style(ws_ki.cell(r, 10), ws_ki.cell(r, 11))
-                _copy_cell_style(ws_ki.cell(r, 9), ws_ki.cell(r, 10))
+                _apply_cell_style(ws_ki.cell(r, 10), week_sku_styles[r])
+                _apply_cell_style(ws_ki.cell(r, 11), total_sku_styles[r])
             else:
-                if ws_ki.cell(r, 11).has_style and getattr(ws_ki.cell(r, 11).font, "bold", False):
-                    _copy_cell_style(ws_ki.cell(r, 11), ws_ki.cell(r, 10))
+                _apply_cell_style(ws_ki.cell(r, 10), total_sku_styles[r])
                 _clear_cell(ws_ki.cell(r, 11))
 
             row_total = 0.0
@@ -466,14 +563,13 @@ def patch_khsx_ki_workbook(
                 "committed_p": kh_p.get(code, 0.0),
             })
 
-        # 8. Ghi dòng TỔNG CỘNG nếu có
+        # 9. Ghi dòng TỔNG CỘNG nếu có
         if total_row is not None:
             if is_6_weeks:
-                _copy_cell_style(ws_ki.cell(total_row, 10), ws_ki.cell(total_row, 11))
-                _copy_cell_style(ws_ki.cell(total_row, 9), ws_ki.cell(total_row, 10))
+                _apply_cell_style(ws_ki.cell(total_row, 10), week_summary_style)
+                _apply_cell_style(ws_ki.cell(total_row, 11), total_summary_style)
             else:
-                if ws_ki.cell(total_row, 11).has_style and getattr(ws_ki.cell(total_row, 11).font, "bold", False):
-                    _copy_cell_style(ws_ki.cell(total_row, 11), ws_ki.cell(total_row, 10))
+                _apply_cell_style(ws_ki.cell(total_row, 10), total_summary_style)
                 _clear_cell(ws_ki.cell(total_row, 11))
 
             for w in weeks:
@@ -481,12 +577,7 @@ def patch_khsx_ki_workbook(
                 ws_ki.cell(total_row, col).value = float(col_totals[col])
             ws_ki.cell(total_row, total_col).value = float(col_totals[total_col])
 
-        # 9. Dọn sạch các ô còn sót ở cột 11 khi không phải 6 tuần
-        if not is_6_weeks:
-            start_clear_row = (total_row + 1) if total_row is not None else 7
-            for r in range(start_clear_row, ws_ki.max_row + 1):
-                if r != 31:
-                    _clear_cell(ws_ki.cell(r, 11))
+        # Chú ý: Không xóa bất kỳ ô nào sau total_row để bảo toàn 100% ghi chú và dữ liệu ngoài bảng.
 
         out = BytesIO()
         wb.save(out)

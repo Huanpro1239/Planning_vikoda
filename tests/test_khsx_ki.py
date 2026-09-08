@@ -5,9 +5,10 @@ from pathlib import Path
 import unittest
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 import sync_planning_khsx_ki as ki
-from sync_planning_weekly_model import compute_planning_inputs_hash
+from sync_planning_weekly_model import ENGINE_VERSION, compute_planning_inputs_hash
 
 AUDIT_SNAPSHOT = Path("temp_audit/survey_run_34190029619/planning_proposal.xlsx")
 
@@ -60,13 +61,32 @@ def make_mock_khsx_ki_workbook(*, days=None, skus=None, month=9, year=2026, with
 
     ws_ki.append(["TỔNG CỘNG", None, None, None] + empty_cols)
 
+    # Định dạng theo chuẩn mẫu template SharePoint
+    total_col_idx = len(header_ki)
+    for c in range(1, total_col_idx + 1):
+        ws_ki.cell(6, c).font = Font(bold=True)
+    ws_ki.column_dimensions["J"].width = 17.0 if total_col_idx == 10 else 19.44140625
+    if total_col_idx == 11:
+        ws_ki.column_dimensions["K"].width = 17.0
+    ws_ki.column_dimensions["I"].width = 19.44140625
+    total_row_idx = 6 + len(sku_list) + 1
+    for r in range(7, 7 + len(sku_list)):
+        for c in range(5, total_col_idx):
+            ws_ki.cell(r, c).font = Font(bold=False)
+            ws_ki.cell(r, c).number_format = r'_(* #,##0_);_(* \(#,##0\);_(* "-"_);_(@_)'
+        ws_ki.cell(r, total_col_idx).font = Font(bold=True)
+        ws_ki.cell(r, total_col_idx).number_format = "#,##0"
+    for c in range(5, total_col_idx + 1):
+        ws_ki.cell(total_row_idx, c).font = Font(bold=True)
+        ws_ki.cell(total_row_idx, c).number_format = "#,##0"
+
     if with_merges:
-        ws_ki.merge_cells("A1:J1")
-        ws_ki.merge_cells("A2:J2")
-        ws_ki.merge_cells("A3:J3")
-        ws_ki.merge_cells("A4:J4")
+        from openpyxl.utils.cell import get_column_letter
+        tot_letter = get_column_letter(total_col_idx)
+        for r in range(1, 5):
+            ws_ki.merge_cells(f"A{r}:{tot_letter}{r}")
         ws_ki.cell(31, 9).value = "TP.KẾ HOẠCH"
-        ws_ki.merge_cells("I31:J31")
+        ws_ki.merge_cells(f"I31:{tot_letter}31")
 
     out = BytesIO()
     wb.save(out)
@@ -273,7 +293,7 @@ class KHSXKiTests(unittest.TestCase):
 
         pipeline_info1 = report1["pipeline"]
         self.assertIn("khsx_ki", pipeline_info1["steps"])
-        self.assertEqual(pipeline_info1["engine_version"], "ke_hoach_sx_tuan_v3_khsx_ki_20260908")
+        self.assertEqual(pipeline_info1["engine_version"], ENGINE_VERSION)
         self.assertTrue(pipeline_info1["verify"]["khsx_ki"]["ok"])
 
         # Round 2: Idempotence test
@@ -541,6 +561,182 @@ class KHSXKiTests(unittest.TestCase):
 
                 self.assertEqual(all_days, list(range(1, days_in_month + 1)))
                 self.assertEqual(len(all_days), len(set(all_days)), "Trùng ngày trong phân hoạch tuần!")
+
+    def test_note_outside_table_preserved(self):
+        """[Defect 1] Ghi chú của người dùng ngoài bảng (K35) phải được bảo toàn khi patch cho tháng 4, 5, 6 tuần."""
+        base_raw = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(base_raw))
+        ws = wb["KHSX_ki"]
+        ws["K35"] = "Ghi chú của người lập kế hoạch"
+        ws["K36"] = "Công thức phụ"
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+        raw_with_note = buf.getvalue()
+
+        # Patch tháng 9 (5 tuần)
+        out5, rep5 = ki.patch_khsx_ki_workbook(raw_with_note, plan_year=2026, plan_month=9)
+        self.assertTrue(rep5["ok"])
+        wb5 = load_workbook(BytesIO(out5))
+        self.assertEqual(wb5["KHSX_ki"]["K35"].value, "Ghi chú của người lập kế hoạch")
+        self.assertEqual(wb5["KHSX_ki"]["K36"].value, "Công thức phụ")
+        wb5.close()
+
+        # Patch tháng 11 (6 tuần)
+        out6, rep6 = ki.patch_khsx_ki_workbook(out5, plan_year=2026, plan_month=11)
+        self.assertTrue(rep6["ok"])
+        wb6 = load_workbook(BytesIO(out6))
+        self.assertEqual(wb6["KHSX_ki"]["K35"].value, "Ghi chú của người lập kế hoạch")
+        self.assertEqual(wb6["KHSX_ki"]["K36"].value, "Công thức phụ")
+        wb6.close()
+
+        # Patch lại tháng 9 (chuyển từ 6 tuần về 5 tuần)
+        out_back, rep_back = ki.patch_khsx_ki_workbook(out6, plan_year=2026, plan_month=9)
+        self.assertTrue(rep_back["ok"])
+        wb_back = load_workbook(BytesIO(out_back))
+        self.assertEqual(wb_back["KHSX_ki"]["K35"].value, "Ghi chú của người lập kế hoạch")
+        self.assertEqual(wb_back["KHSX_ki"]["K36"].value, "Công thức phụ")
+        wb_back.close()
+
+    def test_note_preserved_when_total_row_shifts(self):
+        """[Defect 1] Ghi chú dưới bảng được bảo toàn kể cả khi vị trí dòng tổng thay đổi."""
+        wb = Workbook()
+        ws_kh = wb.active
+        ws_kh.title = "Ke_hoach_SX"
+        ws_ki = wb.create_sheet("KHSX_ki")
+
+        headers_kh = ["Mã SP", "Tên", "ĐVT"] + [""] * 11 + ["Nhu cầu", "P", "Q", "Start"] + [f"{d:02d}/09" for d in range(1, 31)]
+        ws_kh.append(headers_kh)
+        headers_ki = ["STT", "Mã SP", "Tên", "ĐVT", "Tuần 1", "Tuần 2", "Tuần 3", "Tuần 4", "Tuần 5", "Tổng cộng"]
+        for r in range(1, 6):
+            ws_ki.append([f"Header {r}"])
+        ws_ki.append(headers_ki)
+
+        # 4 SKU -> dòng 7, 8, 9, 10 là SKU, dòng 11 là TỔNG CỘNG
+        for i in range(1, 5):
+            code = 130100000 + i
+            ws_kh.append([code, f"SP {i}", "Thùng"] + [0] * 11 + [1000.0, 1000.0, 1, None, 1000.0] + [None] * 29)
+            ws_ki.append([i, code, f"SP {i}", "Thùng", None, None, None, None, None, None])
+        ws_ki.append(["TỔNG CỘNG", None, None, None, None, None, None, None, None, None])
+        # Đặt ghi chú tại dòng 15 cột K (dưới dòng tổng 11)
+        ws_ki["K15"] = "Ghi chú tại dòng 15"
+
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        out, rep = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=9)
+        self.assertTrue(rep["ok"])
+        wb_out = load_workbook(BytesIO(out))
+        self.assertEqual(wb_out["KHSX_ki"]["K15"].value, "Ghi chú tại dòng 15")
+        wb_out.close()
+
+    def test_idempotence_six_to_six_weeks(self):
+        """[Defect 2] Chạy lại 6 -> 6 tuần giữ nguyên định dạng in đậm, độ rộng và number format của Cột J và K."""
+        raw6 = make_mock_khsx_ki_workbook(year=2026, month=11)
+        p1, rep1 = ki.patch_khsx_ki_workbook(raw6, plan_year=2026, plan_month=11)
+        self.assertTrue(rep1["ok"])
+
+        # Đọc định dạng sau lần chạy 1
+        wb1 = load_workbook(BytesIO(p1))
+        ws1 = wb1["KHSX_ki"]
+        k7_bold_1 = ws1["K7"].font.bold
+        j7_bold_1 = ws1["J7"].font.bold
+        k7_fmt_1 = ws1["K7"].number_format
+        j7_fmt_1 = ws1["J7"].number_format
+        j_width_1 = ws1.column_dimensions["J"].width
+        k_width_1 = ws1.column_dimensions["K"].width
+        wb1.close()
+
+        # Chạy lần 2 trên cùng đầu vào (6 -> 6)
+        p2, rep2 = ki.patch_khsx_ki_workbook(p1, plan_year=2026, plan_month=11)
+        self.assertTrue(rep2["ok"])
+
+        wb2 = load_workbook(BytesIO(p2))
+        ws2 = wb2["KHSX_ki"]
+        self.assertEqual(ws2["K7"].font.bold, k7_bold_1)
+        self.assertEqual(ws2["J7"].font.bold, j7_bold_1)
+        self.assertEqual(ws2["K7"].number_format, k7_fmt_1)
+        self.assertEqual(ws2["J7"].number_format, j7_fmt_1)
+        self.assertEqual(ws2.column_dimensions["J"].width, j_width_1)
+        self.assertEqual(ws2.column_dimensions["K"].width, k_width_1)
+        self.assertTrue(ws2["K7"].font.bold, "Cột tổng K7 phải in đậm sau khi chạy lại 6->6")
+        self.assertFalse(ws2["J7"].font.bold, "Cột tuần J7 không được in đậm")
+        wb2.close()
+
+    def test_switching_five_six_six_five(self):
+        """[Defect 2] Chuỗi chuyển đổi 5 -> 6 -> 6 -> 5 tuần khôi phục chuẩn xác định dạng tổng cho Cột 10."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        p1, _ = ki.patch_khsx_ki_workbook(raw5, plan_year=2026, plan_month=9)
+        wb1 = load_workbook(BytesIO(p1))
+        j7_bold_orig = wb1["KHSX_ki"]["J7"].font.bold
+        j7_fmt_orig = wb1["KHSX_ki"]["J7"].number_format
+        wb1.close()
+
+        # 5 -> 6
+        p2, _ = ki.patch_khsx_ki_workbook(p1, plan_year=2026, plan_month=11)
+        # 6 -> 6
+        p3, _ = ki.patch_khsx_ki_workbook(p2, plan_year=2026, plan_month=11)
+        # 6 -> 5
+        p4, _ = ki.patch_khsx_ki_workbook(p3, plan_year=2026, plan_month=9)
+
+        wb4 = load_workbook(BytesIO(p4))
+        ws4 = wb4["KHSX_ki"]
+        self.assertEqual(ws4["J7"].font.bold, j7_bold_orig)
+        self.assertEqual(ws4["J7"].number_format, j7_fmt_orig)
+        self.assertEqual(ws4["J6"].value, "Tổng cộng")
+        self.assertIsNone(ws4["K7"].value)
+        self.assertIsNone(ws4["K6"].value)
+        wb4.close()
+
+    def test_switching_four_six_four(self):
+        """[Defect 2] Chuỗi chuyển đổi 4 -> 6 -> 4 tuần bảo toàn tính đúng đắn dữ liệu và định dạng."""
+        raw4 = make_mock_khsx_ki_workbook(year=2027, month=2)
+        p1, _ = ki.patch_khsx_ki_workbook(raw4, plan_year=2027, plan_month=2)
+        # 4 -> 6
+        p2, _ = ki.patch_khsx_ki_workbook(p1, plan_year=2026, plan_month=11)
+        # 6 -> 4
+        p3, _ = ki.patch_khsx_ki_workbook(p2, plan_year=2027, plan_month=2)
+
+        v3 = ki.verify_khsx_ki(p3, plan_year=2027, plan_month=2)
+        self.assertTrue(v3["ok"])
+        self.assertEqual(v3["num_weeks"], 4)
+
+        wb3 = load_workbook(BytesIO(p3))
+        ws3 = wb3["KHSX_ki"]
+        self.assertEqual(ws3["J6"].value, "Tổng cộng")
+        self.assertIn("Tuần 5", str(ws3["I6"].value))
+        self.assertEqual(ws3["I7"].value, 0.0)
+        self.assertIsNone(ws3["K6"].value)
+        self.assertIsNone(ws3["K7"].value)
+        wb3.close()
+
+    def test_dynamic_signature_block_merge(self):
+        """[Defect 1] Khối chữ ký ở dòng bất kỳ (dòng 35) tự động co/dãn hợp nhất theo số tuần."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        # Đặt khối chữ ký ở dòng 35
+        ws["I35"] = "TP.KẾ HOẠCH"
+        ws.merge_cells("I35:J35")
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch 6 tuần -> merge phải mở rộng thành I35:K35
+        out6, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        wb6 = load_workbook(BytesIO(out6))
+        ranges6 = [str(r) for r in wb6["KHSX_ki"].merged_cells.ranges]
+        self.assertIn("I35:K35", ranges6)
+        wb6.close()
+
+        # Patch về 5 tuần -> merge phải thu về I35:J35
+        out5, _ = ki.patch_khsx_ki_workbook(out6, plan_year=2026, plan_month=9)
+        wb5 = load_workbook(BytesIO(out5))
+        ranges5 = [str(r) for r in wb5["KHSX_ki"].merged_cells.ranges]
+        self.assertIn("I35:J35", ranges5)
+        self.assertNotIn("I35:K35", ranges5)
+        wb5.close()
 
 
 if __name__ == "__main__":

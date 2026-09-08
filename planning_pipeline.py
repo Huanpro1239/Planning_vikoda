@@ -15,6 +15,7 @@ import sync_planning_metrics_compat as metrics_compat
 from sync_planning_stock_inputs import prepare_stock_input_update
 import sync_planning_metrics_direct
 from sync_planning_weekly_model import (
+    ENGINE_VERSION,
     compute_planning_inputs_hash,
     prepare_weekly_schedule_update,
     verify_weekly_workbook,
@@ -239,8 +240,8 @@ def prepare_pipeline_output(
     after_snapshot = _planning_snapshot(final_bytes)
     report["pipeline"] = {
         "mode": "offline_single_snapshot",
-        "engine": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
-        "engine_version": "ke_hoach_sx_tuan_v3_khsx_ki_20260908",
+        "engine": ENGINE_VERSION,
+        "engine_version": ENGINE_VERSION,
         "steps": steps,
         "khsx_ki": khsx_ki_info,
         "source_period": source_key,
