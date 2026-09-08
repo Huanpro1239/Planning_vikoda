@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 
 import sync_planning_khsx_ki as ki
 from sync_planning_weekly_model import ENGINE_VERSION, compute_planning_inputs_hash
@@ -737,6 +737,191 @@ class KHSXKiTests(unittest.TestCase):
         self.assertIn("I35:J35", ranges5)
         self.assertNotIn("I35:K35", ranges5)
         wb5.close()
+
+    def test_signature_block_and_adjacent_note_preserved_five_to_six(self):
+        """[Defect 1A] Khối chữ ký I35:J35 và ghi chú K35 được bảo toàn nguyên vẹn khi chuyển 5 -> 6 tuần."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["I35"] = "TP.KẾ HOẠCH"
+        ws.merge_cells("I35:J35")
+        ws["K35"] = "Ghi chú cần giữ"
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch sang 6 tuần (tháng 11/2026)
+        out6, rep6 = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        self.assertTrue(rep6["ok"])
+        ver6 = ki.verify_khsx_ki(out6, plan_year=2026, plan_month=11)
+        wb6 = load_workbook(BytesIO(out6))
+        ws6 = wb6["KHSX_ki"]
+        self.assertEqual(ws6["K35"].value, "Ghi chú cần giữ")
+        self.assertEqual(ws6["I35"].value, "TP.KẾ HOẠCH")
+        ranges6 = [str(r) for r in ws6.merged_cells.ranges]
+        # Không mở rộng đè lên K35, giữ nguyên I35:J35
+        self.assertIn("I35:J35", ranges6)
+        self.assertNotIn("I35:K35", ranges6)
+        wb6.close()
+
+    def test_note_with_formula_and_formatting_at_expansion_preserved(self):
+        """[Defect 1A] Ghi chú chứa công thức và định dạng tùy biến tại ô mở rộng K35 được bảo toàn."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["I35"] = "TP.KẾ HOẠCH"
+        ws.merge_cells("I35:J35")
+        ws["K35"].value = '="GHI_CHU_" & "2026"'
+        ws["K35"].font = Font(name="Arial", size=12, bold=True, italic=True)
+        ws["K35"].fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        out6, rep6 = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        self.assertTrue(rep6["ok"])
+
+        wb6 = load_workbook(BytesIO(out6))
+        ws6 = wb6["KHSX_ki"]
+        self.assertEqual(ws6["K35"].value, '="GHI_CHU_" & "2026"')
+        self.assertTrue(ws6["K35"].font.bold)
+        self.assertTrue(ws6["K35"].font.italic)
+        self.assertEqual(ws6["K35"].fill.fill_type, "solid")
+        ranges6 = [str(r) for r in ws6.merged_cells.ranges]
+        self.assertIn("I35:J35", ranges6)
+        self.assertNotIn("I35:K35", ranges6)
+        wb6.close()
+
+    def test_vertical_merged_note_preserved_no_crash(self):
+        """[Defect 1B] Vùng gộp dọc K35:K36 không bị sửa và không gây crash ValueError."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["K35"] = "Ghi chú 2 dòng"
+        ws.merge_cells("K35:K36")
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch tháng 5 tuần (tháng 9/2026)
+        out5, rep5 = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=9)
+        self.assertTrue(rep5["ok"])
+
+        wb5 = load_workbook(BytesIO(out5))
+        ws5 = wb5["KHSX_ki"]
+        self.assertEqual(ws5["K35"].value, "Ghi chú 2 dòng")
+        ranges5 = [str(r) for r in ws5.merged_cells.ranges]
+        self.assertIn("K35:K36", ranges5)
+        wb5.close()
+
+    def test_unrelated_footer_merges_preserved(self):
+        """[Defect 1] Các vùng gộp chữ ký khác và vùng gộp tùy ý dưới bảng được giữ nguyên."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["B31"] = "CEO"
+        ws.merge_cells("B31:C31")
+        ws["D31"] = "TP. SẢN XUẤT"
+        ws.merge_cells("D31:F31")
+        ws["G31"] = "TP.MUA HÀNG"
+        ws.merge_cells("G31:H31")
+        ws["D36"] = "Ghi chú kỹ thuật"
+        ws.merge_cells("D36:F36")
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch 6 tuần rồi về 5 tuần
+        out6, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        wb6 = load_workbook(BytesIO(out6))
+        ranges6 = [str(r) for r in wb6["KHSX_ki"].merged_cells.ranges]
+        for expected in ("B31:C31", "D31:F31", "G31:H31", "D36:F36"):
+            self.assertIn(expected, ranges6)
+        wb6.close()
+
+        out5, _ = ki.patch_khsx_ki_workbook(out6, plan_year=2026, plan_month=9)
+        wb5 = load_workbook(BytesIO(out5))
+        ranges5 = [str(r) for r in wb5["KHSX_ki"].merged_cells.ranges]
+        for expected in ("B31:C31", "D31:F31", "G31:H31", "D36:F36"):
+            self.assertIn(expected, ranges5)
+        wb5.close()
+
+    def test_layout_detection_with_wide_k_and_external_merges(self):
+        """[Defect 2] Nới rộng K lên 25 và có merge ngoài bảng không làm nhận diện nhầm cột tổng."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws.column_dimensions["K"].width = 25.0
+        ws["K35"] = "Ghi chú cột K rộng"
+        ws.merge_cells("A1:L1")  # Merge tiêu đề kéo dài tới L
+        ws.merge_cells("E38:L38")  # Merge ngoài bảng kéo dài tới L
+
+        # Detector phải nhận diện đúng 10, không bị đánh lừa bởi K width hay external merge
+        detected = ki._detect_current_layout(ws)
+        self.assertEqual(detected, 10)
+
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch sang 6 tuần
+        out6, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        wb6 = load_workbook(BytesIO(out6))
+        ws6 = wb6["KHSX_ki"]
+        self.assertEqual(ws6["K6"].value, "Tổng cộng")
+        self.assertTrue(ws6["K7"].font.bold, "Cột tổng mới K7 phải in đậm")
+        self.assertFalse(ws6["J7"].font.bold, "Cột tuần J7 không được in đậm")
+        self.assertEqual(ws6.column_dimensions["K"].width, 17.0)
+        self.assertEqual(ws6.column_dimensions["J"].width, 19.44140625)
+        wb6.close()
+
+    def test_conflicting_or_corrupt_headers_resolved_safely(self):
+        """[Defect 2] Tiêu đề mâu thuẫn hoặc hỏng được phân giải chính xác qua đối soát SKU rows."""
+        # Trường hợp 1: Cả J6 và K6 đều ghi "Tổng cộng", nhưng col 11 có =SUM formula
+        raw6_bytes, _ = ki.patch_khsx_ki_workbook(make_mock_khsx_ki_workbook(year=2026, month=11), plan_year=2026, plan_month=11)
+        wb6 = load_workbook(BytesIO(raw6_bytes))
+        ws6 = wb6["KHSX_ki"]
+        ws6["J6"].value = "Tổng cộng"  # Gây mâu thuẫn tiêu đề
+        ws6["K6"].value = "Tổng cộng"
+        # Detector vẫn phải nhận diện đúng 11 vì col 11 chứa công thức tổng SKU
+        self.assertEqual(ki._detect_current_layout(ws6), 11)
+        wb6.close()
+
+        # Trường hợp 2: Cả J6 và K6 đều ghi "Tổng cộng", nhưng col 11 trống rỗng
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb5 = load_workbook(BytesIO(raw5))
+        ws5 = wb5["KHSX_ki"]
+        ws5["J6"].value = "Tổng cộng"
+        ws5["K6"].value = "Tổng cộng"
+        # Detector phải nhận diện đúng 10 vì col 11 không có dữ liệu
+        self.assertEqual(ki._detect_current_layout(ws5), 10)
+        wb5.close()
+
+        # Trường hợp 3: Tiêu đề dòng 6 bị xóa sạch (None)
+        raw5_blank = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb_blank = load_workbook(BytesIO(raw5_blank))
+        ws_blank = wb_blank["KHSX_ki"]
+        ws_blank["J6"].value = None
+        ws_blank["K6"].value = None
+        self.assertEqual(ki._detect_current_layout(ws_blank), 10)
+        wb_blank.close()
+
+    def test_conflicting_merge_inside_table_raises_clear_error(self):
+        """[An toàn dữ liệu] Vùng merge xung đột bên trong bảng SKU báo lỗi rõ sheet và tọa độ."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        # Đặt một ô gộp bất thường bên trong dòng SKU (dòng 7, cột J..K)
+        ws.merge_cells("J7:K7")
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        with self.assertRaises(ValueError) as ctx:
+            ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        err_msg = str(ctx.exception)
+        self.assertIn("KHSX_ki", err_msg)
+        self.assertIn("J7:K7", err_msg)
 
 
 if __name__ == "__main__":

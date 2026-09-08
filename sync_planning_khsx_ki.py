@@ -226,46 +226,176 @@ def _clear_cell(cell) -> None:
 
 
 def _detect_current_layout(ws_ki, header_row: int = 6) -> int:
-    """Xác định cột tổng hiện tại trong sheet (10 hoặc 11)."""
-    # 1. Kiểm tra tiêu đề dòng header_row
-    c11_val = str(ws_ki.cell(header_row, 11).value or "").strip().lower()
-    c10_val = str(ws_ki.cell(header_row, 10).value or "").strip().lower()
-    if "tổng" in c11_val or "total" in c11_val:
+    """Xác định cột tổng hiện tại trong sheet (10 hoặc 11) dựa trên tiêu đề bảng và dữ liệu bảng.
+
+    Quy tắc nghiệp vụ:
+    - Nhận diện bố cục từ tiêu đề tổng và các cột tuần hợp lệ trong vùng bảng.
+    - Cột 10 (J) có 'Tổng cộng' -> trả về 10 (bố cục 4 hoặc 5 tuần).
+    - Cột 11 (K) có 'Tổng cộng' hoặc Cột 10 (J) có tiêu đề 'Tuần 6' -> trả về 11 (bố cục 6 tuần).
+    - Tuyệt đối không dùng độ rộng cột, font.bold hay merged ranges ngoài bảng làm căn cứ.
+    - Với tiêu đề thiếu, hỏng hoặc mâu thuẫn: đối soát các dòng dữ liệu SKU (cột 11 có =SUM/dữ liệu hay rỗng hoàn toàn).
+    """
+    def _norm(val) -> str:
+        return str(val or "").strip().lower()
+
+    def _is_total(val) -> bool:
+        v = _norm(val)
+        return "tổng" in v or "total" in v
+
+    def _is_w6(val) -> bool:
+        v = _norm(val)
+        return any(k in v for k in ("tuần 6", "tuan 6", "t6", "week 6", "w6"))
+
+    c10_val = ws_ki.cell(header_row, 10).value
+    c11_val = ws_ki.cell(header_row, 11).value
+
+    # 1. Tín hiệu rõ ràng và không mâu thuẫn từ hàng tiêu đề
+    if _is_total(c10_val) and not _is_total(c11_val):
+        return 10
+    if _is_total(c11_val) and not _is_total(c10_val):
         return 11
-    if any(k in c10_val for k in ("tuần 6", "tuan 6", "t6", "week 6", "w6")):
+    if _is_w6(c10_val) and not _is_total(c10_val):
         return 11
 
-    # 2. Kiểm tra merged cells ở tiêu đề (dòng 1..5)
-    for rng in ws_ki.merged_cells.ranges:
-        if rng.min_row <= 5 and rng.min_col == 1 and rng.max_col >= 11:
+    # 2. Xử lý tiêu đề mâu thuẫn (cả 10 và 11 đều là tổng) hoặc tiêu đề bị hỏng/thiếu:
+    # Đối soát cấu trúc nội bộ của bảng qua các dòng SKU
+    sku_start = header_row + 1
+    sample_limit = min(ws_ki.max_row or (header_row + 10), header_row + 30)
+
+    has_sum_formula_11 = False
+    has_sum_formula_10 = False
+    has_sku_data_11 = False
+
+    for r in range(sku_start, sample_limit + 1):
+        v10 = ws_ki.cell(r, 10).value
+        v11 = ws_ki.cell(r, 11).value
+        s10 = str(v10 or "").strip().upper()
+        s11 = str(v11 or "").strip().upper()
+
+        if "=SUM" in s11:
+            has_sum_formula_11 = True
+        if "=SUM" in s10:
+            has_sum_formula_10 = True
+        if v11 is not None and str(v11).strip() != "":
+            has_sku_data_11 = True
+
+    if has_sum_formula_11 and not has_sum_formula_10:
+        return 11
+    if has_sum_formula_10 and not has_sum_formula_11:
+        return 10
+
+    # Nếu cả hai đều ghi 'Tổng cộng': cột 11 có dữ liệu SKU chứng tỏ cột 11 là cột tổng
+    if _is_total(c10_val) and _is_total(c11_val):
+        if has_sum_formula_11 or has_sku_data_11:
             return 11
+        return 10
 
-    # 3. Kiểm tra merged cells ở chân trang (dưới dòng header_row)
-    for rng in ws_ki.merged_cells.ranges:
-        if rng.min_row > header_row and rng.max_col >= 11:
-            return 11
-
-    # 4. Kiểm tra độ rộng cột K nếu đã được cấu hình >= 12
-    k_dim = ws_ki.column_dimensions.get("K")
-    if k_dim and k_dim.width and k_dim.width >= 12.0:
+    # Nếu tiêu đề bị hỏng/xóa sạch ở cả hai cột:
+    if has_sku_data_11 or has_sum_formula_11:
         return 11
 
+    # Mặc định an toàn cho mẫu chuẩn Vikoda (5 tuần)
     return 10
 
 
-def _update_merge(ws, row: int, start_col: int, target_end_col: int) -> None:
-    """Cập nhật dải ô hợp nhất trên một dòng/khối cụ thể nếu dòng đó đã được hợp nhất."""
+def _is_cell_occupied(ws, row: int, col: int, exclude_rng=None) -> bool:
+    """Kiểm tra xem ô (row, col) có chứa giá trị, công thức, chú thích, định dạng người dùng
+    hoặc thuộc một merged range khác không."""
+    cell = ws.cell(row, col)
+    # Giá trị hoặc công thức
+    if cell.value is not None:
+        return True
+    # Chú thích
+    if getattr(cell, "comment", None) is not None:
+        return True
+    # Định dạng tùy biến người dùng (fill, border không rỗng)
+    if cell.fill and getattr(cell.fill, "fill_type", None) is not None:
+        return True
+    if cell.border:
+        for side in ("left", "right", "top", "bottom"):
+            border_side = getattr(cell.border, side, None)
+            if border_side and getattr(border_side, "style", None) is not None:
+                return True
+    # Thuộc một merged range khác
+    for rng in ws.merged_cells.ranges:
+        if exclude_rng is not None and rng == exclude_rng:
+            continue
+        if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+            return True
+    return False
+
+
+def _safe_update_merge(ws, rng, target_end_col: int) -> bool:
+    """Cập nhật an toàn một vùng merged cell hiện tại tới target_end_col.
+
+    Quy tắc an toàn:
+    - Không bao giờ tạo dải ô có cột kết thúc nhỏ hơn cột bắt đầu (target_end_col < rng.min_col).
+    - Nếu đã đúng kích thước (target_end_col == rng.max_col) -> không làm gì, trả về True.
+    - Khi mở rộng (target_end_col > rng.max_col): kiểm tra mọi ô trong phạm vi mở rộng.
+      Nếu có ô chứa giá trị, công thức, ghi chú, định dạng hoặc thuộc vùng merge khác:
+      -> Bảo toàn vùng người dùng: KHÔNG mở rộng, giữ nguyên vùng gộp hiện tại và trả về False.
+    - Khi thu hẹp (target_end_col < rng.max_col): giải phóng vùng gộp an toàn.
+    """
+    if target_end_col < rng.min_col:
+        return False
+
+    if target_end_col == rng.max_col:
+        return True
+
+    min_r = rng.min_row
+    max_r = rng.max_row
+    start_col = rng.min_col
+    current_end_col = rng.max_col
+
+    # Kiểm tra xung đột khi mở rộng
+    if target_end_col > current_end_col:
+        for r in range(min_r, max_r + 1):
+            for c in range(current_end_col + 1, target_end_col + 1):
+                if _is_cell_occupied(ws, r, c, exclude_rng=rng):
+                    # Phát hiện xung đột với nội dung người dùng: giữ nguyên vùng ngoài bảng
+                    return False
+
     start_letter = get_column_letter(start_col)
     target_letter = get_column_letter(target_end_col)
-    for rng in list(ws.merged_cells.ranges):
-        if rng.min_row == row and rng.min_col == start_col:
-            end_row = rng.max_row
-            target_ref = f"{start_letter}{row}:{target_letter}{end_row}"
-            if rng.coord == target_ref:
-                return
-            ws.unmerge_cells(rng.coord)
-            ws.merge_cells(target_ref)
-            return
+    target_ref = f"{start_letter}{min_r}:{target_letter}{max_r}"
+
+    ws.unmerge_cells(rng.coord)
+    ws.merge_cells(target_ref)
+    return True
+
+
+def _is_planning_signature_block(ws, rng, total_row: int | None) -> bool:
+    """Xác định xem vùng gộp bên dưới bảng có phải là khối chữ ký kế hoạch/người lập do module quản lý không."""
+    min_footer_row = (total_row + 1) if total_row is not None else 7
+    if rng.min_row < min_footer_row:
+        return False
+    # Khối chữ ký kế hoạch/người lập nằm ở góc dưới bên phải bảng:
+    # Bắt đầu tại cột H (8) hoặc I (9), hiện kết thúc tại J (10) hoặc K (11)
+    if rng.min_col not in (8, 9):
+        return False
+    if rng.max_col not in (10, 11):
+        return False
+
+    val_start = str(ws.cell(rng.min_row, rng.min_col).value or "").strip().lower()
+    val_above = str(ws.cell(rng.min_row - 1, rng.min_col).value or "").strip().lower()
+    keywords = (
+        "kế hoạch", "ke hoach", "người lập", "nguoi lap",
+        "lập biểu", "lap bieu", "lập bảng", "lap bang",
+        "planning", "tp.kh", "tp. kh"
+    )
+    if any(k in val_start or k in val_above for k in keywords):
+        return True
+
+    # Kiểm tra nếu trên cùng dòng có các chức danh duyệt/ký khác (CEO, Giám đốc, Sản xuất, Mua hàng...)
+    row_text = " ".join(
+        str(ws.cell(rng.min_row, c).value or "").lower()
+        for c in range(1, 12)
+    )
+    sig_titles = ("ceo", "giám đốc", "giam doc", "sản xuất", "san xuat", "mua hàng", "mua hang")
+    if any(t in row_text for t in sig_titles):
+        return True
+
+    return False
 
 
 def _read_planning_sheet_data(
@@ -476,6 +606,27 @@ def patch_khsx_ki_workbook(
             total_summary_style = _snapshot_cell_style(ws_ki.cell(total_row, input_total_col))
             week_summary_style = _snapshot_cell_style(ws_ki.cell(total_row, week_sample_col))
 
+        # Đảm bảo cột tổng luôn giữ định dạng in đậm
+        if total_header_style is not None and total_header_style.get("font") is not None:
+            f = total_header_style["font"]
+            total_header_style["font"] = Font(
+                name=f.name, size=f.size, bold=True, italic=f.italic,
+                vertAlign=f.vertAlign, underline=f.underline, strike=f.strike, color=f.color
+            )
+        if total_summary_style is not None and total_summary_style.get("font") is not None:
+            f = total_summary_style["font"]
+            total_summary_style["font"] = Font(
+                name=f.name, size=f.size, bold=True, italic=f.italic,
+                vertAlign=f.vertAlign, underline=f.underline, strike=f.strike, color=f.color
+            )
+        for r, s in total_sku_styles.items():
+            if s is not None and s.get("font") is not None:
+                f = s["font"]
+                s["font"] = Font(
+                    name=f.name, size=f.size, bold=True, italic=f.italic,
+                    vertAlign=f.vertAlign, underline=f.underline, strike=f.strike, color=f.color
+                )
+
         # Độ rộng cột ổn định
         if input_is_6_weeks:
             total_width = ws_ki.column_dimensions["K"].width or 17.0
@@ -500,14 +651,23 @@ def patch_khsx_ki_workbook(
         if ws_ki.cell(4, 1).value is not None:
             ws_ki.cell(4, 1).value = date_text
 
-        # 6. Cập nhật các ô hợp nhất cho tiêu đề và khối chữ ký/chân trang
-        for r in range(1, 6):
-            _update_merge(ws_ki, r, 1, target_end_col)
-
-        min_footer_row = (total_row + 1) if total_row is not None else 7
+        # Kiểm tra trước nếu có vùng gộp ô xung đột trong phạm vi dữ liệu bảng (dòng 6..total_row)
         for rng in list(ws_ki.merged_cells.ranges):
-            if rng.min_row >= min_footer_row and rng.max_col in (10, 11) and rng.min_col >= 8:
-                _update_merge(ws_ki, rng.min_row, rng.min_col, target_end_col)
+            if 6 <= rng.min_row <= (total_row or 6) and (rng.min_col <= 11 and rng.max_col >= 10):
+                if total_row is not None and rng.min_row == total_row and rng.min_col == 1 and rng.max_col == 4:
+                    continue
+                raise ValueError(
+                    f"Sheet '{ws_ki.title}' ô '{rng.coord}' có vùng gộp ô xung đột trong bảng kế hoạch sản xuất."
+                )
+
+        # 6. Cập nhật các ô hợp nhất cho tiêu đề và khối chữ ký/chân trang
+        for rng in list(ws_ki.merged_cells.ranges):
+            # Khối tiêu đề (dòng 1..5, bắt đầu ở cột 1)
+            if rng.min_row <= 5 and rng.max_row <= 5 and rng.min_col == 1 and rng.max_col in (10, 11):
+                _safe_update_merge(ws_ki, rng, target_end_col)
+            # Khối chữ ký / chân trang dưới dòng tổng
+            elif _is_planning_signature_block(ws_ki, rng, total_row):
+                _safe_update_merge(ws_ki, rng, target_end_col)
 
         # 7. Thiết lập tiêu đề dòng 6 (Header) và định dạng cột tuần / tổng
         if is_6_weeks:
@@ -525,7 +685,11 @@ def patch_khsx_ki_workbook(
                 ws_ki.cell(6, w["col"]).value = w["label"]
             _clear_cell(ws_ki.cell(6, 11))
             ws_ki.column_dimensions["J"].width = total_width
-            if "K" in ws_ki.column_dimensions:
+            has_k_content = any(
+                ws_ki.cell(r, 11).value is not None
+                for r in range((total_row + 1) if total_row else 7, ws_ki.max_row + 1)
+            )
+            if not has_k_content and "K" in ws_ki.column_dimensions:
                 del ws_ki.column_dimensions["K"]
 
         col_totals: dict[int, float] = defaultdict(float)
