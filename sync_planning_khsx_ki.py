@@ -37,7 +37,7 @@ import math
 from collections import defaultdict
 from copy import copy
 from io import BytesIO
-from typing import Any
+from typing import Any, Iterable
 
 from openpyxl import load_workbook
 from openpyxl.styles import Border, Font, PatternFill
@@ -225,15 +225,41 @@ def _clear_cell(cell) -> None:
     cell.number_format = "General"
 
 
-def _detect_current_layout(ws_ki, header_row: int = 6) -> int:
-    """Xác định cột tổng hiện tại trong sheet (10 hoặc 11) dựa trên tiêu đề bảng và dữ liệu bảng.
+def _is_empty_cell(val: Any) -> bool:
+    """Kiểm tra ô có rỗng hay không. Lưu ý: 0 và 0.0 KHÔNG PHẢI là ô rỗng."""
+    return val is None or (isinstance(val, str) and val.strip() == "")
+
+
+def _has_sku_data(val: Any) -> bool:
+    """Kiểm tra ô có chứa dữ liệu SKU hay không (phân biệt rõ giá trị 0 với ô trống)."""
+    return not _is_empty_cell(val)
+
+
+def _detect_current_layout(
+    ws_ki,
+    header_row: int = 6,
+    sku_rows: Iterable[int] | None = None,
+    total_row: int | None = None,
+) -> int:
+    """Xác định cột tổng hiện tại trong sheet (10 hoặc 11) dựa trên tiêu đề bảng và dữ liệu SKU trong bảng.
 
     Quy tắc nghiệp vụ:
     - Nhận diện bố cục từ tiêu đề tổng và các cột tuần hợp lệ trong vùng bảng.
-    - Cột 10 (J) có 'Tổng cộng' -> trả về 10 (bố cục 4 hoặc 5 tuần).
-    - Cột 11 (K) có 'Tổng cộng' hoặc Cột 10 (J) có tiêu đề 'Tuần 6' -> trả về 11 (bố cục 6 tuần).
-    - Tuyệt đối không dùng độ rộng cột, font.bold hay merged ranges ngoài bảng làm căn cứ.
-    - Với tiêu đề thiếu, hỏng hoặc mâu thuẫn: đối soát các dòng dữ liệu SKU (cột 11 có =SUM/dữ liệu hay rỗng hoàn toàn).
+    - Cột 10 (J) có 'Tổng cộng' và cột 11 (K) không phải 'Tổng cộng' -> trả về 10 (bố cục 4 hoặc 5 tuần).
+    - Cột 11 (K) có 'Tổng cộng' và cột 10 (J) không phải 'Tổng cộng' -> trả về 11 (bố cục 6 tuần).
+    - Cột 10 (J) có tiêu đề 'Tuần 6' và không phải 'Tổng cộng' -> trả về 11 (bố cục 6 tuần).
+    - Tuyệt đối không dùng độ rộng cột, font.bold, công thức hay merged ranges ngoài bảng làm căn cứ.
+    - Với tiêu đề thiếu, hỏng hoặc mâu thuẫn (cả 10 và 11 đều ghi 'Tổng cộng'):
+      + Phạm vi thu thập bằng chứng CHỈ giới hạn đúng các dòng SKU đã nhận diện (seen_ki) và dòng tổng.
+      + Tuyệt đối không quét tùy tiện 30 dòng hay đọc bất kỳ ô nào ngoài bảng (như ghi chú chân trang K35).
+      + Phân biệt rõ dữ liệu SKU = 0 với ô trống: chỉ None và chuỗi rỗng mới là ô trống, 0 là dữ liệu SKU.
+      + Nếu có công thức =SUM: cột 11 có =SUM và cột 10 không có -> 11; cột 10 có =SUM và cột 11 không có -> 10.
+      + Nếu không có công thức =SUM:
+        * Khi cả J6 và K6 đều ghi 'Tổng cộng':
+          - Nếu cột 11 có dữ liệu SKU/tổng -> bảng mở rộng tới cột 11 (6 tuần) -> 11.
+          - Nếu cột 11 hoàn toàn không có dữ liệu SKU/tổng nào -> cột 11 nằm ngoài bảng 5 tuần -> 10.
+        * Khi tiêu đề thiếu hoặc hỏng ở cả hai cột (không có 'Tổng cộng'):
+          - Không tự ý đoán mò; nếu không có công thức =SUM chỉ rõ cột tổng, raise ValueError báo rõ sheet và tọa độ ô tiêu đề.
     """
     def _norm(val) -> str:
         return str(val or "").strip().lower()
@@ -258,44 +284,72 @@ def _detect_current_layout(ws_ki, header_row: int = 6) -> int:
         return 11
 
     # 2. Xử lý tiêu đề mâu thuẫn (cả 10 và 11 đều là tổng) hoặc tiêu đề bị hỏng/thiếu:
-    # Đối soát cấu trúc nội bộ của bảng qua các dòng SKU
-    sku_start = header_row + 1
-    sample_limit = min(ws_ki.max_row or (header_row + 10), header_row + 30)
+    # Phạm vi thu thập bằng chứng CHỈ giới hạn đúng các dòng SKU đã nhận diện và dòng tổng
+    sheet_name = getattr(ws_ki, "title", KHSX_KI_SHEET)
+    if sku_rows is None:
+        seen_ki, parsed_total_row = _read_khsx_ki_skus(ws_ki, header_row=header_row)
+        sku_rows_list = list(seen_ki.values())
+        if total_row is None:
+            total_row = parsed_total_row
+    else:
+        sku_rows_list = list(sku_rows)
 
-    has_sum_formula_11 = False
-    has_sum_formula_10 = False
-    has_sku_data_11 = False
+    if not sku_rows_list:
+        raise ValueError(
+            f"Sheet '{sheet_name}' ô 'J{header_row}:K{header_row}' có tiêu đề thiếu hoặc mâu thuẫn "
+            f"(J{header_row}={c10_val!r}, K{header_row}={c11_val!r}) và không có dòng SKU nào trong bảng để xác định bố cục."
+        )
 
-    for r in range(sku_start, sample_limit + 1):
+    eval_rows = list(sku_rows_list)
+    if total_row is not None and total_row not in eval_rows:
+        eval_rows.append(total_row)
+
+    sum_formula_10_count = 0
+    sum_formula_11_count = 0
+    sku_data_10_count = 0
+    sku_data_11_count = 0
+
+    for r in eval_rows:
         v10 = ws_ki.cell(r, 10).value
         v11 = ws_ki.cell(r, 11).value
         s10 = str(v10 or "").strip().upper()
         s11 = str(v11 or "").strip().upper()
 
         if "=SUM" in s11:
-            has_sum_formula_11 = True
+            sum_formula_11_count += 1
         if "=SUM" in s10:
-            has_sum_formula_10 = True
-        if v11 is not None and str(v11).strip() != "":
-            has_sku_data_11 = True
+            sum_formula_10_count += 1
 
-    if has_sum_formula_11 and not has_sum_formula_10:
+        if _has_sku_data(v11):
+            sku_data_11_count += 1
+        if _has_sku_data(v10):
+            sku_data_10_count += 1
+
+    # Phân giải bằng công thức =SUM trong các dòng SKU/dòng tổng
+    if sum_formula_11_count > 0 and sum_formula_10_count == 0:
         return 11
-    if has_sum_formula_10 and not has_sum_formula_11:
+    if sum_formula_10_count > 0 and sum_formula_11_count == 0:
         return 10
+    if sum_formula_10_count > 0 and sum_formula_11_count > 0:
+        raise ValueError(
+            f"Sheet '{sheet_name}' ô 'J{header_row}:K{header_row}' có tiêu đề mâu thuẫn/thiếu "
+            f"và cả hai cột J, K đều chứa công thức =SUM trong các dòng SKU/tổng."
+        )
 
-    # Nếu cả hai đều ghi 'Tổng cộng': cột 11 có dữ liệu SKU chứng tỏ cột 11 là cột tổng
+    # Không có công thức =SUM:
+    # Trường hợp A: Cả hai ô tiêu đề đều ghi 'Tổng cộng'
     if _is_total(c10_val) and _is_total(c11_val):
-        if has_sum_formula_11 or has_sku_data_11:
+        # Nếu cột 11 có dữ liệu SKU/tổng -> bảng mở rộng tới cột 11 (6 tuần)
+        if sku_data_11_count > 0:
             return 11
+        # Cột 11 hoàn toàn không có dữ liệu SKU/tổng nào -> cột 11 nằm ngoài bảng 5 tuần
         return 10
 
-    # Nếu tiêu đề bị hỏng/xóa sạch ở cả hai cột:
-    if has_sku_data_11 or has_sum_formula_11:
-        return 11
-
-    # Mặc định an toàn cho mẫu chuẩn Vikoda (5 tuần)
-    return 10
+    # Trường hợp B: Tiêu đề bị thiếu hoặc hỏng ở cả hai cột và không có công thức =SUM
+    raise ValueError(
+        f"Sheet '{sheet_name}' ô 'J{header_row}:K{header_row}' có tiêu đề thiếu hoặc không hợp lệ "
+        f"(J{header_row}={c10_val!r}, K{header_row}={c11_val!r}) và không đủ bằng chứng trong các dòng SKU để xác định bố cục."
+    )
 
 
 def _is_cell_occupied(ws, row: int, col: int, exclude_rng=None) -> bool:
@@ -579,7 +633,12 @@ def patch_khsx_ki_workbook(
         target_end_col = 11 if is_6_weeks else 10
 
         # 4. Snapshot bố cục và định dạng hiện tại TRƯỚC KHI chỉnh sửa bất kỳ ô nào
-        input_total_col = _detect_current_layout(ws_ki, header_row=6)
+        input_total_col = _detect_current_layout(
+            ws_ki,
+            header_row=6,
+            sku_rows=seen_ki.values(),
+            total_row=total_row,
+        )
         input_is_6_weeks = (input_total_col == 11)
 
         # Cột mẫu tuần ổn định: Cột 8 (H - Tuần 4) luôn là cột tuần thực sự trong mọi tháng 4/5/6 tuần
