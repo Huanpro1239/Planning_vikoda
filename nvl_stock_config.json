@@ -8,11 +8,11 @@
     "code_column_letter": "B",
     "value_column": 13,
     "value_column_letter": "M",
-    "start_row": 2
+    "start_row": 11
   },
   "target": {
     "name": "Kế hoạch mua hàng.xlsx",
-    "sharepoint_path": "",
+    "sharepoint_path": "Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx",
     "sourcedoc": "89D1BA7B-006E-4527-B879-ABF120309214",
     "sheet_name": "Ton_NVL",
     "code_column": 1,

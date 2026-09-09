@@ -178,15 +178,19 @@ def main():
     rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
 
     comparison_rows = []
-    # Ưu tiên các ca đổi giá trị
     for ch in rec.changes[:10]:
+        before_val = ch["before"]
+        try:
+            diff_val = round(ch["after"] - float(before_val), 4) if before_val is not None else ch["after"]
+        except Exception:
+            diff_val = None
         comparison_rows.append({
             "code": ch["code"],
             "row": ch["row"],
             "current_target_D": ch["before"],
             "source_stock_M": ch["after"],
             "action": "UPDATE",
-            "diff": ch["diff"],
+            "diff": diff_val,
         })
     # Lấy thêm các ca không đổi nếu có
     for un in rec.unchanged[:5]:
