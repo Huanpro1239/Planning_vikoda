@@ -8,6 +8,9 @@ on:
         required: true
         type: boolean
         default: false
+  push:
+    branches:
+      - feat/sync-nvl-stock
 
 permissions:
   contents: read

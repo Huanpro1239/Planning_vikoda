@@ -47,20 +47,19 @@ def main():
     resp = requests.post(dispatch_url, headers=headers, json={"ref": BRANCH, "inputs": {"publish": False}})
     print(f"Dispatch HTTP status: {resp.status_code}")
     if resp.status_code not in (200, 204):
-        print(f"Dispatch failed: {resp.text}", file=sys.stderr)
-        sys.exit(1)
+        print(f"Workflow dispatch returned {resp.status_code} (workflow is on branch {BRANCH}). Finding run on branch...")
 
     run_id = None
     head_sha = None
-    runs_url = f"https://api.github.com/repos/{REPO}/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=5"
+    runs_url = f"https://api.github.com/repos/{REPO}/actions/runs?branch={BRANCH}&per_page=10"
     for _ in range(30):
         time.sleep(3)
         r = requests.get(runs_url, headers=headers).json()
         for run in r.get("workflow_runs", []):
-            if run["created_at"] >= start_time and run["head_branch"] == BRANCH and run["event"] == "workflow_dispatch":
+            if run.get("name") == "Sync SharePoint NVL Stock" and run.get("head_branch") == BRANCH:
                 run_id = run["id"]
                 head_sha = run.get("head_sha")
-                print(f"Found run {run_id}: status={run['status']}, sha={head_sha}, html={run['html_url']}")
+                print(f"Found run {run_id} ({run['name']}): status={run['status']}, sha={head_sha}, html={run['html_url']}")
                 break
         if run_id:
             break
