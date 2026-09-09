@@ -188,7 +188,7 @@ class GraphClient:
             url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/children"
         res = self.get_json(
             url,
-            {"$select": "id,name,eTag,size,lastModifiedDateTime"},
+            {"$select": "id,name,eTag,size,lastModifiedDateTime,folder,file"},
         )
         return res.get("value", [])
 

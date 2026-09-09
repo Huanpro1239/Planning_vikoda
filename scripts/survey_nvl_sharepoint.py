@@ -583,23 +583,51 @@ def run_survey(
                     print(f"[SURVEY] Đang liệt kê danh sách file trong thư mục cha '{parent_dir}' trên SharePoint...")
                     children = client_graph.list_folder_children(drive_id, parent_dir)
                     files_in_parent = []
+                    subfolders_to_check = []
                     for item in children:
-                        # Bỏ qua nếu là thư mục con (folder)
-                        if "folder" in item:
-                            continue
                         fname = item.get("name", "")
                         fid = item.get("id", "")
                         fetag = item.get("eTag", "")
+                        is_folder = "folder" in item or item.get("size") == 0
                         files_in_parent.append({
                             "name": fname,
                             "id": fid,
                             "eTag": fetag,
                             "size": item.get("size"),
+                            "is_folder": is_folder,
                             "lastModifiedDateTime": item.get("lastModifiedDateTime"),
                         })
-                        print(f"  - [File] '{fname}' (ID: {fid}, eTag: {fetag})")
+                        print(f"  - [{('Folder' if is_folder else 'File')}] '{fname}' (ID: {fid}, eTag: {fetag})")
+                        if is_folder and any(k in fname.lower() for k in ["nvl", "test", "copy", "tồn"]):
+                            subfolders_to_check.append(f"{parent_dir}/{fname}")
+
+                    subfolder_items: dict[str, list[dict[str, Any]]] = {}
+                    for sub_path in subfolders_to_check:
+                        try:
+                            print(f"[SURVEY] Kiểm tra thư mục con '{sub_path}'...")
+                            sub_children = client_graph.list_folder_children(drive_id, sub_path)
+                            sub_list = []
+                            for sc in sub_children:
+                                sc_name = sc.get("name", "")
+                                sc_id = sc.get("id", "")
+                                sc_etag = sc.get("eTag", "")
+                                sub_list.append({
+                                    "name": sc_name,
+                                    "id": sc_id,
+                                    "eTag": sc_etag,
+                                    "size": sc.get("size"),
+                                    "path": f"{sub_path}/{sc_name}",
+                                    "lastModifiedDateTime": sc.get("lastModifiedDateTime"),
+                                })
+                                print(f"    * '{sc_name}' (ID: {sc_id}, path: '{sub_path}/{sc_name}')")
+                            subfolder_items[sub_path] = sub_list
+                        except Exception as sf_err:
+                            print(f"[SURVEY] Cảnh báo: Lỗi khi đọc thư mục con '{sub_path}': {sf_err}", file=sys.stderr)
+
                     error_summary["parent_directory"] = parent_dir
                     error_summary["available_files_in_parent"] = files_in_parent
+                    if subfolder_items:
+                        error_summary["subfolder_files"] = subfolder_items
                 except Exception as list_exc:
                     print(f"[SURVEY] Cảnh báo: Không thể liệt kê file trong '{parent_dir}': {list_exc}", file=sys.stderr)
 
