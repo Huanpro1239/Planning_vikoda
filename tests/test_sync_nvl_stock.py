@@ -39,6 +39,7 @@ def make_mock_config() -> NVLConfig:
         target_value_col_letter="D",
         target_start_row=2,
         target_sourcedoc="TARGET-GUID",
+        number_convention="strict",
     )
 
 
@@ -93,6 +94,33 @@ def make_mock_target_bytes(rows: list[tuple[Any, Any]], *, with_header=True, ext
     return buf.getvalue()
 
 
+def _edit_xml_dimension(workbook_bytes: bytes, sheet_file: str, mode: str) -> bytes:
+    """Helper chỉnh sửa XML dimension trong file ZIP để test: missing hoặc understated."""
+    in_buf = BytesIO(workbook_bytes)
+    out_buf = BytesIO()
+    z = zipfile.ZipFile(in_buf, "r")
+    dest = zipfile.ZipFile(out_buf, "w")
+    try:
+        for name in z.namelist():
+            data = z.read(name)
+            if name == sheet_file:
+                root = etree.fromstring(data)
+                dims = root.xpath('//*[local-name()="dimension"]')
+                if dims:
+                    if mode == "missing":
+                        dims[0].getparent().remove(dims[0])
+                    elif mode == "understated":
+                        dims[0].set("ref", "A1:B2")
+                data = etree.tostring(root)
+            dest.writestr(name, data)
+    finally:
+        dest.close()
+        dest.fp = None
+        z.close()
+        z.fp = None
+    return out_buf.getvalue()
+
+
 class SyncNVLStockTests(unittest.TestCase):
     def test_normalize_nvl_code(self):
         """Kiểm tra quy tắc chuẩn hóa mã vật tư NVL."""
@@ -118,21 +146,52 @@ class SyncNVLStockTests(unittest.TestCase):
         self.assertIsNone(normalize_nvl_code(False))
 
     def test_parse_nvl_quantity(self):
-        """Kiểm tra phân tích số lượng tồn kho NVL."""
-        # 1. Số 0, số âm, số lẻ
+        """Kiểm tra phân tích số lượng tồn kho NVL theo các quy ước và xử lý lỗi."""
+        # 1. Số dạng numeric nguyên bản trong Excel
         self.assertEqual(parse_nvl_quantity(0), 0.0)
         self.assertEqual(parse_nvl_quantity(0.0), 0.0)
         self.assertEqual(parse_nvl_quantity(150), 150.0)
         self.assertEqual(parse_nvl_quantity(-25.5), -25.5)
         self.assertAlmostEqual(parse_nvl_quantity(123.456), 123.456)
 
-        # 2. Chuỗi số có định dạng
+        # 2. Chuỗi số nguyên và số thập phân rõ ràng
         self.assertEqual(parse_nvl_quantity("0"), 0.0)
-        self.assertEqual(parse_nvl_quantity("1,250"), 1250.0)
         self.assertEqual(parse_nvl_quantity("-50.25"), -50.25)
-        self.assertEqual(parse_nvl_quantity("  3,456.789  "), 3456.789)
+        self.assertEqual(parse_nvl_quantity("1,5", convention="strict"), 1.5)
+        self.assertEqual(parse_nvl_quantity("1.234,56", convention="strict"), 1234.56)
+        self.assertEqual(parse_nvl_quantity("1,234.56", convention="strict"), 1234.56)
 
-        # 3. Lỗi chặn: rỗng, boolean, NaN, văn bản không phải số
+        # 3. Quy ước Việt Nam ('vi')
+        self.assertEqual(parse_nvl_quantity("1,5", convention="vi"), 1.5)
+        self.assertEqual(parse_nvl_quantity("1.234,56", convention="vi"), 1234.56)
+        self.assertEqual(parse_nvl_quantity("1.234", convention="vi"), 1234.0)
+        self.assertEqual(parse_nvl_quantity("1,234", convention="vi"), 1.234)
+
+        # 4. Quy ước Anh ('en')
+        self.assertEqual(parse_nvl_quantity("1.5", convention="en"), 1.5)
+        self.assertEqual(parse_nvl_quantity("1,234.56", convention="en"), 1234.56)
+        self.assertEqual(parse_nvl_quantity("1,234", convention="en"), 1234.0)
+        self.assertEqual(parse_nvl_quantity("1.234", convention="en"), 1.234)
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1,5", convention="en")  # Dấu phẩy lẻ không hợp lệ trong EN
+
+        # 5. Chế độ strict: chặn chuỗi mơ hồ khi có đúng 3 số sau dấu phân cách
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1,234", convention="strict")
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1.234", convention="strict")
+
+        # 6. Chặn phân nhóm sai quy cách trong mọi chế độ
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1,2,3")
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1.2.3")
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1..2")
+        with self.assertRaises(ValueError):
+            parse_nvl_quantity("1,,2")
+
+        # 7. Lỗi chặn: rỗng, boolean, NaN, văn bản không phải số
         with self.assertRaises(ValueError):
             parse_nvl_quantity(None)
         with self.assertRaises(ValueError):
@@ -170,6 +229,118 @@ class SyncNVLStockTests(unittest.TestCase):
         self.assertEqual(stock["VT004"], 250.75)
         self.assertNotIn("Tổng cộng", stock)
 
+    def test_readers_handle_missing_and_understated_dimensions(self):
+        """Đọc nguồn và đích đầy đủ ngay cả khi dimension bị thiếu hoặc khai báo hụt (P1)."""
+        cfg = make_mock_config()
+        src_bytes = make_mock_source_bytes([("VT001", 100), ("VT002", 200)])
+        tgt_bytes = make_mock_target_bytes([("VT001", 10), ("VT002", 20)])
+
+        for mode in ["missing", "understated"]:
+            # Test nguồn
+            src_mod = _edit_xml_dimension(src_bytes, "xl/worksheets/sheet1.xml", mode)
+            stock, _ = read_nvl_source_stock(src_mod, cfg)
+            self.assertEqual(stock, {"VT001": 100.0, "VT002": 200.0})
+
+            # Test đích
+            tgt_mod = _edit_xml_dimension(tgt_bytes, "xl/worksheets/sheet1.xml", mode)
+            rec = reconcile_nvl_target(tgt_mod, stock, cfg)
+            self.assertEqual(len(rec.changes), 2)
+            self.assertEqual(rec.target_codes, {"VT001": 2, "VT002": 3})
+
+    def test_missing_in_source_with_text_and_blank_preserved_safely(self):
+        """Bảo toàn ô đích chứa text '-', 'N/A' hoặc blank khi mã thiếu ở nguồn mà không crash float (P2)."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [
+            ("VT001", 50),
+            ("VT_MISS_1", "-"),
+            ("VT_MISS_2", "N/A"),
+            ("VT_MISS_3", None),
+        ]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        self.assertEqual(len(rec.changes), 1)
+        self.assertEqual(len(rec.missing_in_source), 3)
+
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+        verify_res = verify_nvl_patched_workbook(target_bytes, patched_bytes, rec, cfg)
+        self.assertTrue(verify_res["ok"])
+
+        # Kiểm tra workbook sau patch
+        wb = load_workbook(BytesIO(patched_bytes), data_only=True)
+        ws = wb["Ton_NVL"]
+        self.assertEqual(ws["D2"].value, 100)  # VT001 cập nhật
+        self.assertEqual(ws["D3"].value, "-")  # Giữ nguyên '-'
+        self.assertEqual(ws["D4"].value, "N/A")  # Giữ nguyên 'N/A'
+        self.assertIsNone(ws["D5"].value)  # Giữ nguyên None
+        wb.close()
+
+    def test_unmodified_cells_in_ton_nvl_verified_without_corruption(self):
+        """Xác minh kiểm định phát hiện nếu có ô không liên quan trong Ton_NVL bị sửa đổi."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50), ("VT002", 70)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        # Cố tình làm biến đổi cell A2 trong patched XML
+        corrupted = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes)) as z, zipfile.ZipFile(corrupted, "w") as dest:
+            for item in z.infolist():
+                data = z.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(b'VT001', b'VT_HACK')
+                dest.writestr(item, data)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, corrupted.getvalue(), rec, cfg)
+        self.assertIn("bị biến đổi cấu trúc XML", str(ctx.exception))
+
+    def test_target_cell_in_merge_range_blocked(self):
+        """Chặn cập nhật khi cột D nằm trong dải ô gộp."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Ton_NVL"
+        ws["A2"] = "VT001"
+        ws["D2"] = 50
+        ws.merge_cells("D2:E2")  # Merge cột D và E
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            reconcile_nvl_target(buf.getvalue(), source_stock, cfg)
+        self.assertIn("gộp", str(ctx.exception).lower())
+
+    def test_target_sheet_protected_blocked(self):
+        """Chặn cập nhật khi sheet đích bị bật khóa sheetProtection."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_bytes = make_mock_target_bytes([("VT001", 50)])
+
+        # Chèn thẻ sheetProtection vào XML
+        prot_bytes = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes)) as z, zipfile.ZipFile(prot_bytes, "w") as dest:
+            for item in z.infolist():
+                data = z.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    root = etree.fromstring(data)
+                    ns = etree.QName(root).namespace
+                    prot = etree.Element(f"{{{ns}}}sheetProtection", sheet="1")
+                    root.append(prot)
+                    data = etree.tostring(root)
+                dest.writestr(item, data)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            reconcile_nvl_target(prot_bytes.getvalue(), source_stock, cfg)
+        self.assertIn("sheetprotection", str(ctx.exception).lower())
+
     def test_read_source_stock_rejects_duplicates(self):
         """Bắt lỗi khi mã vật tư bị lặp trong nguồn."""
         cfg = make_mock_config()
@@ -205,7 +376,6 @@ class SyncNVLStockTests(unittest.TestCase):
         """Đối soát và patch hoàn chỉnh: ghép theo mã, thứ tự dòng khác nhau, giữ nguyên mã thiếu."""
         cfg = make_mock_config()
 
-        # Nguồn: VT001=150, VT002=0, VT003=75.5, VT_EXTRA=999
         source_rows = [
             ("VT001", 150),
             ("VT002", 0),
@@ -215,7 +385,6 @@ class SyncNVLStockTests(unittest.TestCase):
         source_bytes = make_mock_source_bytes(source_rows)
         source_stock, _ = read_nvl_source_stock(source_bytes, cfg)
 
-        # Đích: thứ tự khác, có VT004 (thiếu ở nguồn), VT001 đã có 150 (không đổi)
         target_rows = [
             ("VT003", 50),     # Cần đổi 50 -> 75.5
             ("VT001", 150),    # Không đổi (đã là 150)
@@ -302,18 +471,15 @@ class SyncNVLStockTests(unittest.TestCase):
         target_rows = [("VT001", 50.0), ("VT002", 70.0)]
         target_bytes = make_mock_target_bytes(target_rows)
 
-        # Lần 1: 2 thay đổi
         rec1 = reconcile_nvl_target(target_bytes, source_stock, cfg)
         self.assertEqual(len(rec1.changes), 2)
         patched_bytes = patch_nvl_destination_workbook(target_bytes, rec1, cfg)
 
-        # Lần 2: 0 thay đổi, status = 'unchanged'
         rec2 = reconcile_nvl_target(patched_bytes, source_stock, cfg)
         self.assertEqual(len(rec2.changes), 0)
         self.assertEqual(len(rec2.unchanged), 2)
         self.assertEqual(rec2.status, "unchanged")
 
-        # Patch lần 2 trả về chính xác bytes cũ
         second_patched_bytes = patch_nvl_destination_workbook(patched_bytes, rec2, cfg)
         self.assertEqual(patched_bytes, second_patched_bytes)
 

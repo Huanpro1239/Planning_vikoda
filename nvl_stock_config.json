@@ -27,6 +27,7 @@
     "allow_negative": true,
     "preserve_missing_in_source": true,
     "reject_duplicates": true,
-    "reject_formula_in_target_cell": true
+    "reject_formula_in_target_cell": true,
+    "number_convention": "strict"
   }
 }

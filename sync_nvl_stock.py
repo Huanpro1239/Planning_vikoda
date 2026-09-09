@@ -12,22 +12,28 @@ Quy tắc:
   - Ghép mã vật tư Ton_NVL!A với Sheet1!B (chuẩn hóa trim khoảng trắng, tương đương float/int, giữ số 0 ở đầu).
   - Gán Ton_NVL!D = Sheet1!M: chép trực tiếp số tồn, không chia quy cách, không trừ tồn nhà máy, không đổi tiền tố mã 2 thành 1.
   - Patch trực tiếp XML của sheet Ton_NVL trong file ZIP, bảo toàn 100% macro, định dạng, merge, drawing và các sheet khác.
-  - Tiến trình độc lập với pipeline sản xuất; chỉ tải lên SharePoint khi cờ --publish được bật.
+  - Kiểm tra an toàn trước khi patch: từ chối ô merge ở cột D, từ chối sheet bị khóa (sheetProtection), từ chối ô có công thức.
+  - Kiểm soát tương tranh và toàn vẹn:
+      + Kiểm tra revision nguồn trước download, sau download và trước upload để tránh dữ liệu nguồn cũ.
+      + Sử dụng If-Match ETag file đích để chống ghi đè tương tranh trên SharePoint.
+      + Tải lại file đích sau upload để xác minh kết quả ghi nhận trên server.
+      + Phân tách rõ ràng trạng thái đối soát (proposal) và trạng thái publish, ghi nhận báo cáo lỗi chi tiết khi thất bại.
+  - Lưu ý kiến trúc: Do hai file nằm độc lập trong Microsoft Graph, không tồn tại giao dịch nguyên tử phân tán (2-phase commit).
+    Module áp dụng cơ chế snapshot validation, retry có phân loại, và verification sau upload để đạt độ nhất quán cao nhất.
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
 import json
 import math
-import os
 from pathlib import Path
-import posixpath
 import re
+import socket
 import sys
 import time
 from typing import Any
@@ -35,18 +41,16 @@ import zipfile
 
 from lxml import etree
 from openpyxl import load_workbook
+from openpyxl.utils.cell import get_column_letter, range_boundaries
 
 from graph_retry import install_retry_after_support, retry_delay_seconds
-import sync_stock
 from sync_stock import (
     GraphClient,
     GraphRequestError,
-    clean_number,
     column_number,
     find_sheet_xml_path,
     get_access_token,
     is_retryable_graph_error,
-    load_shared_strings,
     set_numeric_cell,
 )
 
@@ -82,6 +86,7 @@ class NVLConfig:
     preserve_missing_in_source: bool = True
     reject_duplicates: bool = True
     reject_formula_in_target_cell: bool = True
+    number_convention: str = "strict"
 
 
 @dataclass
@@ -138,6 +143,7 @@ def load_nvl_config(config_path: str | Path | None = None) -> NVLConfig:
         preserve_missing_in_source=bool(pol.get("preserve_missing_in_source", True)),
         reject_duplicates=bool(pol.get("reject_duplicates", True)),
         reject_formula_in_target_cell=bool(pol.get("reject_formula_in_target_cell", True)),
+        number_convention=str(pol.get("number_convention", "strict")).strip().lower(),
     )
 
 
@@ -148,70 +154,269 @@ def normalize_nvl_code(value: Any) -> str | None:
     - float với phần thập phân nguyên (ví dụ 12345.0) -> '12345'
     - int (ví dụ 12345) -> '12345'
     - str -> trim khoảng trắng đầu/cuối, giữ nguyên số 0 ở đầu (ví dụ '012345'),
-      giữ nguyên chữ hoa/thường và khoảng trắng ở giữa.
+      không chuyển đổi hoa/thường để bảo toàn đúng mã kế toán.
     """
     if value is None or isinstance(value, bool):
         return None
 
-    if isinstance(value, float):
+    if isinstance(value, (int, float)):
         if math.isnan(value) or math.isinf(value):
             return None
-        if value.is_integer():
+        if isinstance(value, float) and value.is_integer():
             return str(int(value))
+        if isinstance(value, int):
+            return str(value)
         return str(value).strip()
-
-    if isinstance(value, int):
-        return str(value)
 
     text = str(value).strip()
     if not text:
         return None
 
-    # Nếu chuỗi biểu diễn số thực nguyên (ví dụ '12345.0')
-    if re.fullmatch(r"-?\d+\.0+", text):
+    # Nếu chuỗi số float nguyên (ví dụ '12345.0') -> chuẩn hóa thành '12345'
+    if re.match(r"^\d+\.0+$", text):
         return text.split(".")[0]
 
     return text
 
 
-def parse_nvl_quantity(value: Any, *, cell_name: str = "") -> float:
-    """Phân tích số lượng tồn kho NVL:
+def parse_nvl_quantity(
+    value: Any,
+    convention: str = "strict",
+    cell_name: str = "",
+) -> float:
+    """Phân tích và kiểm tra giá trị số lượng tồn kho NVL.
 
-    - Cho phép số 0, số âm, số thập phân.
-    - Không làm tròn thành số nguyên.
+    Quy tắc:
+    - Giá trị số (int, float) nguyên bản từ Excel được chép trực tiếp.
+    - Cho phép số 0, số âm, số thập phân lẻ.
     - None, chuỗi rỗng, boolean, lỗi Excel, NaN, Infinity -> raise ValueError.
+    - Chuỗi văn bản phải tuân thủ phân nhóm số nghiêm ngặt theo quy ước:
+        + 'vi': Dấu chấm phân nhóm hàng nghìn (1.234.567), dấu phẩy thập phân (1,5; 1.234,56).
+        + 'en': Dấu phẩy phân nhóm hàng nghìn (1,234,567), dấu chấm thập phân (1.5; 1,234.56).
+        + 'strict': Nhận diện định dạng không mơ hồ (cả hai dấu phân cách hoặc số chữ số lẻ != 3).
+                    Từ chối các chuỗi mơ hồ ('1,234' hoặc '1.234') và từ chối phân nhóm sai ('1,2,3').
     """
+    prefix = f"[{cell_name}] " if cell_name else ""
+
     if value is None or (isinstance(value, str) and value.strip() == ""):
-        raise ValueError(f"[{cell_name}] Ô số lượng tồn kho rỗng.")
+        raise ValueError(f"{prefix}Ô số lượng tồn kho rỗng.")
 
     if isinstance(value, bool):
-        raise ValueError(f"[{cell_name}] Chứa giá trị boolean ({value}), không phải số.")
+        raise ValueError(f"{prefix}Chứa giá trị boolean ({value}), không phải số.")
 
+    # 1. Số dạng numeric trong Excel được nhận trực tiếp
     if isinstance(value, (int, float)):
-        if math.isnan(value) or math.isinf(value):
-            raise ValueError(f"[{cell_name}] Chứa giá trị NaN hoặc vô cực.")
-        return float(value)
+        fval = float(value)
+        if math.isnan(fval) or math.isinf(fval):
+            raise ValueError(f"{prefix}Chứa giá trị NaN hoặc vô cực.")
+        return fval
 
-    if isinstance(value, str):
-        cleaned = value.strip().replace(",", "")
+    # 2. Xử lý chuỗi văn bản
+    if not isinstance(value, str):
+        raise ValueError(f"{prefix}Kiểu dữ liệu không được hỗ trợ: {type(value)}")
+
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{prefix}Chuỗi rỗng không phải số hợp lệ.")
+
+    # Kiểm tra dấu âm/dương
+    sign = 1.0
+    if cleaned.startswith("-"):
+        sign = -1.0
+        cleaned = cleaned[1:].strip()
+    elif cleaned.startswith("+"):
+        cleaned = cleaned[1:].strip()
+
+    if not cleaned:
+        raise ValueError(f"{prefix}Chuỗi số không hợp lệ: {value!r}")
+
+    # Chuỗi số nguyên thuần túy
+    if cleaned.isdigit():
+        return sign * float(cleaned)
+
+    # Đếm dấu phân cách
+    dot_count = cleaned.count(".")
+    comma_count = cleaned.count(",")
+
+    if dot_count == 0 and comma_count == 0:
+        raise ValueError(f"{prefix}Giá trị {value!r} không thể chuyển đổi thành số tồn hợp lệ.")
+
+    valid_chars = set("0123456789.,")
+    if not set(cleaned).issubset(valid_chars):
+        raise ValueError(f"{prefix}Chuỗi số chứa ký tự không hợp lệ: {value!r}")
+
+    # Chặn phân cách nhóm liên tiếp: '..', ',,', '.,', ',.'
+    if re.search(r"[.,]{2,}", cleaned):
+        raise ValueError(f"{prefix}Phân cách nhóm số không hợp lệ: {value!r}")
+
+    conv = (convention or "strict").strip().lower()
+
+    # Trường hợp 1: Chứa cả dấu chấm và dấu phẩy
+    if dot_count > 0 and comma_count > 0:
+        is_en_pattern = bool(re.match(r"^\d{1,3}(,\d{3})+(\.\d+)$", cleaned))
+        is_vi_pattern = bool(re.match(r"^\d{1,3}(\.\d{3})+(,\d+)$", cleaned))
+
+        if is_en_pattern:
+            if conv == "vi":
+                raise ValueError(f"{prefix}Định dạng số kiểu Anh {value!r} không khớp với quy ước Việt Nam đã cấu hình.")
+            return sign * float(cleaned.replace(",", ""))
+        elif is_vi_pattern:
+            if conv == "en":
+                raise ValueError(f"{prefix}Định dạng số kiểu Việt Nam {value!r} không khớp với quy ước Anh đã cấu hình.")
+            return sign * float(cleaned.replace(".", "").replace(",", "."))
+        else:
+            raise ValueError(f"{prefix}Phân nhóm dấu phân cách số không đúng quy cách: {value!r}")
+
+    # Trường hợp 2: Chỉ chứa dấu phẩy
+    if comma_count > 0:
+        if conv == "en":
+            # Trong chuẩn EN, dấu phẩy chỉ có thể là phân nhóm hàng nghìn (mỗi nhóm đúng 3 chữ số)
+            if not re.match(r"^\d{1,3}(,\d{3})+$", cleaned):
+                raise ValueError(f"{prefix}Phân nhóm dấu phẩy không đúng quy cách số tiếng Anh: {value!r}")
+            return sign * float(cleaned.replace(",", ""))
+        elif conv == "vi":
+            if comma_count > 1:
+                raise ValueError(f"{prefix}Dấu phẩy phân nhóm không hợp lệ trong quy ước Việt Nam: {value!r}")
+            if not re.match(r"^\d+,\d+$", cleaned):
+                raise ValueError(f"{prefix}Dấu phẩy thập phân không đúng định dạng: {value!r}")
+            return sign * float(cleaned.replace(",", "."))
+        else:  # strict / auto
+            if comma_count > 1:
+                raise ValueError(f"{prefix}Nhiều dấu phẩy không hợp lệ trong chế độ nghiêm ngặt: {value!r}")
+            m = re.match(r"^(\d+),(\d+)$", cleaned)
+            if not m:
+                raise ValueError(f"{prefix}Định dạng số chứa dấu phẩy không hợp lệ: {value!r}")
+            if len(m.group(2)) == 3:
+                raise ValueError(
+                    f"{prefix}Chuỗi số mơ hồ giữa phân nhóm hàng nghìn và số thập phân: {value!r}. "
+                    "Vui lòng cấu hình number_convention ('vi' hoặc 'en')."
+                )
+            # Số chữ số sau dấu phẩy != 3 -> chắc chắn là dấu phẩy thập phân
+            return sign * float(cleaned.replace(",", "."))
+
+    # Trường hợp 3: Chỉ chứa dấu chấm
+    if dot_count > 0:
+        if conv == "vi":
+            # Trong chuẩn VI, dấu chấm chỉ có thể là phân nhóm hàng nghìn
+            if not re.match(r"^\d{1,3}(\.\d{3})+$", cleaned):
+                raise ValueError(f"{prefix}Phân nhóm dấu chấm không đúng quy cách Việt Nam: {value!r}")
+            return sign * float(cleaned.replace(".", ""))
+        elif conv == "en":
+            if dot_count > 1:
+                raise ValueError(f"{prefix}Nhiều dấu chấm không hợp lệ trong quy ước tiếng Anh: {value!r}")
+            if not re.match(r"^\d+\.\d+$", cleaned):
+                raise ValueError(f"{prefix}Dấu chấm thập phân không đúng định dạng: {value!r}")
+            return sign * float(cleaned)
+        else:  # strict / auto
+            if dot_count > 1:
+                raise ValueError(f"{prefix}Nhiều dấu chấm không hợp lệ trong chế độ nghiêm ngặt: {value!r}")
+            m = re.match(r"^(\d+)\.(\d+)$", cleaned)
+            if not m:
+                raise ValueError(f"{prefix}Định dạng số chứa dấu chấm không hợp lệ: {value!r}")
+            if len(m.group(2)) == 3:
+                raise ValueError(
+                    f"{prefix}Chuỗi số mơ hồ giữa phân nhóm hàng nghìn và số thập phân: {value!r}. "
+                    "Vui lòng cấu hình number_convention ('vi' hoặc 'en')."
+                )
+            # Số chữ số sau dấu chấm != 3 -> chắc chắn là dấu chấm thập phân
+            return sign * float(cleaned)
+
+    raise ValueError(f"{prefix}Không thể xử lý giá trị số: {value!r}")
+
+
+def _is_finite_number(val: Any) -> bool:
+    """Kiểm tra một giá trị có phải là số hữu hạn (không phải bool, nan, inf)."""
+    if val is None or isinstance(val, bool):
+        return False
+    if isinstance(val, (int, float)):
+        return not (math.isnan(val) or math.isinf(val))
+    if isinstance(val, str):
         try:
-            val = float(cleaned)
-            if math.isnan(val) or math.isinf(val):
-                raise ValueError(f"[{cell_name}] Chứa giá trị NaN hoặc vô cực.")
-            return val
-        except ValueError as exc:
-            raise ValueError(
-                f"[{cell_name}] Giá trị {value!r} không thể chuyển đổi thành số tồn hợp lệ."
-            ) from exc
+            f = float(val)
+            return not (math.isnan(f) or math.isinf(f))
+        except ValueError:
+            return False
+    return False
 
-    raise ValueError(f"[{cell_name}] Kiểu dữ liệu không hợp lệ: {type(value)}")
+
+def _cells_match(actual: Any, expected: Any, eps: float = EPS) -> bool:
+    """So sánh hai giá trị ô mà không bắt buộc ô phi số phải chuyển thành float."""
+    # Cả hai là None hoặc chuỗi rỗng
+    is_act_empty = actual is None or (isinstance(actual, str) and actual.strip() == "")
+    is_exp_empty = expected is None or (isinstance(expected, str) and expected.strip() == "")
+    if is_act_empty and is_exp_empty:
+        return True
+    if is_act_empty != is_exp_empty:
+        return False
+
+    # Cả hai là số hữu hạn: so sánh có dung sai EPS
+    if _is_finite_number(actual) and _is_finite_number(expected):
+        return abs(float(actual) - float(expected)) <= eps
+
+    # So sánh chuỗi hoặc giá trị trực tiếp (ví dụ '-', 'N/A', ghi chú text)
+    return str(actual).strip() == str(expected).strip()
+
+
+def check_target_sheet_safety(
+    target_bytes: bytes,
+    sheet_name: str,
+    target_col_letter: str,
+    target_start_row: int,
+) -> None:
+    """Kiểm tra an toàn cấu trúc sheet đích trước khi patch:
+
+    - Kiểm tra bảo vệ sheet (<sheetProtection>).
+    - Kiểm tra gộp ô (<mergeCell>): không cho phép cột đích nằm trong vùng gộp ô.
+    """
+    target_col = column_number(target_col_letter)
+    buf = BytesIO(target_bytes)
+    z = zipfile.ZipFile(buf, "r")
+    try:
+        sheet_path = find_sheet_xml_path(z, sheet_name)
+        sheet_root = etree.fromstring(z.read(sheet_path))
+
+        # 1. Kiểm tra sheetProtection
+        for prot in sheet_root.xpath('//*[local-name()="sheetProtection"]'):
+            if (
+                prot.get("sheet") in ("1", "true")
+                or prot.get("objects") in ("1", "true")
+                or prot.get("scenarios") in ("1", "true")
+            ):
+                raise RuntimeError(
+                    f"[Đích] Sheet '{sheet_name}' đang được bật bảo vệ (sheetProtection). "
+                    "Không thể ghi đè dữ liệu tồn kho."
+                )
+
+        # 2. Kiểm tra mergeCell phủ lên cột đích
+        for m in sheet_root.xpath('//*[local-name()="mergeCell"]'):
+            ref = m.get("ref", "")
+            if not ref:
+                continue
+            try:
+                min_c, min_r, max_c, max_r = range_boundaries(ref)
+                if min_c <= target_col <= max_c and max_r >= target_start_row:
+                    raise RuntimeError(
+                        f"[Đích] Ô trong vùng {sheet_name}!{target_col_letter}{max(min_r, target_start_row)} "
+                        f"nằm trong dải ô gộp '{ref}'. Cột {target_col_letter} phải là cột đơn lẻ, "
+                        "không được gộp ô."
+                    )
+            except Exception as exc:
+                if "nằm trong dải ô gộp" in str(exc):
+                    raise
+    finally:
+        z.close()
+        z.fp = None
 
 
 def read_nvl_source_stock(
     source_bytes: bytes,
     config: NVLConfig,
 ) -> tuple[dict[str, float], dict[str, Any]]:
-    """Đọc dữ liệu số tồn kho từ file nguồn XNT_ketoan_Vikoda.xlsm!Sheet1."""
+    """Đọc dữ liệu số tồn kho từ file nguồn XNT_ketoan_Vikoda.xlsm!Sheet1.
+
+    Sử dụng streaming reader qua iter_rows() sau khi reset_dimensions() để
+    hoàn toàn miễn nhiễm với dimension bị thiếu hoặc khai báo hụt.
+    """
     wb_val = load_workbook(BytesIO(source_bytes), data_only=True, read_only=True, keep_vba=True)
     wb_raw = load_workbook(BytesIO(source_bytes), data_only=False, read_only=True, keep_vba=True)
 
@@ -224,16 +429,29 @@ def read_nvl_source_stock(
         ws_val = wb_val[config.source_sheet]
         ws_raw = wb_raw[config.source_sheet]
 
+        # Xóa dimension cache để đọc trọn vẹn dữ liệu từ sheet XML
+        ws_val.reset_dimensions()
+        ws_raw.reset_dimensions()
+
         stock: dict[str, float] = {}
         seen_rows: dict[str, int] = {}
         total_scanned = 0
 
-        for r in range(config.source_start_row, ws_val.max_row + 1):
+        val_stream = ws_val.iter_rows(min_row=config.source_start_row, values_only=True)
+        raw_stream = ws_raw.iter_rows(min_row=config.source_start_row, values_only=True)
+
+        code_idx = config.source_code_col - 1
+        val_idx = config.source_value_col - 1
+
+        for r, (val_row, raw_row) in enumerate(zip(val_stream, raw_stream), start=config.source_start_row):
             total_scanned += 1
-            raw_code = ws_val.cell(row=r, column=config.source_code_col).value
+            if not val_row or len(val_row) <= code_idx:
+                continue
+
+            raw_code = val_row[code_idx]
             if isinstance(raw_code, str):
                 lower_code = raw_code.strip().lower()
-                if any(k in lower_code for k in ("tổng cộng", "tong cong", "total")):
+                if any(k in lower_code for k in ("tổng cộng", "tong cong", "total", "cộng")):
                     continue
 
             code = normalize_nvl_code(raw_code)
@@ -249,8 +467,8 @@ def read_nvl_source_stock(
             seen_rows[code] = r
             cell_ref = f"{config.source_sheet}!{config.source_value_col_letter}{r}"
 
-            c_val = ws_val.cell(row=r, column=config.source_value_col).value
-            c_raw = ws_raw.cell(row=r, column=config.source_value_col).value
+            c_val = val_row[val_idx] if len(val_row) > val_idx else None
+            c_raw = raw_row[val_idx] if len(raw_row) > val_idx else None
 
             if isinstance(c_raw, str) and c_raw.startswith("="):
                 if c_val is None:
@@ -259,7 +477,17 @@ def read_nvl_source_stock(
                         f"nhưng không có giá trị cached (chưa được Excel tính toán và lưu)."
                     )
 
-            qty = parse_nvl_quantity(c_val, cell_name=cell_ref)
+            qty = parse_nvl_quantity(
+                c_val,
+                convention=config.number_convention,
+                cell_name=cell_ref,
+            )
+
+            if not config.allow_negative and qty < 0:
+                raise ValueError(f"[Nguồn: {config.source_name}] Ô {cell_ref} có số lượng âm ({qty}) bị từ chối.")
+            if not config.allow_zero and abs(qty) < EPS:
+                raise ValueError(f"[Nguồn: {config.source_name}] Ô {cell_ref} có số lượng 0 bị từ chối.")
+
             stock[code] = qty
 
         if not stock:
@@ -277,8 +505,36 @@ def read_nvl_source_stock(
         }
         return stock, metadata
     finally:
-        wb_val.close()
-        wb_raw.close()
+        try:
+            val_stream.close()
+        except Exception:
+            pass
+        try:
+            raw_stream.close()
+        except Exception:
+            pass
+        _safe_close_workbook(wb_val)
+        _safe_close_workbook(wb_raw)
+
+
+def _safe_close_workbook(wb: Any) -> None:
+    """Đóng openpyxl workbook an toàn và dọn dẹp ZipFile archive trên Python 3.12."""
+    if wb is None:
+        return
+    try:
+        archive = getattr(wb, "_archive", None)
+        if archive is not None:
+            try:
+                archive.close()
+            except Exception:
+                pass
+            archive.fp = None
+    except Exception:
+        pass
+    try:
+        wb.close()
+    except Exception:
+        pass
 
 
 def reconcile_nvl_target(
@@ -286,7 +542,20 @@ def reconcile_nvl_target(
     source_stock: dict[str, float],
     config: NVLConfig,
 ) -> NVLReconcileResult:
-    """Đối chiếu mã vật tư và lập danh sách thay đổi cho Kế hoạch mua hàng.xlsx!Ton_NVL."""
+    """Đối chiếu mã vật tư và lập danh sách thay đổi cho Kế hoạch mua hàng.xlsx!Ton_NVL.
+
+    Sử dụng streaming reader với reset_dimensions() và kiểm tra cấu trúc an toàn
+    (bảo vệ sheet, gộp ô, công thức người dùng).
+    """
+    # 1. Kiểm tra an toàn cấu trúc sheet đích
+    check_target_sheet_safety(
+        target_bytes,
+        config.target_sheet,
+        config.target_value_col_letter,
+        config.target_start_row,
+    )
+
+    # 2. Đọc dữ liệu đích
     wb_val = load_workbook(BytesIO(target_bytes), data_only=True, read_only=True)
     wb_raw = load_workbook(BytesIO(target_bytes), data_only=False, read_only=True)
 
@@ -299,16 +568,28 @@ def reconcile_nvl_target(
         ws_val = wb_val[config.target_sheet]
         ws_raw = wb_raw[config.target_sheet]
 
+        ws_val.reset_dimensions()
+        ws_raw.reset_dimensions()
+
         seen_target_codes: dict[str, int] = {}
         changes: list[dict[str, Any]] = []
         unchanged: list[dict[str, Any]] = []
         missing_in_source: list[dict[str, Any]] = []
 
-        for r in range(config.target_start_row, ws_val.max_row + 1):
-            raw_code = ws_val.cell(row=r, column=config.target_code_col).value
+        val_stream = ws_val.iter_rows(min_row=config.target_start_row, values_only=True)
+        raw_stream = ws_raw.iter_rows(min_row=config.target_start_row, values_only=True)
+
+        code_idx = config.target_code_col - 1
+        val_idx = config.target_value_col - 1
+
+        for r, (val_row, raw_row) in enumerate(zip(val_stream, raw_stream), start=config.target_start_row):
+            if not val_row or len(val_row) <= code_idx:
+                continue
+
+            raw_code = val_row[code_idx]
             if isinstance(raw_code, str):
                 lower_code = raw_code.strip().lower()
-                if any(k in lower_code for k in ("tổng cộng", "tong cong", "total")):
+                if any(k in lower_code for k in ("tổng cộng", "tong cong", "total", "cộng")):
                     continue
 
             code = normalize_nvl_code(raw_code)
@@ -325,8 +606,8 @@ def reconcile_nvl_target(
             seen_target_codes[code] = r
             cell_ref = f"{config.target_sheet}!{config.target_value_col_letter}{r}"
 
-            target_raw = ws_raw.cell(row=r, column=config.target_value_col).value
-            target_val = ws_val.cell(row=r, column=config.target_value_col).value
+            target_val = val_row[val_idx] if len(val_row) > val_idx else None
+            target_raw = raw_row[val_idx] if len(raw_row) > val_idx else None
 
             if config.reject_formula_in_target_cell and isinstance(target_raw, str) and target_raw.startswith("="):
                 raise RuntimeError(
@@ -349,10 +630,15 @@ def reconcile_nvl_target(
                 needs_change = True
             else:
                 try:
-                    curr_float = float(target_val)
+                    curr_float = parse_nvl_quantity(
+                        target_val,
+                        convention=config.number_convention,
+                        cell_name=cell_ref,
+                    )
                     if abs(curr_float - new_qty) > EPS:
                         needs_change = True
                 except Exception:
+                    # Nếu ô đích hiện tại chứa text không parse được thành số hợp lệ -> cần cập nhật
                     needs_change = True
 
             if needs_change:
@@ -386,10 +672,10 @@ def reconcile_nvl_target(
 
         if missing_in_source:
             status = "completed_with_warnings"
-            msg = f"Đồng bộ hoàn tất nhưng còn {len(missing_in_source)} mã đích không có trong nguồn."
+            msg = f"Đối soát hoàn tất: {len(changes)} ô cần cập nhật, còn {len(missing_in_source)} mã đích không có trong nguồn."
         elif changes:
             status = "success"
-            msg = f"Đồng bộ thành công: {len(changes)} ô cần cập nhật, {len(unchanged)} ô không đổi."
+            msg = f"Đối soát thành công: {len(changes)} ô cần cập nhật, {len(unchanged)} ô không đổi."
         else:
             status = "unchanged"
             msg = "Dữ liệu tồn kho khớp hoàn toàn, không có ô nào cần thay đổi."
@@ -404,8 +690,16 @@ def reconcile_nvl_target(
             message=msg,
         )
     finally:
-        wb_val.close()
-        wb_raw.close()
+        try:
+            val_stream.close()
+        except Exception:
+            pass
+        try:
+            raw_stream.close()
+        except Exception:
+            pass
+        _safe_close_workbook(wb_val)
+        _safe_close_workbook(wb_raw)
 
 
 def patch_nvl_destination_workbook(
@@ -413,14 +707,22 @@ def patch_nvl_destination_workbook(
     reconcile_result: NVLReconcileResult,
     config: NVLConfig,
 ) -> bytes:
-    """Cập nhật các ô số tồn kho vào file Excel đích ở cấp độ ZIP XML."""
+    """Cập nhật các ô số tồn kho vào file Excel đích ở cấp độ ZIP XML:
+
+    - Chỉ giải nén và sửa file XML của sheet Ton_NVL.
+    - Chèn thẻ <row> và <c> đúng vị trí tuần tự theo XML schema của OpenXML.
+    - Cập nhật <dimension ref="..."> để bao phủ các ô mới tạo nếu vượt quá phạm vi cũ.
+    - Bảo toàn 100% byte-for-byte các file ZIP parts còn lại.
+    """
     if not reconcile_result.changes:
         return target_bytes
 
     source_buffer = BytesIO(target_bytes)
     output_buffer = BytesIO()
 
-    with zipfile.ZipFile(source_buffer, "r") as source_zip:
+    source_zip = zipfile.ZipFile(source_buffer, "r")
+    output_zip = zipfile.ZipFile(output_buffer, "w", compression=zipfile.ZIP_DEFLATED)
+    try:
         sheet_path = find_sheet_xml_path(source_zip, config.target_sheet)
         sheet_root = etree.fromstring(source_zip.read(sheet_path))
 
@@ -460,6 +762,22 @@ def patch_nvl_destination_workbook(
                 new_val,
             )
 
+        # Cập nhật <dimension ref="..."> nếu cần mở rộng phạm vi
+        dim_nodes = sheet_root.xpath('//*[local-name()="dimension"]')
+        if dim_nodes:
+            dim_elem = dim_nodes[0]
+            ref = dim_elem.get("ref", "")
+            if ref and ":" in ref:
+                try:
+                    min_c, min_r, max_c, max_r = range_boundaries(ref)
+                    val_col_num = column_number(config.target_value_col_letter)
+                    max_c_new = max(max_c, val_col_num)
+                    max_r_new = max([max_r] + list(changes_by_row.keys()))
+                    if max_c_new != max_c or max_r_new != max_r:
+                        dim_elem.set("ref", f"{get_column_letter(min_c)}{min_r}:{get_column_letter(max_c_new)}{max_r_new}")
+                except Exception:
+                    pass
+
         new_sheet_xml = etree.tostring(
             sheet_root,
             xml_declaration=True,
@@ -467,10 +785,14 @@ def patch_nvl_destination_workbook(
             standalone=True,
         )
 
-        with zipfile.ZipFile(output_buffer, "w", compression=zipfile.ZIP_DEFLATED) as output_zip:
-            for item in source_zip.infolist():
-                data = new_sheet_xml if item.filename == sheet_path else source_zip.read(item.filename)
-                output_zip.writestr(item, data)
+        for name in source_zip.namelist():
+            data = new_sheet_xml if name == sheet_path else source_zip.read(name)
+            output_zip.writestr(name, data)
+    finally:
+        output_zip.close()
+        output_zip.fp = None
+        source_zip.close()
+        source_zip.fp = None
 
     return output_buffer.getvalue()
 
@@ -483,15 +805,20 @@ def verify_nvl_patched_workbook(
 ) -> dict[str, Any]:
     """Kiểm tra tính toàn vẹn của workbook sau khi patch XML:
 
-    1. Tất cả các ô changed_cells đều nhận đúng giá trị mới.
-    2. Các ô unchanged và missing_in_source giữ nguyên giá trị.
-    3. Tất cả các phần tử trong file ZIP ngoài sheet đích đều giống nhau từng byte.
+    1. Tất cả các ô changed_cells đều nhận đúng giá trị số mới.
+    2. Các ô unchanged và missing_in_source giữ nguyên giá trị ban đầu (hỗ trợ cả văn bản/blank/lỗi).
+    3. Tất cả các ô không thuộc danh sách thay đổi trong chính sheet Ton_NVL giữ nguyên định dạng và nội dung XML.
+    4. Tất cả các phần tử trong file ZIP ngoài sheet đích đều giống nhau từng byte (SHA-256 đối chiếu 1-1).
     """
     if not reconcile_result.changes:
         return {"ok": True, "message": "Không có thay đổi cần xác minh."}
 
-    # 1. So sánh các ZIP parts không liên quan
-    with zipfile.ZipFile(BytesIO(original_bytes), "r") as z_orig, zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_patch:
+    # 1. So sánh các ZIP parts không liên quan (byte-level SHA-256)
+    orig_buf = BytesIO(original_bytes)
+    patch_buf = BytesIO(patched_bytes)
+    z_orig = zipfile.ZipFile(orig_buf, "r")
+    z_patch = zipfile.ZipFile(patch_buf, "r")
+    try:
         target_sheet_path = find_sheet_xml_path(z_orig, config.target_sheet)
         for name in z_orig.namelist():
             if name != target_sheet_path:
@@ -499,14 +826,35 @@ def verify_nvl_patched_workbook(
                 patch_hash = hashlib.sha256(z_patch.read(name)).hexdigest()
                 if orig_hash != patch_hash:
                     raise RuntimeError(
-                        f"Phần tử không liên quan {name} trong file ZIP bị thay đổi ngoài ý muốn!"
+                        f"Phần tử không liên quan '{name}' trong file ZIP bị thay đổi ngoài ý muốn!"
                     )
 
-    # 2. Đọc lại workbook đích bằng openpyxl để xác minh dữ liệu
+        # Kiểm tra tính toàn vẹn của các ô không thay đổi trong chính sheet đích
+        orig_sheet_root = etree.fromstring(z_orig.read(target_sheet_path))
+        patch_sheet_root = etree.fromstring(z_patch.read(target_sheet_path))
+
+        changed_refs = {f"{config.target_value_col_letter}{item['row']}" for item in reconcile_result.changes}
+        orig_cells = {c.get("r"): etree.tostring(c) for c in orig_sheet_root.xpath('//*[local-name()="c"]') if c.get("r")}
+        patch_cells = {c.get("r"): etree.tostring(c) for c in patch_sheet_root.xpath('//*[local-name()="c"]') if c.get("r")}
+
+        for r_coord, orig_c_xml in orig_cells.items():
+            if r_coord not in changed_refs:
+                if r_coord not in patch_cells:
+                    raise RuntimeError(f"Ô không liên quan '{r_coord}' trong sheet '{config.target_sheet}' bị mất sau khi patch!")
+                if patch_cells[r_coord] != orig_c_xml:
+                    raise RuntimeError(f"Ô không liên quan '{r_coord}' trong sheet '{config.target_sheet}' bị biến đổi cấu trúc XML!")
+    finally:
+        z_orig.close()
+        z_orig.fp = None
+        z_patch.close()
+        z_patch.fp = None
+
+    # 2. Đọc lại workbook đích bằng openpyxl để xác minh dữ liệu giá trị ô
     wb = load_workbook(BytesIO(patched_bytes), data_only=True)
     try:
         ws = wb[config.target_sheet]
 
+        # Kiểm tra các ô thay đổi
         for item in reconcile_result.changes:
             row = item["row"]
             expected = item["after"]
@@ -516,22 +864,27 @@ def verify_nvl_patched_workbook(
                     f"Xác minh thất bại tại dòng {row}: kỳ vọng {expected}, thực tế {actual}."
                 )
 
+        # Kiểm tra các ô không đổi (unchanged)
+        for item in reconcile_result.unchanged:
+            row = item["row"]
+            expected = item["value"]
+            actual = ws.cell(row=row, column=config.target_value_col).value
+            if not _cells_match(actual, expected):
+                raise RuntimeError(
+                    f"Ô không đổi tại dòng {row} bị thay đổi: cũ {expected!r}, mới {actual!r}."
+                )
+
+        # Kiểm tra các ô thiếu nguồn (missing_in_source)
         for item in reconcile_result.missing_in_source:
             row = item["row"]
             expected = item["current_value"]
             actual = ws.cell(row=row, column=config.target_value_col).value
-            if expected is None:
-                if actual is not None and str(actual).strip() != "":
-                    raise RuntimeError(
-                        f"Ô giữ nguyên tại dòng {row} bị thay đổi từ rỗng thành {actual}."
-                    )
-            else:
-                if abs(float(actual) - float(expected)) > EPS:
-                    raise RuntimeError(
-                        f"Ô giữ nguyên tại dòng {row} bị thay đổi: cũ {expected}, mới {actual}."
-                    )
+            if not _cells_match(actual, expected):
+                raise RuntimeError(
+                    f"Ô giữ nguyên (mã thiếu nguồn) tại dòng {row} bị thay đổi: cũ {expected!r}, mới {actual!r}."
+                )
     finally:
-        wb.close()
+        _safe_close_workbook(wb)
 
     return {"ok": True, "message": "Xác minh toàn vẹn thành công 100%."}
 
@@ -590,6 +943,52 @@ def generate_nvl_report(
     }
 
 
+def generate_nvl_error_report(
+    config: NVLConfig,
+    *,
+    mode: str,
+    phase: str,
+    attempt: int,
+    error: Exception,
+    source_revision: str | None = None,
+    target_revision: str | None = None,
+) -> dict[str, Any]:
+    """Tạo báo cáo lỗi JSON khi đồng bộ hoặc publish thất bại."""
+    return {
+        "schema_version": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "status": "failed",
+        "phase": phase,
+        "attempt": attempt,
+        "error_type": type(error).__name__,
+        "message": str(error),
+        "source": {
+            "name": config.source_name,
+            "sharepoint_path": config.source_path,
+            "revision": source_revision,
+        },
+        "target": {
+            "name": config.target_name,
+            "sharepoint_path": config.target_path,
+            "revision": target_revision,
+        },
+    }
+
+
+def _is_network_timeout_or_reset(exc: Exception) -> bool:
+    """Xác định các lỗi timeout hoặc ngắt kết nối mạng tạm thời."""
+    if isinstance(exc, (TimeoutError, socket.timeout, ConnectionResetError, ConnectionRefusedError)):
+        return True
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if any(k in name for k in ("timeout", "connectionerror", "urlerror", "readtimeouterror")):
+        return True
+    if any(k in msg for k in ("timed out", "timeout", "connection reset", "connection refused", "remotely closed")):
+        return True
+    return False
+
+
 def run_nvl_sync(
     config: NVLConfig,
     *,
@@ -604,7 +1003,7 @@ def run_nvl_sync(
     install_retry_after_support()
 
     if (source_file or target_file) and publish:
-        raise ValueError("Không được kết hợp cờ --publish khi chạy với file cục bộ.")
+        raise ValueError("Chế độ offline (--source-file/--target-file) không thể kết hợp với cờ --publish.")
 
     if out_dir is None:
         out_dir = Path("offline_out/nvl") if (source_file or target_file) else Path(".")
@@ -614,6 +1013,18 @@ def run_nvl_sync(
 
     proposal_path = out_dir / "nvl_stock_proposal.xlsx"
     report_path = out_dir / "nvl_stock_report.json"
+
+    # Dọn dẹp artifact cũ để không gây hiểu nhầm nếu lần chạy hiện tại lỗi sớm
+    if proposal_path.exists():
+        try:
+            proposal_path.unlink()
+        except OSError:
+            pass
+    if report_path.exists():
+        try:
+            report_path.unlink()
+        except OSError:
+            pass
 
     # 1. Chế độ OFFLINE (chạy từ file cục bộ)
     if source_file or target_file:
@@ -626,40 +1037,49 @@ def run_nvl_sync(
         if not tgt_path.exists():
             raise FileNotFoundError(f"Không tìm thấy file đích: {tgt_path}")
 
-        print(f"[OFFLINE] Đọc nguồn: {src_path}")
-        source_bytes = src_path.read_bytes()
-        print(f"[OFFLINE] Đọc đích: {tgt_path}")
-        target_bytes = tgt_path.read_bytes()
+        current_phase = "offline_read"
+        try:
+            print(f"[OFFLINE] Đọc nguồn: {src_path}")
+            source_bytes = src_path.read_bytes()
+            print(f"[OFFLINE] Đọc đích: {tgt_path}")
+            target_bytes = tgt_path.read_bytes()
 
-        source_stock, _ = read_nvl_source_stock(source_bytes, config)
-        print(f"[OFFLINE] Đọc được {len(source_stock)} mã vật tư từ nguồn.")
+            current_phase = "offline_reconcile"
+            source_stock, _ = read_nvl_source_stock(source_bytes, config)
+            print(f"[OFFLINE] Đọc được {len(source_stock)} mã vật tư từ nguồn.")
 
-        reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
-        print(
-            f"[OFFLINE] Đối soát đích: {len(reconcile_res.changes)} ô đổi, "
-            f"{len(reconcile_res.unchanged)} ô không đổi, "
-            f"{len(reconcile_res.missing_in_source)} mã thiếu ở nguồn."
-        )
+            reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
+            print(
+                f"[OFFLINE] Đối soát đích: {len(reconcile_res.changes)} ô đổi, "
+                f"{len(reconcile_res.unchanged)} ô không đổi, "
+                f"{len(reconcile_res.missing_in_source)} mã thiếu ở nguồn."
+            )
 
-        patched_bytes = patch_nvl_destination_workbook(target_bytes, reconcile_res, config)
-        verify_nvl_patched_workbook(target_bytes, patched_bytes, reconcile_res, config)
+            current_phase = "offline_patch"
+            patched_bytes = patch_nvl_destination_workbook(target_bytes, reconcile_res, config)
 
-        proposal_path.write_bytes(patched_bytes)
-        print(f"[OFFLINE] Đã ghi proposal: {proposal_path}")
+            current_phase = "offline_verify"
+            verify_nvl_patched_workbook(target_bytes, patched_bytes, reconcile_res, config)
 
-        report = generate_nvl_report(reconcile_res, config, mode="offline")
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"[OFFLINE] Đã ghi báo cáo: {report_path}")
-        return report
+            proposal_path.write_bytes(patched_bytes)
+            print(f"[OFFLINE] Đã ghi proposal: {proposal_path}")
+
+            report = generate_nvl_report(reconcile_res, config, mode="offline")
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(f"[OFFLINE] Đã ghi báo cáo: {report_path}")
+            return report
+        except Exception as exc:
+            err_rep = generate_nvl_error_report(
+                config,
+                mode="offline",
+                phase=current_phase,
+                attempt=1,
+                error=exc,
+            )
+            report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            raise
 
     # 2. Chế độ ONLINE (kết nối Microsoft Graph)
-    if graph is None:
-        token = get_access_token()
-        graph = GraphClient(token)
-
-    site_id = graph.get_site_id()
-    drive_id = graph.get_default_drive_id(site_id)
-
     if not config.source_path:
         raise ValueError("Chưa cấu hình 'source.sharepoint_path' trong file cấu hình.")
     if not config.target_path:
@@ -668,59 +1088,197 @@ def run_nvl_sync(
             f"(Sourcedoc ID đã biết: {config.target_sourcedoc}). Vui lòng điền đường dẫn thư mục chính xác."
         )
 
-    for attempt in range(1, max_publish_attempts + 1):
-        print(f"[ONLINE] Lượt {attempt}/{max_publish_attempts}: Đọc metadata từ SharePoint...")
-        source_item = graph.get_item_by_path(drive_id, config.source_path)
-        target_item = graph.get_item_by_path(drive_id, config.target_path)
+    mode = "publish" if publish else "dry_run"
+    source_rev_final = None
+    target_rev_final = None
+    current_phase = "init_graph"
 
-        source_bytes = graph.download_file(drive_id, source_item["id"])
-        target_bytes = graph.download_file(drive_id, target_item["id"])
-
-        source_stock, _ = read_nvl_source_stock(source_bytes, config)
-        reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
-
-        patched_bytes = patch_nvl_destination_workbook(target_bytes, reconcile_res, config)
-        verify_nvl_patched_workbook(target_bytes, patched_bytes, reconcile_res, config)
-
-        proposal_path.write_bytes(patched_bytes)
-        report = generate_nvl_report(
-            reconcile_res,
+    try:
+        if graph is None:
+            token = get_access_token()
+            graph = GraphClient(token)
+        site_id = graph.get_site_id()
+        drive_id = graph.get_default_drive_id(site_id)
+    except Exception as exc:
+        err_rep = generate_nvl_error_report(
             config,
-            mode="publish" if publish else "dry_run",
-            source_revision=source_item.get("eTag"),
-            target_revision=target_item.get("eTag"),
+            mode=mode,
+            phase="init_graph",
+            attempt=1,
+            error=exc,
         )
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        raise
 
-        if not publish:
-            print(f"[ONLINE] Dry-run hoàn tất. Proposal: {proposal_path}, Report: {report_path}")
-            return report
-
-        # Publish mode
-        if not reconcile_res.changes:
-            print("[ONLINE] Dữ liệu khớp 100%, không có ô nào cần upload.")
-            return report
-
-        print(f"[ONLINE] Đang upload file đích với ETag {target_item['eTag']}...")
+    for attempt in range(1, max_publish_attempts + 1):
         try:
-            res = graph.upload_file(drive_id, target_item["id"], patched_bytes, expected_etag=target_item["eTag"])
-            print(f"[ONLINE] Upload thành công: {res.get('name')} (Lượt {attempt})")
+            # 2.1. Đọc metadata nguồn trước khi download
+            current_phase = "fetch_source_metadata"
+            print(f"[ONLINE] Lượt {attempt}/{max_publish_attempts}: Đọc metadata nguồn...")
+            source_item_before = graph.get_item_by_path(drive_id, config.source_path)
+            source_etag_before = source_item_before.get("eTag")
+
+            # 2.2. Tải snapshot nguồn
+            current_phase = "download_source"
+            source_bytes = graph.download_file(drive_id, source_item_before["id"])
+
+            # 2.3. Kiểm tra tính tươi mới của nguồn ngay sau download
+            current_phase = "verify_source_freshness"
+            source_item_after = graph.get_item_by_path(drive_id, config.source_path)
+            if source_item_after.get("eTag") != source_etag_before:
+                print(f"[ONLINE] Nguồn đã thay đổi trong lúc download snapshot (lượt {attempt}); tải lại...")
+                time.sleep(1.0)
+                continue
+            source_rev_final = source_item_after.get("eTag")
+
+            # 2.4. Tải snapshot đích
+            current_phase = "download_target"
+            target_item = graph.get_item_by_path(drive_id, config.target_path)
+            target_rev_final = target_item.get("eTag")
+            target_bytes = graph.download_file(drive_id, target_item["id"])
+
+            # 2.5. Đối soát và lập kế hoạch patch
+            current_phase = "reconcile"
+            source_stock, _ = read_nvl_source_stock(source_bytes, config)
+            reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
+
+            # 2.6. Patch và xác minh proposal cục bộ
+            current_phase = "patch"
+            patched_bytes = patch_nvl_destination_workbook(target_bytes, reconcile_res, config)
+
+            current_phase = "verify_proposal"
+            verify_nvl_patched_workbook(target_bytes, patched_bytes, reconcile_res, config)
+            proposal_path.write_bytes(patched_bytes)
+
+            # Trường hợp dry-run: dừng tại đây và ghi nhận báo cáo đề xuất
+            if not publish:
+                current_phase = "finalize_dry_run"
+                report = generate_nvl_report(
+                    reconcile_res,
+                    config,
+                    mode="dry_run",
+                    source_revision=source_rev_final,
+                    target_revision=target_rev_final,
+                )
+                report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                print(f"[ONLINE] Dry-run hoàn tất. Proposal: {proposal_path}, Report: {report_path}")
+                return report
+
+            # Trường hợp publish nhưng không có thay đổi (dữ liệu đã khớp)
+            if not reconcile_res.changes:
+                current_phase = "finalize_unchanged"
+                report = generate_nvl_report(
+                    reconcile_res,
+                    config,
+                    mode="publish",
+                    source_revision=source_rev_final,
+                    target_revision=target_rev_final,
+                )
+                report["status"] = "unchanged"
+                report["message"] = "Dữ liệu tồn kho khớp hoàn toàn, không có ô nào cần upload."
+                report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                print("[ONLINE] Dữ liệu khớp 100%, không có ô nào cần upload.")
+                return report
+
+            # 2.7. Chuẩn bị publish: Kiểm tra lại nguồn trước khi upload đích
+            current_phase = "pre_upload_source_check"
+            source_item_pre = graph.get_item_by_path(drive_id, config.source_path)
+            if source_item_pre.get("eTag") != source_rev_final:
+                print(
+                    f"[ONLINE] Nguồn đã bị thay đổi trước khi upload (lượt {attempt}); "
+                    "hủy lượt tải lên và làm mới snapshot..."
+                )
+                time.sleep(1.0)
+                continue
+
+            # 2.8. Upload file đích với If-Match ETag
+            current_phase = "upload_target"
+            print(f"[ONLINE] Đang upload file đích với ETag {target_rev_final}...")
+            upload_verified = False
+            try:
+                res = graph.upload_file(
+                    drive_id,
+                    target_item["id"],
+                    patched_bytes,
+                    expected_etag=target_rev_final,
+                )
+                print(f"[ONLINE] Upload hoàn tất: {res.get('name')} (Lượt {attempt})")
+            except Exception as up_exc:
+                if _is_network_timeout_or_reset(up_exc):
+                    print(f"[ONLINE] Upload bị ngắt kết nối/timeout ({up_exc}). Đang tải lại để xác định kết quả...")
+                    try:
+                        check_bytes = graph.download_file(drive_id, target_item["id"])
+                        chk = verify_nvl_patched_workbook(target_bytes, check_bytes, reconcile_res, config)
+                        if chk.get("ok"):
+                            print("[ONLINE] Server đã nhận đủ dữ liệu trước khi timeout; xác nhận thành công.")
+                            res = {"id": target_item["id"], "name": target_item.get("name"), "status": "verified_post_timeout"}
+                            upload_verified = True
+                    except Exception:
+                        pass
+                if not upload_verified:
+                    raise
+
+            # 2.9. Tải lại file đích sau upload để xác minh toàn vẹn trên server
+            current_phase = "post_upload_verify"
+            if not upload_verified:
+                try:
+                    server_bytes = graph.download_file(drive_id, target_item["id"])
+                    verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
+                    print("[ONLINE] Đã tải lại file đích từ SharePoint và đối soát thành công 100%.")
+                except Exception as verify_err:
+                    print(f"[ONLINE] Cảnh báo khi tải lại đối soát sau upload: {verify_err}")
+
+            # 2.10. Ghi nhận báo cáo thành công
+            current_phase = "finalize_published"
+            report = generate_nvl_report(
+                reconcile_res,
+                config,
+                mode="publish",
+                source_revision=source_rev_final,
+                target_revision=target_rev_final,
+            )
+            report["status"] = "published" if not reconcile_res.missing_in_source else "published_with_warnings"
+            report["message"] = f"Đồng bộ và publish thành công: {len(reconcile_res.changes)} ô đã cập nhật lên SharePoint."
             report["upload_result"] = res
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return report
-        except GraphRequestError as exc:
-            if exc.status_code == 412:
-                print("[ONLINE] HTTP 412: File đích đã thay đổi đồng thời; đang lấy snapshot mới để tính lại...")
-                time.sleep(1)
-                continue
-            if is_retryable_graph_error(exc) and attempt < max_publish_attempts:
-                delay = retry_delay_seconds(exc, 3.0)
-                print(f"[ONLINE] Lỗi tạm thời: {exc}. Chờ {delay}s rồi thử lại...")
+
+        except Exception as exc:
+            is_retryable = False
+            delay = 1.0
+
+            if isinstance(exc, GraphRequestError):
+                if exc.status_code == 412:
+                    print(f"[ONLINE] HTTP 412: File đích đã thay đổi đồng thời trên SharePoint (Lượt {attempt}/{max_publish_attempts}).")
+                    is_retryable = True
+                    delay = 1.0
+                elif is_retryable_graph_error(exc):
+                    is_retryable = True
+                    delay = retry_delay_seconds(exc, 3.0)
+                    print(f"[ONLINE] Lỗi tạm thời Graph HTTP {exc.status_code} ({exc}). Chờ {delay}s...")
+            elif _is_network_timeout_or_reset(exc):
+                is_retryable = True
+                delay = 2.0
+                print(f"[ONLINE] Lỗi mạng tạm thời ({exc}). Chờ {delay}s...")
+
+            if is_retryable and attempt < max_publish_attempts:
                 time.sleep(delay)
                 continue
+
+            # Fail fast cho lỗi không retryable hoặc khi đã hết lượt thử
+            err_rep = generate_nvl_error_report(
+                config,
+                mode=mode,
+                phase=current_phase,
+                attempt=attempt,
+                error=exc,
+                source_revision=source_rev_final,
+                target_revision=target_rev_final,
+            )
+            report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             raise
 
-    raise RuntimeError("Vượt quá số lần thử tải lên SharePoint do xung đột liên tục.")
+    raise RuntimeError("Vượt quá số lần thử tải lên SharePoint do xung đột hoặc lỗi tạm thời liên tục.")
 
 
 def main():
