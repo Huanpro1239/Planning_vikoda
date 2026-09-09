@@ -1,0 +1,32 @@
+{
+  "source": {
+    "name": "XNT_ketoan_Vikoda.xlsm",
+    "sharepoint_path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm",
+    "sourcedoc": "C0372C81-A402-4A11-B9E0-847768CC9CFB",
+    "sheet_name": "Sheet1",
+    "code_column": 2,
+    "code_column_letter": "B",
+    "value_column": 13,
+    "value_column_letter": "M",
+    "start_row": 2
+  },
+  "target": {
+    "name": "Kế hoạch mua hàng.xlsx",
+    "sharepoint_path": "",
+    "sourcedoc": "89D1BA7B-006E-4527-B879-ABF120309214",
+    "sheet_name": "Ton_NVL",
+    "code_column": 1,
+    "code_column_letter": "A",
+    "value_column": 4,
+    "value_column_letter": "D",
+    "start_row": 2
+  },
+  "policies": {
+    "direct_copy": true,
+    "allow_zero": true,
+    "allow_negative": true,
+    "preserve_missing_in_source": true,
+    "reject_duplicates": true,
+    "reject_formula_in_target_cell": true
+  }
+}

@@ -99,3 +99,23 @@ python run_offline.py \
     --accounting-vkd XNT_ketoan_VKD.xlsm \
     --out ./out --verify
 ```
+
+## Đồng bộ Tồn Nguyên Vật Liệu (NVL)
+
+Module độc lập `sync_nvl_stock.py` đồng bộ số lượng tồn kho nguyên vật liệu từ `XNT_ketoan_Vikoda.xlsm` (Sheet1, cột B là mã, cột M là tồn) sang `Kế hoạch mua hàng.xlsx` (sheet `Ton_NVL`, ghép mã tại cột A, ghi tồn vào cột D).
+
+### 1. Vận hành Offline
+Dùng khi nghiệm thu dữ liệu từ các file tải về máy:
+```bash
+python -X utf8 sync_nvl_stock.py \
+    --config nvl_stock_config.json \
+    --source-file "XNT_ketoan_Vikoda.xlsm" \
+    --target-file "Kế hoạch mua hàng.xlsx" \
+    --out offline_out/nvl
+```
+
+### 2. Vận hành GitHub Actions
+Workflow riêng `.github/workflows/sync-nvl-stock.yml`:
+- **Tạo Proposal (Mặc định):** `publish = false`. Tải snapshot từ SharePoint, đối soát và sinh artifact `nvl_stock_proposal.xlsx` + `nvl_stock_report.json`.
+- **Duyệt Publish:** `publish = true`. Tải lên file đích trên SharePoint sau khi proposal đã được kiểm tra.
+
