@@ -58,6 +58,11 @@ class SurveyNVLTests(unittest.TestCase):
         ws_src.cell(15, 6, "BIH")
         ws_src.cell(15, 13, 743.0)
 
+        # Row 16: 430200173, CAI, 473992 (Divergent unit nhưng có xác nhận người dùng)
+        ws_src.cell(16, 2, "430200173")
+        ws_src.cell(16, 6, "CAI")
+        ws_src.cell(16, 13, 473992.0)
+
         wb_src.save(self.src_path)
         wb_src.close()
 
@@ -108,6 +113,12 @@ class SurveyNVLTests(unittest.TestCase):
         ws_tgt.cell(7, 2, "Bình 5 gallon")
         ws_tgt.cell(7, 3, "Cái")
         ws_tgt.cell(7, 4, None)
+
+        # Row 8: 430200173, Nhãn thân PVC, Kg (khác đơn vị CAI vs Kg), None
+        ws_tgt.cell(8, 1, "430200173")
+        ws_tgt.cell(8, 2, "Nhãn thân PVC")
+        ws_tgt.cell(8, 3, "Kg")
+        ws_tgt.cell(8, 4, None)
 
         wb_tgt.save(self.tgt_path)
         wb_tgt.close()
@@ -167,21 +178,22 @@ class SurveyNVLTests(unittest.TestCase):
 
         # Kiểm tra metrics
         metrics = res["metrics"]
-        self.assertEqual(metrics["matched_count"], 5)
-        self.assertEqual(metrics["changed_count"], 5)
+        self.assertEqual(metrics["matched_count"], 6)
+        self.assertEqual(metrics["changed_count"], 6)
         self.assertEqual(metrics["missing_in_source_count"], 1)
         self.assertEqual(metrics["duplicate_codes_source"], 0)
         self.assertEqual(metrics["duplicate_codes_target"], 0)
 
         # Kiểm tra đơn vị tính (unit reconciliation)
         unit_rec = res["unit_reconciliation"]
-        self.assertEqual(unit_rec["total_matched"], 5)
+        self.assertEqual(unit_rec["total_matched"], 6)
         self.assertEqual(unit_rec["exact_matches_count"], 2)       # 330100005 (KG vs Kg), 330200010 (KG vs KG)
         self.assertEqual(unit_rec["alias_matches_count"], 1)       # 430100002 (CAI vs Cái)
         self.assertEqual(unit_rec["missing_target_units_count"], 1) # 330100010 (KG vs '')
-        self.assertEqual(unit_rec["divergent_units_count"], 1)     # 430100118 (BIH vs Cái)
-        self.assertEqual(unit_rec["unit_mismatches_count"], 2)     # missing + divergent
+        self.assertEqual(unit_rec["divergent_units_count"], 2)     # 430100118 (BIH vs Cái), 430200173 (CAI vs Kg)
+        self.assertEqual(unit_rec["unit_mismatches_count"], 3)     # missing + divergent
         self.assertIn("không tự ý quy đổi", unit_rec["policy_note"])
+        self.assertIn("473,992 Cái cho mã 430200173", res["reporting_period_note"])
 
         # Kiểm tra danh sách thiếu ở nguồn
         missing_items = res["missing_in_source_items"]
@@ -471,6 +483,65 @@ class SurveyNVLTests(unittest.TestCase):
         missing_items = res["missing_in_source_items"]
         self.assertEqual(len(missing_items), 1)
         self.assertIn("Xác nhận cũ cho kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026' không tự áp dụng", missing_items[0]["note"])
+
+    def test_survey_approved_period_but_unit_changed_does_not_claim_approved(self):
+        """Khi đúng kỳ báo cáo nhưng ĐVT nguồn của mã 430200173 thay đổi (ví dụ CAI -> KG),
+        reporting_period_note và ghi chú chi tiết không được ghi 'đã chốt ... Cái',
+        mà phải cảnh báo thay đổi ĐVT và yêu cầu xác nhận lại.
+        """
+        # Thay đổi ĐVT của mã 430200173 trong source thành 'KG'
+        wb_src = openpyxl.load_workbook(self.src_path)
+        ws_src = wb_src["Sheet1"]
+        ws_src.cell(16, 2, "430200173")
+        ws_src.cell(16, 6, "KG")
+        ws_src.cell(16, 13, 12345.0)
+        wb_src.save(self.src_path)
+        wb_src.close()
+
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            source_file=str(self.src_path),
+            target_file=str(self.tgt_path),
+            out_dir_path=str(self.out_dir),
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
+
+        # Ghi chú tổng quan KHÔNG được ghi 'ĐVT Cái (chép trực tiếp'
+        self.assertNotIn("ĐVT Cái (chép trực tiếp", res["reporting_period_note"])
+        self.assertIn("Mã 430200173 có ĐVT nguồn là 'KG' (thay đổi so với ĐVT 'CAI' đã chốt)", res["reporting_period_note"])
+        self.assertIn("Không tự áp dụng xác nhận 'chép trực tiếp Cái'", res["reporting_period_note"])
+
+        # Ghi chú chi tiết trong divergent_units (hoặc exact_matches vì KG == Kg)
+        # Ở đây nguồn=KG vs đích=Kg -> exact match về mặt đơn vị tính, nhưng vẫn kiểm tra note của mã
+        self.assertNotIn("Người dùng đã CHỐT", res["reporting_period_note"])
+
+    def test_survey_approved_period_but_code_missing_does_not_claim_approved(self):
+        """Khi đúng kỳ báo cáo nhưng mã 430200173 không có trong nguồn,
+        reporting_period_note không được ghi 'đã chốt ... Cái cho mã 430200173',
+        mà phải cảnh báo mã không có trong nguồn.
+        """
+        # Xóa mã 430200173 khỏi source (xóa dòng 16)
+        wb_src = openpyxl.load_workbook(self.src_path)
+        ws_src = wb_src["Sheet1"]
+        ws_src.delete_rows(16, 1)
+        wb_src.save(self.src_path)
+        wb_src.close()
+
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            source_file=str(self.src_path),
+            target_file=str(self.tgt_path),
+            out_dir_path=str(self.out_dir),
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
+
+        # Ghi chú tổng quan KHÔNG được ghi 'ĐVT Cái (chép trực tiếp'
+        self.assertNotIn("ĐVT Cái (chép trực tiếp", res["reporting_period_note"])
+        self.assertIn("Mã 430200173 không có trong báo cáo nguồn (không áp dụng xác nhận chép ĐVT Cái)", res["reporting_period_note"])
 
 
 if __name__ == "__main__":

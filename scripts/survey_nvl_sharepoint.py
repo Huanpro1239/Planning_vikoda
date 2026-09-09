@@ -337,10 +337,13 @@ def run_survey(
                                 f"chép trực tiếp {qty_str} vào cột D, không quy đổi sang Kg."
                             )
                         else:
+                            if not is_approved_period:
+                                reason = f"Xác nhận trước đó gắn với kỳ '{APPROVED_USER_SCOPE['reporting_period']}' (ĐVT 'CAI')"
+                            else:
+                                reason = f"ĐVT nguồn hiện tại là '{src_u}' (thay đổi so với ĐVT 'CAI' đã chốt)"
                             note = (
                                 f"ĐVT nguồn '{src_u}' ({qty_str} nhãn thân PET 1.5L) vs đích ghi '{tgt_u}'. "
-                                f"Xác nhận trước đó gắn với kỳ '{APPROVED_USER_SCOPE['reporting_period']}' (ĐVT 'CAI') "
-                                f"và không tự áp dụng cho kỳ hiện tại '{reporting_period}'. Cần người dùng xác nhận cho kỳ mới."
+                                f"{reason} và không tự áp dụng cho kỳ hiện tại '{reporting_period}'. Cần người dùng xác nhận cho kỳ mới."
                             )
                     else:
                         if is_approved_period:
@@ -430,24 +433,43 @@ def run_survey(
 
         stock_430200173 = source_stock.get("430200173")
         qty_430200173_str = format_nvl_quantity(stock_430200173) if stock_430200173 is not None else "N/A"
+        has_code_430200173 = "430200173" in source_stock
+        unit_430200173 = source_units.get("430200173", "").strip().upper()
+        is_unit_430200173_approved = (unit_430200173 == APPROVED_USER_SCOPE["confirmed_units"].get("430200173"))
+        is_430200173_fully_approved = (is_approved_period and has_code_430200173 and is_unit_430200173_approved)
 
-        if is_approved_period:
-            reporting_period_note = (
-                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
-                f"Đã được người dùng xác nhận và CHỐT chính thức cho kỳ này: sử dụng số tồn theo báo cáo nguồn, "
-                f"ĐVT Cái (chép trực tiếp {qty_430200173_str} Cái cho mã 430200173), bảo toàn {len(rec.missing_in_source)} mã thiếu theo file cũ, "
-                f"và chừa trống cột C cho {len(missing_target_units)} dòng thiếu ĐVT đích."
-            )
-        else:
+        if not is_approved_period:
             reporting_period_note = (
                 f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
                 f"CẢNH BÁO: Xác nhận của người dùng trước đây gắn với kỳ '{APPROVED_USER_SCOPE['reporting_period']}' "
                 f"và không tự động áp dụng cho kỳ hiện tại '{reporting_period}'. "
                 f"Cần người dùng rà soát và xác nhận lại các mã lệch ĐVT và mã thiếu cho kỳ mới."
             )
+        elif not has_code_430200173:
+            reporting_period_note = (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                f"CẢNH BÁO: Mã 430200173 không có trong báo cáo nguồn (không áp dụng xác nhận chép ĐVT Cái). "
+                f"Bảo toàn {len(rec.missing_in_source)} mã thiếu theo file cũ và chừa trống cột C cho {len(missing_target_units)} dòng thiếu ĐVT đích. "
+                f"Cần người dùng rà soát và xác nhận lại."
+            )
+        elif not is_unit_430200173_approved:
+            actual_u = source_units.get("430200173", "").strip()
+            reporting_period_note = (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                f"CẢNH BÁO: Mã 430200173 có ĐVT nguồn là '{actual_u}' (thay đổi so với ĐVT 'CAI' đã chốt). "
+                f"Không tự áp dụng xác nhận 'chép trực tiếp Cái' (số tồn {qty_430200173_str}); cần người dùng xác nhận lại cho kỳ này."
+            )
+        else:
+            reporting_period_note = (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                f"Đã được người dùng xác nhận và CHỐT chính thức cho kỳ này: sử dụng số tồn theo báo cáo nguồn, "
+                f"ĐVT Cái (chép trực tiếp {qty_430200173_str} Cái cho mã 430200173), bảo toàn {len(rec.missing_in_source)} mã thiếu theo file cũ, "
+                f"và chừa trống cột C cho {len(missing_target_units)} dòng thiếu ĐVT đích."
+            )
 
         audit_summary = {
             "status": "success",
+            "config_file": str(config_path),
             "reporting_period": reporting_period,
             "reporting_period_note": reporting_period_note,
             "sharepoint_target_path": cfg.target_path,
