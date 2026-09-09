@@ -7,7 +7,7 @@ import os
 import sys
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
