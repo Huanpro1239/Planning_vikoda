@@ -1,6 +1,9 @@
 """Unit tests for sync_nvl_stock module."""
 
 from io import BytesIO
+import json
+from pathlib import Path
+import tempfile
 from typing import Any
 import unittest
 import zipfile
@@ -9,7 +12,6 @@ from openpyxl import Workbook, load_workbook
 
 from sync_nvl_stock import (
     NVLConfig,
-    load_nvl_config,
     normalize_nvl_code,
     parse_nvl_quantity,
     patch_nvl_destination_workbook,
@@ -482,6 +484,53 @@ class SyncNVLStockTests(unittest.TestCase):
 
         second_patched_bytes = patch_nvl_destination_workbook(patched_bytes, rec2, cfg)
         self.assertEqual(patched_bytes, second_patched_bytes)
+
+    def test_cli_main_failure_exits_with_code_1_and_writes_error_report(self):
+        """CLI main() bắt lỗi, xuất error report và thoát với mã lỗi 1."""
+        from sync_nvl_stock import main
+        import sys
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_args = [
+                "sync_nvl_stock.py",
+                "--source-file", "nonexistent_source.xlsx",
+                "--target-file", "nonexistent_target.xlsx",
+                "--out", tmpdir,
+            ]
+            with patch.object(sys, "argv", test_args):
+                with self.assertRaises(SystemExit) as ctx:
+                    main()
+                self.assertEqual(ctx.exception.code, 1)
+
+            report_file = Path(tmpdir) / "nvl_stock_report.json"
+            self.assertTrue(report_file.exists())
+            rep = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(rep["status"], "failed")
+            self.assertEqual(rep["phase"], "offline_input")
+
+    def test_cli_main_config_error_writes_error_report_and_exits_1(self):
+        """CLI main() gặp lỗi nạp cấu hình vẫn xuất error report và thoát với mã lỗi 1."""
+        from sync_nvl_stock import main
+        import sys
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_args = [
+                "sync_nvl_stock.py",
+                "--config", "nonexistent_config.json",
+                "--out", tmpdir,
+            ]
+            with patch.object(sys, "argv", test_args):
+                with self.assertRaises(SystemExit) as ctx:
+                    main()
+                self.assertEqual(ctx.exception.code, 1)
+
+            report_file = Path(tmpdir) / "nvl_stock_report.json"
+            self.assertTrue(report_file.exists())
+            rep = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(rep["status"], "failed")
+            self.assertEqual(rep["phase"], "init_cli")
 
 
 if __name__ == "__main__":

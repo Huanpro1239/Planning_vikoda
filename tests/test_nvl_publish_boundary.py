@@ -6,10 +6,11 @@ from pathlib import Path
 import tempfile
 from typing import Any
 import unittest
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from sync_nvl_stock import NVLConfig, run_nvl_sync
+from sync_nvl_stock import run_nvl_sync
 from sync_stock import GraphRequestError
 from tests.test_sync_nvl_stock import make_mock_config, make_mock_source_bytes, make_mock_target_bytes
 
@@ -350,6 +351,231 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             self.assertEqual(report["status"], "published")
             # 1: source fail (429) -> retry: 2: source ok, 3: target ok, 4: post-upload verify ok
             self.assertEqual(fake_graph.download_attempts, 4)
+
+    def test_post_upload_verify_value_mismatch_fails_without_rollback_or_reupload(self):
+        """[P1] Xác minh sau upload thấy D2 bị đổi (ví dụ 777): dừng ngay, không published, không upload lại/rollback."""
+        corrupted_bytes = make_mock_target_bytes([("VT001", 777), ("VT002", 70)])
+
+        class WrongPostUploadClient(FakeGraphClient):
+            def upload_file(self, drive_id, item_id, content, expected_etag=None):
+                res = super().upload_file(drive_id, item_id, content, expected_etag)
+                # Giả lập file trên server bị thay đổi đồng thời ngay sau upload
+                self.files[item_id] = corrupted_bytes
+                return res
+
+        fake_graph = WrongPostUploadClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+            self.assertIn("xác minh sau upload thất bại", str(ctx.exception).lower())
+
+            # Không upload lại: số lượt upload duy nhất là 1
+            self.assertEqual(len(fake_graph.uploads), 1)
+
+            # Không rollback: file trên server giữ nguyên giá trị người khác đã sửa (777)
+            wb = load_workbook(BytesIO(fake_graph.files["tgt-1"]), data_only=True)
+            self.assertEqual(wb["Ton_NVL"]["D2"].value, 777)
+            wb.close()
+
+            # Proposal không còn tồn tại để tránh hiểu lầm
+            self.assertFalse((Path(tmpdir) / "nvl_stock_proposal.xlsx").exists())
+
+            # Báo cáo failed với phase post_upload_verify và xác nhận upload đã từng thành công
+            report_file = Path(tmpdir) / "nvl_stock_report.json"
+            self.assertTrue(report_file.exists())
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertTrue(report.get("upload_acknowledged"))
+            self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
+
+    def test_post_upload_verify_other_cell_modified_concurrently_fails_without_reupload(self):
+        """[P1] Xác minh sau upload thấy ô ngoài D bị sửa đồng thời: báo lỗi, giữ nguyên file server, không re-upload."""
+        corrupted_bytes = make_mock_target_bytes([("CONCURRENT_USER", 100), ("VT002", 70)])
+
+        class ConcurrentEditClient(FakeGraphClient):
+            def upload_file(self, drive_id, item_id, content, expected_etag=None):
+                res = super().upload_file(drive_id, item_id, content, expected_etag)
+                self.files[item_id] = corrupted_bytes
+                return res
+
+        fake_graph = ConcurrentEditClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(RuntimeError):
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph)
+
+            self.assertEqual(len(fake_graph.uploads), 1)
+            self.assertFalse((Path(tmpdir) / "nvl_stock_proposal.xlsx").exists())
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertTrue(report.get("upload_acknowledged"))
+
+    def test_post_upload_verify_transient_download_error_retries_and_succeeds(self):
+        """[P1] Lỗi GET tạm thời khi tải lại để xác minh: retry bước đọc có giới hạn và thành công, không upload lại."""
+        class TransientVerifyDownloadClient(FakeGraphClient):
+            def __init__(self):
+                super().__init__()
+                self.verify_download_attempts = 0
+
+            def download_file(self, drive_id, item_id):
+                if self.uploads:
+                    self.verify_download_attempts += 1
+                    if self.verify_download_attempts == 1:
+                        err = GraphRequestError("Service Unavailable", status_code=503)
+                        err.retry_after_seconds = 0.01
+                        raise err
+                return super().download_file(drive_id, item_id)
+
+        fake_graph = TransientVerifyDownloadClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph)
+            self.assertEqual(report["status"], "published")
+            self.assertTrue(report.get("post_upload_verified"))
+            # Duy nhất 1 lần upload, bước đọc verify được thử 2 lần
+            self.assertEqual(len(fake_graph.uploads), 1)
+            self.assertEqual(fake_graph.verify_download_attempts, 2)
+
+    def test_post_upload_verify_transient_download_error_exhausted_fails_with_report(self):
+        """[P1] Lỗi GET tạm thời khi xác minh sau upload hết lượt thử: báo trạng thái unverified, không published."""
+        class PersistentVerifyFailClient(FakeGraphClient):
+            def __init__(self):
+                super().__init__()
+                self.verify_download_attempts = 0
+
+            def download_file(self, drive_id, item_id):
+                if self.uploads:
+                    self.verify_download_attempts += 1
+                    err = GraphRequestError("Service Unavailable", status_code=503)
+                    err.retry_after_seconds = 0.01
+                    raise err
+                return super().download_file(drive_id, item_id)
+
+        fake_graph = PersistentVerifyFailClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph)
+            self.assertIn("không thể tải lại file để xác minh", str(ctx.exception).lower())
+
+            # Không upload lại
+            self.assertEqual(len(fake_graph.uploads), 1)
+            self.assertEqual(fake_graph.verify_download_attempts, 3)
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertEqual(report.get("verification_status"), "unverified")
+            self.assertTrue(report.get("upload_acknowledged"))
+            self.assertFalse((Path(tmpdir) / "nvl_stock_proposal.xlsx").exists())
+
+    def test_source_freshness_continuous_churn_after_download_produces_error_report(self):
+        """[P2] Nguồn thay đổi liên tục ngay sau download: hết lượt thử thì báo lỗi, ghi report và không upload."""
+        class ChurnAfterDownloadClient(FakeGraphClient):
+            def __init__(self, src_path):
+                super().__init__()
+                self.src_path = src_path
+                self.dl_count = 0
+
+            def download_file(self, drive_id, item_id):
+                data = super().download_file(drive_id, item_id)
+                if item_id == "src-1":
+                    self.dl_count += 1
+                    self.items[self.src_path]["eTag"] = f"src-v{self.dl_count}-changed"
+                return data
+
+        fake_graph = ChurnAfterDownloadClient(self.cfg.source_path)
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-v0", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-v0", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=2)
+            self.assertIn("nguồn đã thay đổi", str(ctx.exception).lower())
+
+            self.assertEqual(len(fake_graph.uploads), 0)
+            self.assertFalse((Path(tmpdir) / "nvl_stock_proposal.xlsx").exists())
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "verify_source_freshness")
+            self.assertEqual(report["attempt"], 2)
+
+    def test_source_freshness_churn_before_upload_produces_error_report(self):
+        """[P2] Nguồn thay đổi liên tục trước upload: hết lượt thử thì báo lỗi, ghi report và không upload."""
+        class ChurnBeforeUploadClient(FakeGraphClient):
+            def __init__(self, src_path):
+                super().__init__()
+                self.src_path = src_path
+                self.calls = 0
+
+            def get_item_by_path(self, drive_id, path):
+                item = super().get_item_by_path(drive_id, path)
+                if path == self.src_path:
+                    self.calls += 1
+                    # Cứ mỗi lần pre_upload_source_check (lần gọi thứ 3, 6) thì eTag đổi
+                    if self.calls % 3 == 0:
+                        item["eTag"] = f"src-churned-pre-{self.calls}"
+                return item
+
+        fake_graph = ChurnBeforeUploadClient(self.cfg.source_path)
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-base", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-base", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=2)
+            self.assertIn("nguồn đã bị thay đổi trước khi upload", str(ctx.exception).lower())
+
+            self.assertEqual(len(fake_graph.uploads), 0)
+            self.assertFalse((Path(tmpdir) / "nvl_stock_proposal.xlsx").exists())
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "pre_upload_source_check")
+            self.assertEqual(report["attempt"], 2)
+
+    def test_config_missing_target_path_produces_error_report(self):
+        """[P2] Thiếu target_path sinh lỗi ValueError và xuất error report failed (P2)."""
+        self.cfg.target_path = ""
+        fake_graph = FakeGraphClient()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                run_nvl_sync(self.cfg, out_dir=tmpdir, graph=fake_graph)
+
+            report_file = Path(tmpdir) / "nvl_stock_report.json"
+            self.assertTrue(report_file.exists())
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "validate_config")
+
+    def test_config_missing_source_path_produces_error_report(self):
+        """[P2] Thiếu source_path sinh lỗi ValueError và xuất error report failed (P2)."""
+        self.cfg.source_path = ""
+        fake_graph = FakeGraphClient()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                run_nvl_sync(self.cfg, out_dir=tmpdir, graph=fake_graph)
+
+            report_file = Path(tmpdir) / "nvl_stock_report.json"
+            self.assertTrue(report_file.exists())
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "validate_config")
 
 
 if __name__ == "__main__":

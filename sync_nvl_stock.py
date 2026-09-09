@@ -377,11 +377,11 @@ def check_target_sheet_safety(
 
         # 1. Kiểm tra sheetProtection
         for prot in sheet_root.xpath('//*[local-name()="sheetProtection"]'):
-            if (
-                prot.get("sheet") in ("1", "true")
-                or prot.get("objects") in ("1", "true")
-                or prot.get("scenarios") in ("1", "true")
-            ):
+            is_prot = any(
+                prot.get(attr) in ("1", "true")
+                for attr in ("sheet", "objects", "scenarios")
+            )
+            if is_prot:
                 raise RuntimeError(
                     f"[Đích] Sheet '{sheet_name}' đang được bật bảo vệ (sheetProtection). "
                     "Không thể ghi đè dữ liệu tồn kho."
@@ -944,17 +944,26 @@ def generate_nvl_report(
 
 
 def generate_nvl_error_report(
-    config: NVLConfig,
+    config: NVLConfig | None = None,
     *,
-    mode: str,
+    mode: str = "unknown",
     phase: str,
     attempt: int,
     error: Exception,
     source_revision: str | None = None,
     target_revision: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Tạo báo cáo lỗi JSON khi đồng bộ hoặc publish thất bại."""
-    return {
+    src_name = getattr(config, "source_name", "XNT_ketoan_Vikoda.xlsm") if config else "XNT_ketoan_Vikoda.xlsm"
+    src_path = getattr(config, "source_path", "") if config else ""
+    src_doc = getattr(config, "source_sourcedoc", "") if config else ""
+
+    tgt_name = getattr(config, "target_name", "Kế hoạch mua hàng.xlsx") if config else "Kế hoạch mua hàng.xlsx"
+    tgt_path = getattr(config, "target_path", "") if config else ""
+    tgt_doc = getattr(config, "target_sourcedoc", "") if config else ""
+
+    rep: dict[str, Any] = {
         "schema_version": 1,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
@@ -964,16 +973,21 @@ def generate_nvl_error_report(
         "error_type": type(error).__name__,
         "message": str(error),
         "source": {
-            "name": config.source_name,
-            "sharepoint_path": config.source_path,
+            "name": src_name,
+            "sharepoint_path": src_path,
+            "sourcedoc": src_doc,
             "revision": source_revision,
         },
         "target": {
-            "name": config.target_name,
-            "sharepoint_path": config.target_path,
+            "name": tgt_name,
+            "sharepoint_path": tgt_path,
+            "sourcedoc": tgt_doc,
             "revision": target_revision,
         },
     }
+    if extra:
+        rep.update(extra)
+    return rep
 
 
 def _is_network_timeout_or_reset(exc: Exception) -> bool:
@@ -1002,14 +1016,15 @@ def run_nvl_sync(
     """Chạy quy trình đồng bộ tồn NVL ở chế độ offline hoặc online."""
     install_retry_after_support()
 
-    if (source_file or target_file) and publish:
-        raise ValueError("Chế độ offline (--source-file/--target-file) không thể kết hợp với cờ --publish.")
-
     if out_dir is None:
         out_dir = Path("offline_out/nvl") if (source_file or target_file) else Path(".")
     else:
         out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     proposal_path = out_dir / "nvl_stock_proposal.xlsx"
     report_path = out_dir / "nvl_stock_report.json"
@@ -1026,16 +1041,61 @@ def run_nvl_sync(
         except OSError:
             pass
 
-    # 1. Chế độ OFFLINE (chạy từ file cục bộ)
+    mode = "publish" if publish else ("offline" if (source_file or target_file) else "dry_run")
+    source_rev_final = None
+    target_rev_final = None
+    current_phase = "init"
+    last_error: Exception | None = None
+
+    def _emit_error_and_raise(
+        phase: str,
+        err: Exception,
+        attempt: int = 1,
+        src_rev: str | None = None,
+        tgt_rev: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        if proposal_path.exists():
+            try:
+                proposal_path.unlink()
+            except OSError:
+                pass
+        err_rep = generate_nvl_error_report(
+            config,
+            mode=mode,
+            phase=phase,
+            attempt=attempt,
+            error=err,
+            source_revision=src_rev or source_rev_final,
+            target_revision=tgt_rev or target_rev_final,
+            extra=extra,
+        )
+        try:
+            report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        raise err
+
+    # 1. Kiểm tra cấu hình và tham số đầu vào
+    if (source_file or target_file) and publish:
+        _emit_error_and_raise(
+            "validate_input",
+            ValueError("Chế độ offline (--source-file/--target-file) không thể kết hợp với cờ --publish."),
+        )
+
+    # 2. Chế độ OFFLINE (chạy từ file cục bộ)
     if source_file or target_file:
         if not (source_file and target_file):
-            raise ValueError("Phải cung cấp đồng thời cả --source-file và --target-file.")
+            _emit_error_and_raise(
+                "validate_input",
+                ValueError("Phải cung cấp đồng thời cả --source-file và --target-file."),
+            )
         src_path = Path(source_file)
         tgt_path = Path(target_file)
         if not src_path.exists():
-            raise FileNotFoundError(f"Không tìm thấy file nguồn: {src_path}")
+            _emit_error_and_raise("offline_input", FileNotFoundError(f"Không tìm thấy file nguồn: {src_path}"))
         if not tgt_path.exists():
-            raise FileNotFoundError(f"Không tìm thấy file đích: {tgt_path}")
+            _emit_error_and_raise("offline_input", FileNotFoundError(f"Không tìm thấy file đích: {tgt_path}"))
 
         current_phase = "offline_read"
         try:
@@ -1069,30 +1129,21 @@ def run_nvl_sync(
             print(f"[OFFLINE] Đã ghi báo cáo: {report_path}")
             return report
         except Exception as exc:
-            err_rep = generate_nvl_error_report(
-                config,
-                mode="offline",
-                phase=current_phase,
-                attempt=1,
-                error=exc,
-            )
-            report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            raise
+            _emit_error_and_raise(current_phase, exc, attempt=1)
 
-    # 2. Chế độ ONLINE (kết nối Microsoft Graph)
-    if not config.source_path:
-        raise ValueError("Chưa cấu hình 'source.sharepoint_path' trong file cấu hình.")
-    if not config.target_path:
-        raise ValueError(
-            f"Chưa cấu hình đường dẫn 'target.sharepoint_path' cho '{config.target_name}' trên SharePoint.\n"
-            f"(Sourcedoc ID đã biết: {config.target_sourcedoc}). Vui lòng điền đường dẫn thư mục chính xác."
+    # 3. Chế độ ONLINE (kết nối Microsoft Graph)
+    if not getattr(config, "source_path", None):
+        _emit_error_and_raise("validate_config", ValueError("Chưa cấu hình 'source.sharepoint_path' trong file cấu hình."))
+    if not getattr(config, "target_path", None):
+        _emit_error_and_raise(
+            "validate_config",
+            ValueError(
+                f"Chưa cấu hình đường dẫn 'target.sharepoint_path' cho '{config.target_name}' trên SharePoint.\n"
+                f"(Sourcedoc ID đã biết: {config.target_sourcedoc}). Vui lòng điền đường dẫn thư mục chính xác."
+            ),
         )
 
-    mode = "publish" if publish else "dry_run"
-    source_rev_final = None
-    target_rev_final = None
     current_phase = "init_graph"
-
     try:
         if graph is None:
             token = get_access_token()
@@ -1100,49 +1151,59 @@ def run_nvl_sync(
         site_id = graph.get_site_id()
         drive_id = graph.get_default_drive_id(site_id)
     except Exception as exc:
-        err_rep = generate_nvl_error_report(
-            config,
-            mode=mode,
-            phase="init_graph",
-            attempt=1,
-            error=exc,
-        )
-        report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        raise
+        _emit_error_and_raise("init_graph", exc, attempt=1)
 
     for attempt in range(1, max_publish_attempts + 1):
         try:
-            # 2.1. Đọc metadata nguồn trước khi download
+            # 3.1. Đọc metadata nguồn trước khi download
             current_phase = "fetch_source_metadata"
             print(f"[ONLINE] Lượt {attempt}/{max_publish_attempts}: Đọc metadata nguồn...")
             source_item_before = graph.get_item_by_path(drive_id, config.source_path)
             source_etag_before = source_item_before.get("eTag")
 
-            # 2.2. Tải snapshot nguồn
+            # 3.2. Tải snapshot nguồn
             current_phase = "download_source"
             source_bytes = graph.download_file(drive_id, source_item_before["id"])
 
-            # 2.3. Kiểm tra tính tươi mới của nguồn ngay sau download
+            # 3.3. Kiểm tra tính tươi mới của nguồn ngay sau download
             current_phase = "verify_source_freshness"
             source_item_after = graph.get_item_by_path(drive_id, config.source_path)
             if source_item_after.get("eTag") != source_etag_before:
-                print(f"[ONLINE] Nguồn đã thay đổi trong lúc download snapshot (lượt {attempt}); tải lại...")
-                time.sleep(1.0)
-                continue
+                print(f"[ONLINE] Nguồn đã thay đổi trong lúc download snapshot (lượt {attempt}/{max_publish_attempts}); tải lại...")
+                last_error = RuntimeError(
+                    f"Nguồn đã thay đổi trong lúc download snapshot (eTag trước: {source_etag_before}, sau: {source_item_after.get('eTag')})."
+                )
+                source_rev_final = source_item_after.get("eTag")
+                if proposal_path.exists():
+                    try:
+                        proposal_path.unlink()
+                    except OSError:
+                        pass
+                if attempt < max_publish_attempts:
+                    time.sleep(1.0)
+                    continue
+                else:
+                    _emit_error_and_raise(
+                        "verify_source_freshness",
+                        last_error,
+                        attempt=attempt,
+                        src_rev=source_rev_final,
+                        tgt_rev=target_rev_final,
+                    )
             source_rev_final = source_item_after.get("eTag")
 
-            # 2.4. Tải snapshot đích
+            # 3.4. Tải snapshot đích
             current_phase = "download_target"
             target_item = graph.get_item_by_path(drive_id, config.target_path)
             target_rev_final = target_item.get("eTag")
             target_bytes = graph.download_file(drive_id, target_item["id"])
 
-            # 2.5. Đối soát và lập kế hoạch patch
+            # 3.5. Đối soát và lập kế hoạch patch
             current_phase = "reconcile"
             source_stock, _ = read_nvl_source_stock(source_bytes, config)
             reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
 
-            # 2.6. Patch và xác minh proposal cục bộ
+            # 3.6. Patch và xác minh proposal cục bộ
             current_phase = "patch"
             patched_bytes = patch_nvl_destination_workbook(target_bytes, reconcile_res, config)
 
@@ -1180,30 +1241,50 @@ def run_nvl_sync(
                 print("[ONLINE] Dữ liệu khớp 100%, không có ô nào cần upload.")
                 return report
 
-            # 2.7. Chuẩn bị publish: Kiểm tra lại nguồn trước khi upload đích
+            # 3.7. Chuẩn bị publish: Kiểm tra lại nguồn trước khi upload đích
             current_phase = "pre_upload_source_check"
             source_item_pre = graph.get_item_by_path(drive_id, config.source_path)
             if source_item_pre.get("eTag") != source_rev_final:
                 print(
-                    f"[ONLINE] Nguồn đã bị thay đổi trước khi upload (lượt {attempt}); "
+                    f"[ONLINE] Nguồn đã bị thay đổi trước khi upload (lượt {attempt}/{max_publish_attempts}); "
                     "hủy lượt tải lên và làm mới snapshot..."
                 )
-                time.sleep(1.0)
-                continue
+                last_error = RuntimeError(
+                    f"Nguồn đã bị thay đổi trước khi upload (eTag snapshot: {source_rev_final}, hiện tại: {source_item_pre.get('eTag')})."
+                )
+                source_rev_final = source_item_pre.get("eTag")
+                if proposal_path.exists():
+                    try:
+                        proposal_path.unlink()
+                    except OSError:
+                        pass
+                if attempt < max_publish_attempts:
+                    time.sleep(1.0)
+                    continue
+                else:
+                    _emit_error_and_raise(
+                        "pre_upload_source_check",
+                        last_error,
+                        attempt=attempt,
+                        src_rev=source_rev_final,
+                        tgt_rev=target_rev_final,
+                    )
 
-            # 2.8. Upload file đích với If-Match ETag
+            # 3.8. Upload file đích với If-Match ETag
             current_phase = "upload_target"
             print(f"[ONLINE] Đang upload file đích với ETag {target_rev_final}...")
+            upload_response = None
             upload_verified = False
             try:
-                res = graph.upload_file(
+                upload_response = graph.upload_file(
                     drive_id,
                     target_item["id"],
                     patched_bytes,
                     expected_etag=target_rev_final,
                 )
-                print(f"[ONLINE] Upload hoàn tất: {res.get('name')} (Lượt {attempt})")
+                print(f"[ONLINE] Upload hoàn tất: {upload_response.get('name')} (Lượt {attempt})")
             except Exception as up_exc:
+                last_error = up_exc
                 if _is_network_timeout_or_reset(up_exc):
                     print(f"[ONLINE] Upload bị ngắt kết nối/timeout ({up_exc}). Đang tải lại để xác định kết quả...")
                     try:
@@ -1211,24 +1292,91 @@ def run_nvl_sync(
                         chk = verify_nvl_patched_workbook(target_bytes, check_bytes, reconcile_res, config)
                         if chk.get("ok"):
                             print("[ONLINE] Server đã nhận đủ dữ liệu trước khi timeout; xác nhận thành công.")
-                            res = {"id": target_item["id"], "name": target_item.get("name"), "status": "verified_post_timeout"}
+                            upload_response = {
+                                "id": target_item["id"],
+                                "name": target_item.get("name"),
+                                "status": "verified_post_timeout",
+                            }
                             upload_verified = True
                     except Exception:
                         pass
                 if not upload_verified:
                     raise
 
-            # 2.9. Tải lại file đích sau upload để xác minh toàn vẹn trên server
+            # 3.9. Tải lại file đích sau upload để xác minh toàn vẹn trên server
+            # LƯU Ý BẢO TOÀN VÀ ĐỐI SOÁT:
+            # - Khi server đã nhận file hoặc phản hồi upload thành công, tuyệt đối KHÔNG tự ý upload lại toàn bộ
+            #   hoặc rollback ghi đè file của người khác.
+            # - Nếu GET tải lại gặp lỗi mạng tạm thời (429, 503, timeout): retry đọc tối đa 3 lần.
+            # - Nếu dữ liệu trên server không khớp với patch hoặc bị chỉnh sửa đồng thời ngoài cột D: dừng ngay,
+            #   báo lỗi, ghi report failed với phase='post_upload_verify' và giữ upload_acknowledged=True.
             current_phase = "post_upload_verify"
             if not upload_verified:
-                try:
-                    server_bytes = graph.download_file(drive_id, target_item["id"])
-                    verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
-                    print("[ONLINE] Đã tải lại file đích từ SharePoint và đối soát thành công 100%.")
-                except Exception as verify_err:
-                    print(f"[ONLINE] Cảnh báo khi tải lại đối soát sau upload: {verify_err}")
+                max_verify_download_attempts = 3
+                post_upload_err = None
+                verify_success = False
 
-            # 2.10. Ghi nhận báo cáo thành công
+                for v_attempt in range(1, max_verify_download_attempts + 1):
+                    try:
+                        server_bytes = graph.download_file(drive_id, target_item["id"])
+                        verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
+                        verify_success = True
+                        print("[ONLINE] Đã tải lại file đích từ SharePoint và đối soát thành công 100%.")
+                        break
+                    except Exception as verr:
+                        post_upload_err = verr
+                        # Kiểm tra nếu là lỗi đối soát dữ liệu (mismatch/conflict): dừng ngay, không retry GET!
+                        is_data_mismatch = isinstance(verr, RuntimeError) and any(
+                            k in str(verr) for k in ("Xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp")
+                        )
+                        if is_data_mismatch:
+                            print(f"[ONLINE] LỖI XÁC MINH SAU UPLOAD (Xung đột dữ liệu trên server): {verr}")
+                            break
+
+                        # Nếu là lỗi Graph hoặc timeout tạm thời khi download: retry GET
+                        is_temp = (
+                            isinstance(verr, GraphRequestError) and is_retryable_graph_error(verr)
+                        ) or _is_network_timeout_or_reset(verr)
+                        if is_temp and v_attempt < max_verify_download_attempts:
+                            delay = retry_delay_seconds(verr, 1.0) if isinstance(verr, GraphRequestError) else 1.0
+                            print(
+                                f"[ONLINE] Lỗi tạm thời khi tải lại để xác minh ({verr}). "
+                                f"Thử lại lượt {v_attempt + 1}/{max_verify_download_attempts} sau {delay}s..."
+                            )
+                            time.sleep(delay)
+                            continue
+                        break
+
+                if not verify_success:
+                    is_data_mismatch = isinstance(post_upload_err, RuntimeError) and any(
+                        k in str(post_upload_err) for k in ("Xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp")
+                    )
+                    v_status = "conflict_or_mismatch" if is_data_mismatch else "unverified"
+                    err_msg = (
+                        f"Upload đã được SharePoint ghi nhận nhưng xác minh sau upload thất bại do dữ liệu bị sửa đổi "
+                        f"đồng thời hoặc không khớp: {post_upload_err}"
+                        if is_data_mismatch
+                        else (
+                            f"Upload đã gửi thành công nhưng không thể tải lại file để xác minh sau "
+                            f"{max_verify_download_attempts} lần thử: {post_upload_err}"
+                        )
+                    )
+                    final_err = RuntimeError(err_msg)
+                    _emit_error_and_raise(
+                        "post_upload_verify",
+                        final_err,
+                        attempt=attempt,
+                        src_rev=source_rev_final,
+                        tgt_rev=target_rev_final,
+                        extra={
+                            "upload_acknowledged": True,
+                            "upload_result": upload_response,
+                            "verification_status": v_status,
+                            "raw_verification_error": str(post_upload_err),
+                        },
+                    )
+
+            # 3.10. Ghi nhận báo cáo thành công (Chỉ khi xác minh thành công!)
             current_phase = "finalize_published"
             report = generate_nvl_report(
                 reconcile_res,
@@ -1239,17 +1387,25 @@ def run_nvl_sync(
             )
             report["status"] = "published" if not reconcile_res.missing_in_source else "published_with_warnings"
             report["message"] = f"Đồng bộ và publish thành công: {len(reconcile_res.changes)} ô đã cập nhật lên SharePoint."
-            report["upload_result"] = res
+            report["upload_result"] = upload_response
+            report["post_upload_verified"] = True
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return report
 
         except Exception as exc:
+            if current_phase == "post_upload_verify":
+                raise
+
+            last_error = exc
             is_retryable = False
             delay = 1.0
 
             if isinstance(exc, GraphRequestError):
                 if exc.status_code == 412:
-                    print(f"[ONLINE] HTTP 412: File đích đã thay đổi đồng thời trên SharePoint (Lượt {attempt}/{max_publish_attempts}).")
+                    print(
+                        f"[ONLINE] HTTP 412: File đích đã thay đổi đồng thời trên SharePoint "
+                        f"(Lượt {attempt}/{max_publish_attempts})."
+                    )
                     is_retryable = True
                     delay = 1.0
                 elif is_retryable_graph_error(exc):
@@ -1262,27 +1418,37 @@ def run_nvl_sync(
                 print(f"[ONLINE] Lỗi mạng tạm thời ({exc}). Chờ {delay}s...")
 
             if is_retryable and attempt < max_publish_attempts:
+                if proposal_path.exists():
+                    try:
+                        proposal_path.unlink()
+                    except OSError:
+                        pass
                 time.sleep(delay)
                 continue
 
             # Fail fast cho lỗi không retryable hoặc khi đã hết lượt thử
-            err_rep = generate_nvl_error_report(
-                config,
-                mode=mode,
-                phase=current_phase,
+            _emit_error_and_raise(
+                current_phase,
+                exc,
                 attempt=attempt,
-                error=exc,
-                source_revision=source_rev_final,
-                target_revision=target_rev_final,
+                src_rev=source_rev_final,
+                tgt_rev=target_rev_final,
             )
-            report_path.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            raise
 
-    raise RuntimeError("Vượt quá số lần thử tải lên SharePoint do xung đột hoặc lỗi tạm thời liên tục.")
+    # Thoát vòng lặp do vượt quá số lần thử
+    _emit_error_and_raise(
+        current_phase,
+        last_error or RuntimeError("Vượt quá số lần thử tải lên SharePoint do xung đột hoặc lỗi tạm thời liên tục."),
+        attempt=max_publish_attempts,
+        src_rev=source_rev_final,
+        tgt_rev=target_rev_final,
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Đồng bộ tồn kho nguyên vật liệu (NVL) từ XNT_ketoan_Vikoda sang Kế hoạch mua hàng.")
+    parser = argparse.ArgumentParser(
+        description="Đồng bộ tồn kho nguyên vật liệu (NVL) từ XNT_ketoan_Vikoda sang Kế hoạch mua hàng."
+    )
     parser.add_argument("--config", default=DEFAULT_CONFIG_FILE, help="Đường dẫn file cấu hình JSON.")
     parser.add_argument("--source-file", help="File nguồn cục bộ (chế độ offline).")
     parser.add_argument("--target-file", help="File đích cục bộ (chế độ offline).")
@@ -1292,11 +1458,13 @@ def main():
 
     args = parser.parse_args()
 
-    cfg = load_nvl_config(args.config)
-    if args.target_path:
-        cfg.target_path = args.target_path
+    out_dir = Path(args.out) if args.out else (Path("offline_out/nvl") if (args.source_file or args.target_file) else Path("."))
 
     try:
+        cfg = load_nvl_config(args.config)
+        if args.target_path:
+            cfg.target_path = args.target_path
+
         rep = run_nvl_sync(
             cfg,
             source_file=args.source_file,
@@ -1306,6 +1474,20 @@ def main():
         )
         print(f"Hoàn thành ({rep.get('status')}): {rep.get('message')}")
     except Exception as exc:
+        report_file = out_dir / "nvl_stock_report.json"
+        if not report_file.exists():
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                err_rep = generate_nvl_error_report(
+                    None,
+                    mode="publish" if args.publish else ("offline" if (args.source_file or args.target_file) else "dry_run"),
+                    phase="init_cli",
+                    attempt=1,
+                    error=exc,
+                )
+                report_file.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            except OSError:
+                pass
         print(f"LỖI: {exc}", file=sys.stderr)
         sys.exit(1)
 
