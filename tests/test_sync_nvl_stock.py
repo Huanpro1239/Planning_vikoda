@@ -301,6 +301,70 @@ class SyncNVLStockTests(unittest.TestCase):
             verify_nvl_patched_workbook(target_bytes, corrupted.getvalue(), rec, cfg)
         self.assertIn("bị biến đổi cấu trúc XML", str(ctx.exception))
 
+    def test_server_comparison_allows_customxml_and_docprops_change(self):
+        """Khi is_server_comparison=True, SharePoint tự cập nhật customXml/* và docProps/* không làm lỗi."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        # Thêm customXml/item2.xml và cập nhật docProps/core.xml vào target_bytes ban đầu
+        orig_with_custom = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_with_custom, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename != "docProps/core.xml":
+                    z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("customXml/item2.xml", b"<customXml>version_1</customXml>")
+            z_out.writestr("docProps/core.xml", b"<core>author_old</core>")
+        target_bytes = orig_with_custom.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        # Giả lập SharePoint cập nhật customXml và docProps trên server sau khi upload
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename == "customXml/item2.xml":
+                    z_out.writestr(item, b"<customXml>version_2_from_sharepoint</customXml>")
+                elif item.filename == "docProps/core.xml":
+                    z_out.writestr(item, b"<core>author_sharepoint_updated</core>")
+                else:
+                    z_out.writestr(item, z_in.read(item.filename))
+        server_bytes = server_sim.getvalue()
+
+        # Với is_server_comparison=False (mặc định), phải báo lỗi
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=False)
+        self.assertTrue(any(k in str(ctx.exception) for k in ("customXml/item2.xml", "docProps/core.xml")))
+
+        # Với is_server_comparison=True, phải bỏ qua metadata SharePoint và kiểm tra hợp lệ
+        res = verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertTrue(res["ok"])
+
+    def test_server_comparison_still_blocks_worksheet_tampering(self):
+        """Dù is_server_comparison=True, nếu sheet khác (DanhMuc) bị sửa đổi thì vẫn phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        # Cố tình sửa đổi sheet2 (DanhMuc)
+        tampered = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(tampered, "w") as z_out:
+            for item in z_in.infolist():
+                data = z_in.read(item.filename)
+                if item.filename == "xl/worksheets/sheet2.xml":
+                    data = data.replace(b"Danh", b"Hack")
+                z_out.writestr(item, data)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, tampered.getvalue(), rec, cfg, is_server_comparison=True)
+        self.assertIn("Phần tử không liên quan 'xl/worksheets/sheet2.xml' trong file ZIP bị thay đổi ngoài ý muốn!", str(ctx.exception))
+
     def test_target_cell_in_merge_range_blocked(self):
         """Chặn cập nhật khi cột D nằm trong dải ô gộp."""
         cfg = make_mock_config()

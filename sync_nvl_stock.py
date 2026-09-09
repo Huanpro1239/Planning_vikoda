@@ -834,11 +834,18 @@ def patch_nvl_destination_workbook(
     return output_buffer.getvalue()
 
 
+def _is_server_managed_part(name: str) -> bool:
+    name_clean = name.strip("/").lower()
+    return name_clean.startswith("customxml/") or name_clean.startswith("docprops/")
+
+
 def verify_nvl_patched_workbook(
     original_bytes: bytes,
     patched_bytes: bytes,
     reconcile_result: NVLReconcileResult,
     config: NVLConfig,
+    *,
+    is_server_comparison: bool = False,
 ) -> dict[str, Any]:
     """Kiểm tra tính toàn vẹn của workbook sau khi patch XML:
 
@@ -846,6 +853,8 @@ def verify_nvl_patched_workbook(
     2. Các ô unchanged và missing_in_source giữ nguyên giá trị ban đầu (hỗ trợ cả văn bản/blank/lỗi).
     3. Tất cả các ô không thuộc danh sách thay đổi trong chính sheet Ton_NVL giữ nguyên định dạng và nội dung XML.
     4. Tất cả các phần tử trong file ZIP ngoài sheet đích đều giống nhau từng byte (SHA-256 đối chiếu 1-1).
+       Khi đối chiếu với file tải lại từ server SharePoint (is_server_comparison=True), bỏ qua các metadata
+       riêng do SharePoint tự động đóng dấu (customXml/*, docProps/*).
     """
     if not reconcile_result.changes:
         return {"ok": True, "message": "Không có thay đổi cần xác minh."}
@@ -859,6 +868,8 @@ def verify_nvl_patched_workbook(
         target_sheet_path = find_sheet_xml_path(z_orig, config.target_sheet)
         for name in z_orig.namelist():
             if name != target_sheet_path:
+                if is_server_comparison and _is_server_managed_part(name):
+                    continue
                 orig_hash = hashlib.sha256(z_orig.read(name)).hexdigest()
                 patch_hash = hashlib.sha256(z_patch.read(name)).hexdigest()
                 if orig_hash != patch_hash:
@@ -1386,7 +1397,9 @@ def run_nvl_sync(
             for v_attempt in range(1, max_verify_download_attempts + 1):
                 try:
                     server_bytes = graph.download_file(drive_id, target_item["id"])
-                    verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
+                    verify_nvl_patched_workbook(
+                        target_bytes, server_bytes, reconcile_res, config, is_server_comparison=True
+                    )
                     verify_success = True
                     if is_timeout_upload:
                         print("[ONLINE] Server đã nhận đủ dữ liệu trước khi timeout; xác nhận thành công 100%.")

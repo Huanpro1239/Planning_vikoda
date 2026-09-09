@@ -15,5 +15,6 @@ dry_run_artifacts/
 offline_out/
 latest_proposal/
 staging_reconciliation/
+official_backup/
 *.zip
 temp_audit/
