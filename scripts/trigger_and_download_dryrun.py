@@ -95,7 +95,7 @@ def find_run_for_sha(
 
                 # Kiểm tra khớp branch, workflow và ĐẶC BIỆT là khớp đúng SHA
                 is_branch_match = (head_branch == branch)
-                is_sha_match = (expected_sha and head_sha == expected_sha) or (not expected_sha)
+                is_sha_match = (expected_sha and (head_sha == expected_sha or head_sha.startswith(expected_sha))) or (not expected_sha)
                 is_wf_match = (workflow in run_workflow or run.get("name") == "Sync SharePoint NVL Stock")
 
                 if is_branch_match and is_sha_match and is_wf_match:
@@ -244,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         if r.status_code == 200:
             run_data = r.json()
             run_sha = run_data.get("head_sha", "")
-            if expected_sha and run_sha != expected_sha:
+            if expected_sha and not (run_sha == expected_sha or run_sha.startswith(expected_sha)):
                 print(
                     f"[TRIGGER] LỖI: Run {run_id} có SHA '{run_sha}' không khớp expected SHA '{expected_sha}'.",
                     file=sys.stderr,
