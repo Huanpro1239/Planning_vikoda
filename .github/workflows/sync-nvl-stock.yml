@@ -54,6 +54,10 @@ jobs:
         run: |
           python -X utf8 -m unittest discover -s tests -v
 
+      - name: Clean test artifacts from workspace
+        run: |
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json
+
       - name: Generate NVL proposal or controlled publish
         shell: bash
         env:

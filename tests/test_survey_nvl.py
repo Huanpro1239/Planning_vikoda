@@ -543,6 +543,63 @@ class SurveyNVLTests(unittest.TestCase):
         self.assertNotIn("ĐVT Cái (chép trực tiếp", res["reporting_period_note"])
         self.assertIn("Mã 430200173 không có trong báo cáo nguồn (không áp dụng xác nhận chép ĐVT Cái)", res["reporting_period_note"])
 
+    def test_survey_fetch_target_failure_removes_stale_proposal_and_emits_failed_report(self):
+        """Khi pha fetch_target thất bại (ví dụ Graph 404),
+        survey phải:
+        1. Xóa bỏ proposal cũ (không lưu sót artifact không hợp lệ).
+        2. Ghi report failed của lần chạy hiện tại kèm đầy đủ thông tin source/target.
+        3. Ghi audit_summary.json status=failed và danh sách file trong thư mục cha (nếu có).
+        """
+        # Tạo sẵn file proposal và report cũ trong out_dir
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        stale_prop = self.out_dir / "nvl_stock_proposal.xlsx"
+        stale_prop.write_bytes(b"stale proposal bytes")
+        stale_rep = self.out_dir / "nvl_stock_report.json"
+        stale_rep.write_text(json.dumps({"mode": "dry_run", "status": "stale"}), encoding="utf-8")
+
+        mock_graph = MagicMock()
+        mock_graph.get_site_id.return_value = "site-123"
+        mock_graph.get_default_drive_id.return_value = "drive-123"
+        # Giả lập Graph 404 khi tìm file đích
+        mock_graph.get_item_by_path.side_effect = RuntimeError(
+            "Microsoft Graph lỗi 404: {'error': {'code': 'itemNotFound', 'message': 'The resource could not be found.'}}"
+        )
+        mock_graph.list_folder_children.return_value = [
+            {"name": "Existing_File_1.xlsx", "id": "id-1", "eTag": "etag-1", "size": 1024, "lastModifiedDateTime": "2026-09-09T10:00:00Z"},
+            {"name": "Another_File.xlsx", "id": "id-2", "eTag": "etag-2", "size": 2048, "lastModifiedDateTime": "2026-09-09T11:00:00Z"},
+        ]
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run_survey(
+                config_path=str(self.cfg_path),
+                out_dir_path=str(self.out_dir),
+                graph=mock_graph,
+            )
+        self.assertIn("itemNotFound", str(ctx.exception))
+
+        # 1. Proposal cũ PHẢI bị xóa
+        self.assertFalse(stale_prop.exists(), "Proposal cũ phải bị xóa khi gặp lỗi fetch_target!")
+
+        # 2. Report failed của lần chạy này PHẢI được ghi
+        self.assertTrue(stale_rep.exists(), "Report failed phải được ghi!")
+        rep_data = json.loads(stale_rep.read_text(encoding="utf-8"))
+        self.assertEqual(rep_data["status"], "failed")
+        self.assertEqual(rep_data["mode"], "failed")
+        self.assertEqual(rep_data["phase"], "fetch_target")
+        self.assertIn("itemNotFound", rep_data["error_message"])
+        self.assertEqual(rep_data["source"]["name"], "XNT_ketoan_Vikoda.xlsm")
+        self.assertEqual(rep_data["target"]["name"], "Kế hoạch mua hàng.xlsx")
+        self.assertEqual(rep_data["target"]["sharepoint_path"], "Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx")
+
+        # 3. Audit summary failed PHẢI có danh sách file cha
+        audit_file = self.out_dir / "audit_summary.json"
+        self.assertTrue(audit_file.exists())
+        audit_data = json.loads(audit_file.read_text(encoding="utf-8"))
+        self.assertEqual(audit_data["status"], "failed")
+        self.assertEqual(audit_data["phase"], "fetch_target")
+        self.assertEqual(len(audit_data["available_files_in_parent"]), 2)
+        self.assertEqual(audit_data["available_files_in_parent"][0]["name"], "Existing_File_1.xlsx")
+
 
 if __name__ == "__main__":
     unittest.main()

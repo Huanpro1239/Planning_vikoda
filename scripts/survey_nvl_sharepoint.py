@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 if sys.platform == "win32":
     try:
@@ -90,7 +91,7 @@ def parse_args():
     parser.add_argument("--config", default="nvl_stock_config.json", help="Đường dẫn file cấu hình JSON.")
     parser.add_argument("--source-file", help="Đường dẫn file nguồn offline (tùy chọn).")
     parser.add_argument("--target-file", help="Đường dẫn file đích offline (tùy chọn).")
-    parser.add_argument("--out-dir", default="dry_run_artifacts", help="Thư mục xuất kết quả.")
+    parser.add_argument("--out-dir", default=".", help="Thư mục xuất kết quả.")
     return parser.parse_args()
 
 
@@ -98,12 +99,18 @@ def run_survey(
     config_path: str = "nvl_stock_config.json",
     source_file: str | None = None,
     target_file: str | None = None,
-    out_dir_path: str = "dry_run_artifacts",
+    out_dir_path: str = ".",
     graph: GraphClient | None = None,
 ) -> dict[str, Any]:
     current_phase = "init"
     out_dir = Path(out_dir_path)
     out_dir.mkdir(parents=True, exist_ok=True)
+    cfg: NVLConfig | None = None
+    client_graph: GraphClient | None = graph
+    drive_id: str | None = None
+
+    # Loại bỏ proposal cũ trong out_dir ngay từ đầu để không lưu sót kết quả trước
+    (out_dir / "nvl_stock_proposal.xlsx").unlink(missing_ok=True)
 
     try:
         current_phase = "load_config"
@@ -137,14 +144,14 @@ def run_survey(
             target_item = {"id": "offline_local", "name": p_tgt.name, "eTag": "local_snapshot"}
         else:
             current_phase = "connect_graph"
-            if not os.environ.get("MS_CLIENT_SECRET") and graph is None:
+            if not os.environ.get("MS_CLIENT_SECRET") and client_graph is None:
                 raise RuntimeError("Không có MS_CLIENT_SECRET trong môi trường và không truyền graph client.")
 
-            if graph is None:
+            if client_graph is None:
                 token = get_access_token()
-                graph = GraphClient(token)
-            site_id = graph.get_site_id()
-            drive_id = graph.get_default_drive_id(site_id)
+                client_graph = GraphClient(token)
+            site_id = client_graph.get_site_id()
+            drive_id = client_graph.get_default_drive_id(site_id)
             print(f"[SURVEY] Site ID: {site_id}, Drive ID: {drive_id}")
 
             # Xác minh file đích theo config path
@@ -153,7 +160,7 @@ def run_survey(
                 raise ValueError("Chưa cấu hình 'target.sharepoint_path' trong nvl_stock_config.json")
 
             print(f"[SURVEY] Kiểm tra file đích theo path đã cấu hình: '{cfg.target_path}'")
-            target_item = graph.get_item_by_path(drive_id, cfg.target_path)
+            target_item = client_graph.get_item_by_path(drive_id, cfg.target_path)
             # Xác minh identity
             target_etag = target_item.get("eTag", "")
             if cfg.target_sourcedoc and cfg.target_sourcedoc.lower() not in target_etag.lower():
@@ -162,7 +169,7 @@ def run_survey(
                 )
             print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
 
-            target_bytes = graph.download_file(drive_id, target_item["id"])
+            target_bytes = client_graph.download_file(drive_id, target_item["id"])
             tgt_basename = Path(cfg.target_path).name or "target.xlsx"
             target_local_path = out_dir / f"real_target_{tgt_basename}"
             target_local_path.write_bytes(target_bytes)
@@ -173,7 +180,7 @@ def run_survey(
                 raise ValueError("Chưa cấu hình 'source.sharepoint_path' trong nvl_stock_config.json")
 
             print(f"[SURVEY] Kiểm tra file nguồn theo path đã cấu hình: '{cfg.source_path}'")
-            source_item = graph.get_item_by_path(drive_id, cfg.source_path)
+            source_item = client_graph.get_item_by_path(drive_id, cfg.source_path)
             source_etag = source_item.get("eTag", "")
             if cfg.source_sourcedoc and cfg.source_sourcedoc.lower() not in source_etag.lower():
                 raise RuntimeError(
@@ -181,7 +188,7 @@ def run_survey(
                 )
             print(f"[SURVEY] Đã xác minh identity file nguồn: ID={source_item.get('id')}, eTag={source_etag}")
 
-            source_bytes = graph.download_file(drive_id, source_item["id"])
+            source_bytes = client_graph.download_file(drive_id, source_item["id"])
             src_basename = Path(cfg.source_path).name or "source.xlsm"
             source_local_path = out_dir / f"real_source_{src_basename}"
             source_local_path.write_bytes(source_bytes)
@@ -249,12 +256,6 @@ def run_survey(
             publish=False,
         )
         print(f"[SURVEY] Kết quả dry-run: status={rep.get('status')}")
-
-        # Copy artifacts ra thư mục gốc nếu out_dir khác thư mục hiện tại
-        for fname in ["nvl_stock_proposal.xlsx", "nvl_stock_report.json"]:
-            p_src = out_dir / fname
-            if p_src.exists() and out_dir.resolve() != Path(".").resolve():
-                Path(fname).write_bytes(p_src.read_bytes())
 
         # 5. Đối chiếu số liệu và ĐVT
         current_phase = "build_audit"
@@ -515,25 +516,96 @@ def run_survey(
 
         audit_json = json.dumps(audit_summary, ensure_ascii=False, indent=2) + "\n"
         (out_dir / "audit_summary.json").write_text(audit_json, encoding="utf-8")
-        if out_dir.resolve() != Path(".").resolve():
-            Path("audit_summary.json").write_text(audit_json, encoding="utf-8")
 
         print(f"[SURVEY] Hoàn tất khảo sát thành công. Đã ghi audit_summary.json")
         return audit_summary
 
     except Exception as exc:
         print(f"[SURVEY] LỖI tại pha '{current_phase}': {exc}", file=sys.stderr)
-        error_summary = {
+
+        # 1. BẮT BUỘC loại bỏ proposal cũ để không lưu sót kết quả không hợp lệ
+        try:
+            (out_dir / "nvl_stock_proposal.xlsx").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        # 2. Ghi report failed của lần chạy hiện tại
+        error_report = {
+            "schema_version": 1,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mode": "failed",
             "status": "failed",
             "phase": current_phase,
             "error_type": type(exc).__name__,
             "error_message": str(exc),
+            "source": {
+                "name": cfg.source_name if cfg else "",
+                "sharepoint_path": cfg.source_path if cfg else "",
+                "sourcedoc": cfg.source_sourcedoc if cfg else "",
+            },
+            "target": {
+                "name": cfg.target_name if cfg else "",
+                "sharepoint_path": cfg.target_path if cfg else "",
+                "sourcedoc": cfg.target_sourcedoc if cfg else "",
+            },
+            "metrics": {
+                "matched_count": 0,
+                "changed_count": 0,
+                "unchanged_count": 0,
+                "missing_in_source_count": 0,
+                "source_only_count": 0,
+            },
         }
+        try:
+            (out_dir / "nvl_stock_report.json").write_text(
+                json.dumps(error_report, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+        # 3. Ghi audit_summary.json failed
+        error_summary: dict[str, Any] = {
+            "status": "failed",
+            "phase": current_phase,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "config_file": str(config_path),
+            "sharepoint_target_path": cfg.target_path if cfg else "",
+            "sharepoint_source_path": cfg.source_path if cfg else "",
+        }
+
+        # Nếu lỗi tại pha fetch_target, kiểm tra và liệt kê danh sách file thực tế trong thư mục cha
+        if current_phase == "fetch_target" and client_graph and drive_id and cfg and cfg.target_path:
+            parent_dir = str(Path(cfg.target_path).parent).replace("\\", "/")
+            if parent_dir and parent_dir != ".":
+                try:
+                    print(f"[SURVEY] Đang liệt kê danh sách file trong thư mục cha '{parent_dir}' trên SharePoint...")
+                    children = client_graph.list_folder_children(drive_id, parent_dir)
+                    files_in_parent = []
+                    for item in children:
+                        # Bỏ qua nếu là thư mục con (folder)
+                        if "folder" in item:
+                            continue
+                        fname = item.get("name", "")
+                        fid = item.get("id", "")
+                        fetag = item.get("eTag", "")
+                        files_in_parent.append({
+                            "name": fname,
+                            "id": fid,
+                            "eTag": fetag,
+                            "size": item.get("size"),
+                            "lastModifiedDateTime": item.get("lastModifiedDateTime"),
+                        })
+                        print(f"  - [File] '{fname}' (ID: {fid}, eTag: {fetag})")
+                    error_summary["parent_directory"] = parent_dir
+                    error_summary["available_files_in_parent"] = files_in_parent
+                except Exception as list_exc:
+                    print(f"[SURVEY] Cảnh báo: Không thể liệt kê file trong '{parent_dir}': {list_exc}", file=sys.stderr)
+
         err_json = json.dumps(error_summary, ensure_ascii=False, indent=2) + "\n"
         try:
             (out_dir / "audit_summary.json").write_text(err_json, encoding="utf-8")
-            if out_dir.resolve() != Path(".").resolve():
-                Path("audit_summary.json").write_text(err_json, encoding="utf-8")
         except Exception:
             pass
         raise

@@ -152,17 +152,31 @@ def verify_run_execution(
     expected_config_file: str,
     expected_publish: bool,
 ) -> None:
-    """Xác minh artifact sau khi tải:
-    1. Publish mode: Nếu yêu cầu publish=False thì report không được là mode='publish'.
-       Nếu yêu cầu publish=True thì report bắt buộc là mode='publish'.
-    2. Cấu hình: Kiểm tra sharepoint_path và target_name trong report/audit phải khớp với expected_config_file.
+    """Xác minh artifact sau khi tải từ run:
+    1. Yêu cầu config kỳ vọng phải tồn tại.
+    2. Yêu cầu mode trong report hợp lệ và khớp với expected_publish.
+    3. Yêu cầu status trong report không phải 'failed'.
+    4. Yêu cầu đủ thông tin nguồn và đích trong report (name, sharepoint_path) và phải khớp cấu hình.
+    5. Nếu có audit_summary.json, kiểm tra status và config_file.
     """
+    # 1. Kiểm tra config tồn tại
+    cfg_path = Path(expected_config_file)
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"File cấu hình kỳ vọng '{expected_config_file}' không tồn tại.")
+    expected_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    # 2. Kiểm tra report tồn tại trong thư mục artifacts vừa tải
     report_file = artifacts_dir / "nvl_stock_report.json"
     if not report_file.exists():
         raise FileNotFoundError(f"Không tìm thấy nvl_stock_report.json trong thư mục artifacts: {artifacts_dir}")
 
     report_data = json.loads(report_file.read_text(encoding="utf-8"))
+
+    # 3. Kiểm tra mode hợp lệ
     actual_mode = report_data.get("mode")
+    valid_modes = {"dry_run", "publish", "offline", "failed"}
+    if actual_mode not in valid_modes:
+        raise ValueError(f"Report có mode không hợp lệ: {actual_mode!r}. Mode hợp lệ: {valid_modes}")
 
     if expected_publish and actual_mode != "publish":
         raise ValueError(
@@ -173,30 +187,61 @@ def verify_run_execution(
             f"Publish mode không khớp: yêu cầu dry-run (publish=False) nhưng report ghi nhận mode='publish' (nguy cơ ghi đè!)"
         )
 
-    # Kiểm tra cấu hình đích
-    cfg_path = Path(expected_config_file)
-    if cfg_path.exists():
-        expected_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        exp_tgt_path = expected_cfg.get("target", {}).get("sharepoint_path")
-        exp_tgt_name = expected_cfg.get("target", {}).get("name")
+    # 4. Kiểm tra status report
+    if report_data.get("status") == "failed":
+        raise ValueError(
+            f"Report ghi nhận trạng thái thất bại: phase='{report_data.get('phase')}', "
+            f"error='{report_data.get('error_message')}'"
+        )
 
-        act_tgt_path = report_data.get("target", {}).get("sharepoint_path")
-        act_tgt_name = report_data.get("target", {}).get("name")
+    # 5. Yêu cầu đủ thông tin nguồn và đích để đối chiếu
+    source_info = report_data.get("source")
+    target_info = report_data.get("target")
+    if not isinstance(source_info, dict) or not isinstance(target_info, dict):
+        raise ValueError("Report thiếu thông tin bắt buộc về 'source' hoặc 'target' (phải là đối tượng dict).")
 
-        if exp_tgt_path and act_tgt_path and exp_tgt_path.strip().lower() != act_tgt_path.strip().lower():
-            raise ValueError(
-                f"Cấu hình đường dẫn đích không khớp: yêu cầu '{exp_tgt_path}' (từ {expected_config_file}) "
-                f"nhưng report chạy với '{act_tgt_path}'"
-            )
-        if exp_tgt_name and act_tgt_name and exp_tgt_name.strip().lower() != act_tgt_name.strip().lower():
-            raise ValueError(
-                f"Cấu hình tên file đích không khớp: yêu cầu '{exp_tgt_name}' (từ {expected_config_file}) "
-                f"nhưng report chạy với '{act_tgt_name}'"
-            )
+    act_src_name = source_info.get("name")
+    act_src_path = source_info.get("sharepoint_path")
+    act_tgt_name = target_info.get("name")
+    act_tgt_path = target_info.get("sharepoint_path")
 
+    if not act_src_name or not act_src_path:
+        raise ValueError("Report thiếu trường bắt buộc của nguồn: 'name' hoặc 'sharepoint_path'.")
+    if not act_tgt_name or not act_tgt_path:
+        raise ValueError("Report thiếu trường bắt buộc của đích: 'name' hoặc 'sharepoint_path'.")
+
+    exp_src = expected_cfg.get("source", {})
+    exp_tgt = expected_cfg.get("target", {})
+    exp_src_path = exp_src.get("sharepoint_path")
+    exp_src_name = exp_src.get("name")
+    exp_tgt_path = exp_tgt.get("sharepoint_path")
+    exp_tgt_name = exp_tgt.get("name")
+
+    if exp_src_path and act_src_path and exp_src_path.strip().lower() != act_src_path.strip().lower():
+        raise ValueError(
+            f"Cấu hình đường dẫn nguồn không khớp: yêu cầu '{exp_src_path}' (từ {expected_config_file}) "
+            f"nhưng report chạy với '{act_src_path}'"
+        )
+    if exp_tgt_path and act_tgt_path and exp_tgt_path.strip().lower() != act_tgt_path.strip().lower():
+        raise ValueError(
+            f"Cấu hình đường dẫn đích không khớp: yêu cầu '{exp_tgt_path}' (từ {expected_config_file}) "
+            f"nhưng report chạy với '{act_tgt_path}'"
+        )
+    if exp_tgt_name and act_tgt_name and exp_tgt_name.strip().lower() != act_tgt_name.strip().lower():
+        raise ValueError(
+            f"Cấu hình tên file đích không khớp: yêu cầu '{exp_tgt_name}' (từ {expected_config_file}) "
+            f"nhưng report chạy với '{act_tgt_name}'"
+        )
+
+    # 6. Kiểm tra audit_summary.json nếu có
     audit_file = artifacts_dir / "audit_summary.json"
     if audit_file.exists():
         audit_data = json.loads(audit_file.read_text(encoding="utf-8"))
+        if audit_data.get("status") == "failed":
+            raise ValueError(
+                f"Audit summary ghi nhận thất bại: phase='{audit_data.get('phase')}', "
+                f"error='{audit_data.get('error_message')}'"
+            )
         if "config_file" in audit_data:
             act_cfg = Path(audit_data["config_file"]).name
             exp_cfg = Path(expected_config_file).name
@@ -239,7 +284,20 @@ def wait_for_run_completion(
     raise TimeoutError(f"Hết thời gian ({max_wait_seconds}s) chờ run {run_id} hoàn tất.")
 
 
-def download_run_artifacts(token: str, repo: str, run_id: int, target_dir: Path) -> list[str]:
+def download_run_artifacts(
+    token: str,
+    repo: str,
+    run_id: int,
+    base_target_dir: Path,
+    *,
+    require_report: bool = True,
+) -> tuple[Path, list[str]]:
+    """Tải artifacts vào thư mục riêng biệt theo run ID:
+    - Nếu không có artifact nào: raise RuntimeError.
+    - Nếu tải lỗi hoặc ZIP hỏng: raise RuntimeError.
+    - Nếu require_report=True và thiếu nvl_stock_report.json: raise FileNotFoundError.
+    - Trả về tuple (run_artifacts_dir, downloaded_files).
+    """
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json",
@@ -251,35 +309,53 @@ def download_run_artifacts(token: str, repo: str, run_id: int, target_dir: Path)
 
     artifacts = resp.json().get("artifacts", [])
     if not artifacts:
-        print(f"[TRIGGER] Run {run_id} không có artifacts nào.")
-        return []
+        raise RuntimeError(f"Run {run_id} không có artifact nào trên GitHub.")
 
-    target_dir.mkdir(parents=True, exist_ok=True)
+    # Tạo thư mục riêng biệt theo run_id và dọn dẹp các file cũ trong thư mục này
+    run_dir = base_target_dir / f"run_{run_id}"
+    if run_dir.exists():
+        for p in run_dir.iterdir():
+            if p.is_file():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
+
     downloaded_files = []
 
     for art in artifacts:
-        art_id = art["id"]
-        art_name = art["name"]
+        art_id = art.get("id")
+        art_name = art.get("name", f"artifact_{art_id}")
         size_bytes = art.get("size_in_bytes", 0)
         print(f"[TRIGGER] Đang tải artifact '{art_name}' ({size_bytes} bytes)...")
 
         down_url = f"https://api.github.com/repos/{repo}/actions/artifacts/{art_id}/zip"
         down_resp = requests.get(down_url, headers=headers, timeout=60)
         if down_resp.status_code != 200:
-            print(f"[TRIGGER] Cảnh báo: Không thể tải artifact {art_name} (HTTP {down_resp.status_code})", file=sys.stderr)
-            continue
+            raise RuntimeError(
+                f"Tải artifact '{art_name}' của run {run_id} thất bại (HTTP {down_resp.status_code})"
+            )
 
         try:
             with zipfile.ZipFile(io.BytesIO(down_resp.content)) as z:
-                z.extractall(target_dir)
+                z.extractall(run_dir)
                 extracted = z.namelist()
                 downloaded_files.extend(extracted)
-                print(f"[TRIGGER] Đã giải nén: {extracted}")
+                print(f"[TRIGGER] Đã giải nén vào {run_dir}: {extracted}")
         except zipfile.BadZipFile as bz:
-            print(f"[TRIGGER] Cảnh báo: File tải về không phải zip hợp lệ: {bz}", file=sys.stderr)
+            raise RuntimeError(f"Artifact '{art_name}' của run {run_id} không phải file zip hợp lệ: {bz}")
 
-    print(f"[TRIGGER] Toàn bộ artifacts đã lưu vào: {target_dir.resolve()}")
-    return downloaded_files
+    if require_report:
+        report_file = run_dir / "nvl_stock_report.json"
+        if not report_file.exists():
+            raise FileNotFoundError(
+                f"Artifact vừa tải của run {run_id} không chứa file bắt buộc 'nvl_stock_report.json'."
+            )
+
+    print(f"[TRIGGER] Toàn bộ artifacts của run {run_id} đã lưu vào thư mục riêng: {run_dir.resolve()}")
+    return run_dir, downloaded_files
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -403,9 +479,13 @@ def main(argv: list[str] | None = None) -> int:
     conclusion = completed_run.get("conclusion")
     head_sha = completed_run.get("head_sha", head_sha)
 
-    # Tải artifacts
+    # Tải artifacts vào thư mục riêng theo run ID
     target_dir = Path(args.out_dir)
-    download_run_artifacts(token, args.repo, run_id, target_dir)
+    try:
+        run_artifacts_dir, downloaded_files = download_run_artifacts(token, args.repo, run_id, target_dir)
+    except Exception as down_exc:
+        print(f"[TRIGGER] LỖI TẢI ARTIFACTS: {down_exc}", file=sys.stderr)
+        return 1
 
     print("\n" + "=" * 60)
     print(f"BÁO CÁO KẾT QUẢ WORKFLOW:")
@@ -422,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Xác minh artifact khớp với config_file và publish mode
     try:
-        verify_run_execution(target_dir, args.config_file, args.publish)
+        verify_run_execution(run_artifacts_dir, args.config_file, args.publish)
         print(f"[TRIGGER] Đã xác minh thành công: Artifacts khớp đúng config '{args.config_file}' và mode (publish={args.publish}).")
     except Exception as ver_exc:
         print(f"[TRIGGER] LỖI XÁC MINH ARTIFACTS: {ver_exc}", file=sys.stderr)

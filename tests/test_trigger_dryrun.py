@@ -121,17 +121,18 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             self.assertEqual(result['status'], 'completed')
             self.assertEqual(result['conclusion'], 'success')
 
-    def test_download_run_artifacts_extracts_zip(self):
+    def test_download_run_artifacts_extracts_zip_to_isolated_run_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            out_dir = Path(tmpdir)
+            base_dir = Path(tmpdir)
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, 'w') as zf:
                 zf.writestr('test_art.txt', 'hello artifact')
+                zf.writestr('nvl_stock_report.json', json.dumps({'mode': 'dry_run'}))
             zip_bytes = buf.getvalue()
 
             mock_arts = {
                 'artifacts': [
-                    {'id': 555, 'name': 'audit-102', 'size_in_bytes': len(zip_bytes), 'archive_download_url': 'http://fake.url/zip'}
+                    {'id': 555, 'name': 'nvl-audit-102', 'size_in_bytes': len(zip_bytes), 'archive_download_url': 'http://fake.url/zip'}
                 ]
             }
 
@@ -141,9 +142,65 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
                 return MagicMock(status_code=200, content=zip_bytes)
 
             with patch('requests.get', side_effect=fake_get):
-                files = download_run_artifacts('fake-token', 'owner/repo', 102, out_dir)
+                run_dir, files = download_run_artifacts('fake-token', 'owner/repo', 102, base_dir)
+                self.assertEqual(run_dir, base_dir / 'run_102')
                 self.assertIn('test_art.txt', files)
-                self.assertTrue((out_dir / 'test_art.txt').is_file())
+                self.assertIn('nvl_stock_report.json', files)
+                self.assertTrue((run_dir / 'test_art.txt').is_file())
+                self.assertTrue((run_dir / 'nvl_stock_report.json').is_file())
+
+    def test_download_run_artifacts_fails_when_no_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            with patch('requests.get') as mock_get:
+                mock_get.return_value.status_code = 200
+                mock_get.return_value.json.return_value = {'artifacts': []}
+                with self.assertRaises(RuntimeError) as ctx:
+                    download_run_artifacts('fake-token', 'owner/repo', 103, base_dir)
+                self.assertIn('không có artifact nào', str(ctx.exception))
+
+    def test_download_run_artifacts_fails_when_report_json_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w') as zf:
+                zf.writestr('other.txt', 'no report here')
+            zip_bytes = buf.getvalue()
+
+            mock_arts = {
+                'artifacts': [
+                    {'id': 777, 'name': 'nvl-audit-104', 'size_in_bytes': len(zip_bytes), 'archive_download_url': 'http://fake.url/zip'}
+                ]
+            }
+
+            def fake_get(url, **kwargs):
+                if 'artifacts' in url and not url.endswith('/zip'):
+                    return MagicMock(status_code=200, json=lambda: mock_arts)
+                return MagicMock(status_code=200, content=zip_bytes)
+
+            with patch('requests.get', side_effect=fake_get):
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    download_run_artifacts('fake-token', 'owner/repo', 104, base_dir, require_report=True)
+                self.assertIn('nvl_stock_report.json', str(ctx.exception))
+
+    def test_download_run_artifacts_fails_on_corrupt_zip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            mock_arts = {
+                'artifacts': [
+                    {'id': 888, 'name': 'corrupted-art', 'size_in_bytes': 100, 'archive_download_url': 'http://fake.url/zip'}
+                ]
+            }
+
+            def fake_get(url, **kwargs):
+                if 'artifacts' in url and not url.endswith('/zip'):
+                    return MagicMock(status_code=200, json=lambda: mock_arts)
+                return MagicMock(status_code=200, content=b"THIS IS NOT A ZIP FILE")
+
+            with patch('requests.get', side_effect=fake_get):
+                with self.assertRaises(RuntimeError) as ctx:
+                    download_run_artifacts('fake-token', 'owner/repo', 105, base_dir)
+                self.assertIn('không phải file zip hợp lệ', str(ctx.exception))
 
     def test_verify_run_execution_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -151,6 +208,10 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             cfg_file = p / 'test_cfg.json'
             cfg_file.write_text(
                 json.dumps({
+                    'source': {
+                        'sharepoint_path': 'Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm',
+                        'name': 'XNT_ketoan_Vikoda.xlsm',
+                    },
                     'target': {
                         'sharepoint_path': 'Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx',
                         'name': 'Kế hoạch mua hàng.xlsx',
@@ -163,6 +224,11 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             rep_file.write_text(
                 json.dumps({
                     'mode': 'dry_run',
+                    'status': 'completed_with_warnings',
+                    'source': {
+                        'sharepoint_path': 'Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm',
+                        'name': 'XNT_ketoan_Vikoda.xlsm',
+                    },
                     'target': {
                         'sharepoint_path': 'Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx',
                         'name': 'Kế hoạch mua hàng.xlsx',
@@ -180,24 +246,91 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             # verify dry-run matches expected_publish=False
             verify_run_execution(p, str(cfg_file), expected_publish=False)
 
+    def test_verify_run_execution_rejects_nonexistent_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            with self.assertRaises(FileNotFoundError) as ctx:
+                verify_run_execution(p, 'non_existent_config.json', expected_publish=False)
+            self.assertIn('không tồn tại', str(ctx.exception))
+
+    def test_verify_run_execution_rejects_report_missing_target_info(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(json.dumps({'target': {'sharepoint_path': 'a', 'name': 'b'}}), encoding='utf-8')
+
+            rep_file = p / 'nvl_stock_report.json'
+            # Report thiếu hoàn toàn trường 'target'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                }),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
+            self.assertIn("Report thiếu thông tin bắt buộc về 'source' hoặc 'target'", str(ctx.exception))
+
+            # Report có 'target' nhưng thiếu 'sharepoint_path'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt'},
+                }),
+                encoding='utf-8',
+            )
+            with self.assertRaises(ValueError) as ctx:
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
+            self.assertIn("Report thiếu trường bắt buộc của đích", str(ctx.exception))
+
+    def test_verify_run_execution_rejects_failed_status_report(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(json.dumps({'target': {}}), encoding='utf-8')
+
+            rep_file = p / 'nvl_stock_report.json'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'failed',
+                    'status': 'failed',
+                    'phase': 'fetch_target',
+                    'error_message': 'ItemNotFound 404',
+                }),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
+            self.assertIn('Report ghi nhận trạng thái thất bại', str(ctx.exception))
+
     def test_verify_run_execution_rejects_publish_when_expecting_dryrun(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(json.dumps({'target': {}}), encoding='utf-8')
+
             rep_file = p / 'nvl_stock_report.json'
             rep_file.write_text(json.dumps({'mode': 'publish'}), encoding='utf-8')
 
             with self.assertRaises(ValueError) as ctx:
-                verify_run_execution(p, 'any_cfg.json', expected_publish=False)
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
             self.assertIn('nguy cơ ghi đè', str(ctx.exception))
 
     def test_verify_run_execution_rejects_dryrun_when_expecting_publish(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(json.dumps({'target': {}}), encoding='utf-8')
+
             rep_file = p / 'nvl_stock_report.json'
             rep_file.write_text(json.dumps({'mode': 'dry_run'}), encoding='utf-8')
 
             with self.assertRaises(ValueError) as ctx:
-                verify_run_execution(p, 'any_cfg.json', expected_publish=True)
+                verify_run_execution(p, str(cfg_file), expected_publish=True)
             self.assertIn('yêu cầu publish=True nhưng report ghi nhận mode=\'dry_run\'', str(ctx.exception))
 
     def test_verify_run_execution_rejects_target_path_mismatch(self):
@@ -206,6 +339,10 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             cfg_file = p / 'staging_cfg.json'
             cfg_file.write_text(
                 json.dumps({
+                    'source': {
+                        'sharepoint_path': 'Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm',
+                        'name': 'XNT_ketoan_Vikoda.xlsm',
+                    },
                     'target': {
                         'sharepoint_path': 'Tinh san xuat Mua hang 2027/Test_Ke_hoach_mua_hang_copy.xlsx',
                         'name': 'Test_Ke_hoach_mua_hang_copy.xlsx',
@@ -218,6 +355,10 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             rep_file.write_text(
                 json.dumps({
                     'mode': 'dry_run',
+                    'source': {
+                        'sharepoint_path': 'Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm',
+                        'name': 'XNT_ketoan_Vikoda.xlsm',
+                    },
                     'target': {
                         'sharepoint_path': 'Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx',
                         'name': 'Kế hoạch mua hàng.xlsx',
@@ -237,7 +378,14 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             cfg_file.write_text(json.dumps({'target': {}}), encoding='utf-8')
 
             rep_file = p / 'nvl_stock_report.json'
-            rep_file.write_text(json.dumps({'mode': 'dry_run', 'target': {}}), encoding='utf-8')
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
 
             audit_file = p / 'audit_summary.json'
             audit_file.write_text(
@@ -254,7 +402,7 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             with patch('scripts.trigger_and_download_dryrun.dispatch_workflow'):
                 with patch('scripts.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 999, 'head_sha': 'sha_fail'}):
                     with patch('scripts.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'failure', 'head_sha': 'sha_fail'}):
-                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts'):
+                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
                             exit_code = main(['--sha', 'sha_fail', '--no-dispatch'])
                             self.assertEqual(exit_code, 1)
 
@@ -263,7 +411,7 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             with patch('scripts.trigger_and_download_dryrun.dispatch_workflow'):
                 with patch('scripts.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 888, 'head_sha': 'sha_ok'}):
                     with patch('scripts.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'success', 'head_sha': 'sha_ok'}):
-                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts'):
+                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
                             with patch('scripts.trigger_and_download_dryrun.verify_run_execution'):
                                 exit_code = main(['--sha', 'sha_ok', '--no-dispatch'])
                                 self.assertEqual(exit_code, 0)
