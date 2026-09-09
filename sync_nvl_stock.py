@@ -518,9 +518,19 @@ def read_nvl_source_stock(
 
 
 def _safe_close_workbook(wb: Any) -> None:
-    """Đóng openpyxl workbook an toàn và dọn dẹp ZipFile archive trên Python 3.12."""
+    """Đóng openpyxl workbook an toàn và dọn dẹp ZipFile archive / vba_archive trên Python 3.12."""
     if wb is None:
         return
+    try:
+        vba_archive = getattr(wb, "vba_archive", None)
+        if vba_archive is not None:
+            try:
+                vba_archive.close()
+            except Exception:
+                pass
+            vba_archive.fp = None
+    except Exception:
+        pass
     try:
         archive = getattr(wb, "_archive", None)
         if archive is not None:
@@ -1383,7 +1393,8 @@ def run_nvl_sync(
                     src_rev=source_rev_final,
                     tgt_rev=target_rev_final,
                     extra={
-                        "upload_acknowledged": True,
+                        "upload_acknowledged": not is_timeout_upload,
+                        "upload_may_have_committed": True,
                         "upload_result": upload_response,
                         "verification_status": v_status,
                         "is_timeout_upload": is_timeout_upload,

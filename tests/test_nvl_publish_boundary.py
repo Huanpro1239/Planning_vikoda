@@ -618,7 +618,8 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["phase"], "post_upload_verify")
-            self.assertTrue(report.get("upload_acknowledged"))
+            self.assertFalse(report.get("upload_acknowledged"))
+            self.assertTrue(report.get("upload_may_have_committed"))
             self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
 
     def test_timeout_server_committed_concurrent_edit_outside_d_stops_without_reupload(self):
@@ -657,6 +658,8 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertFalse(report.get("upload_acknowledged"))
+            self.assertTrue(report.get("upload_may_have_committed"))
             self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
 
     def test_timeout_get_transient_error_recovers_and_publishes(self):
@@ -712,6 +715,8 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertFalse(report.get("upload_acknowledged"))
+            self.assertTrue(report.get("upload_may_have_committed"))
             self.assertEqual(report.get("verification_status"), "unverified")
 
     def test_cli_missing_config_cleans_stale_proposal_and_writes_failed_report(self):
