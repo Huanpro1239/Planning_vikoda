@@ -9,6 +9,8 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from openpyxl import load_workbook
 
 from sync_nvl_stock import (

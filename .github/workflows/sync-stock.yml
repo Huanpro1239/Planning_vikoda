@@ -90,7 +90,7 @@ jobs:
       - name: Survey and dry-run NVL stock
         shell: bash
         run: |
-          python -X utf8 scripts/survey_nvl_sharepoint.py
+          PYTHONPATH=. python -X utf8 scripts/survey_nvl_sharepoint.py
 
       - name: Upload planning proposal and audit
         if: always()
