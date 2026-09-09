@@ -754,6 +754,7 @@ class KHSXKiTests(unittest.TestCase):
         out6, rep6 = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
         self.assertTrue(rep6["ok"])
         ver6 = ki.verify_khsx_ki(out6, plan_year=2026, plan_month=11)
+        self.assertTrue(ver6["ok"])
         wb6 = load_workbook(BytesIO(out6))
         ws6 = wb6["KHSX_ki"]
         self.assertEqual(ws6["K35"].value, "Ghi chú cần giữ")
@@ -897,14 +898,36 @@ class KHSXKiTests(unittest.TestCase):
         self.assertEqual(ki._detect_current_layout(ws5), 10)
         wb5.close()
 
-        # Trường hợp 3: Tiêu đề dòng 6 bị xóa sạch (None)
+        # Trường hợp 3: Tiêu đề dòng 6 bị xóa sạch (None) và không có công thức =SUM trong các dòng SKU
+        # Thay vì đoán mò 10 như phiên bản cũ, hệ thống phải từ chối an toàn bằng ValueError
+        # nêu rõ sheet và tọa độ J6:K6 để bảo vệ dữ liệu người dùng.
         raw5_blank = make_mock_khsx_ki_workbook(year=2026, month=9)
         wb_blank = load_workbook(BytesIO(raw5_blank))
         ws_blank = wb_blank["KHSX_ki"]
         ws_blank["J6"].value = None
         ws_blank["K6"].value = None
-        self.assertEqual(ki._detect_current_layout(ws_blank), 10)
+        with self.assertRaises(ValueError) as ctx_blank:
+            ki._detect_current_layout(ws_blank)
+        self.assertIn("J6:K6", str(ctx_blank.exception))
         wb_blank.close()
+
+        # Trường hợp 4: Tiêu đề dòng 6 bị xóa sạch (None), nhưng cột 10 có công thức =SUM
+        wb_sum10 = load_workbook(BytesIO(raw5_blank))
+        ws_sum10 = wb_sum10["KHSX_ki"]
+        ws_sum10["J6"].value = None
+        ws_sum10["K6"].value = None
+        ws_sum10["J7"].value = "=SUM(E7:I7)"
+        self.assertEqual(ki._detect_current_layout(ws_sum10), 10)
+        wb_sum10.close()
+
+        # Trường hợp 5: Tiêu đề dòng 6 bị xóa sạch (None), nhưng cột 11 có công thức =SUM
+        wb_sum11 = load_workbook(BytesIO(raw5_blank))
+        ws_sum11 = wb_sum11["KHSX_ki"]
+        ws_sum11["J6"].value = None
+        ws_sum11["K6"].value = None
+        ws_sum11["K7"].value = "=SUM(E7:J7)"
+        self.assertEqual(ki._detect_current_layout(ws_sum11), 11)
+        wb_sum11.close()
 
     def test_conflicting_merge_inside_table_raises_clear_error(self):
         """[An toàn dữ liệu] Vùng merge xung đột bên trong bảng SKU báo lỗi rõ sheet và tọa độ."""
@@ -923,7 +946,165 @@ class KHSXKiTests(unittest.TestCase):
         self.assertIn("KHSX_ki", err_msg)
         self.assertIn("J7:K7", err_msg)
 
+    def test_defect_p2_footer_note_does_not_affect_layout_or_styles(self):
+        """[Defect P2 Regression] Ghi chú K35 ngoài bảng không được làm sai lệch bố cục hay suy giảm định dạng."""
+        results = []
+        for note in (None, "Ghi chú cần giữ"):
+            wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+            ws = wb["KHSX_ki"]
+            ws["J6"] = "Tổng cộng"
+            ws["K6"] = "Tổng cộng"
+            if note is not None:
+                ws["K35"] = note
+            detected = ki._detect_current_layout(ws)
+            buf = BytesIO()
+            wb.save(buf)
+            wb.close()
+
+            out, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+            ver = ki.verify_khsx_ki(out, plan_year=2026, plan_month=11)
+            self.assertTrue(ver["ok"], f"Verification phải pass cho note={note!r}")
+
+            wb_out = load_workbook(BytesIO(out))
+            ws_out = wb_out["KHSX_ki"]
+            results.append({
+                "note": note,
+                "detected": detected,
+                "k7_bold": ws_out["K7"].font.bold,
+                "k7_nf": ws_out["K7"].number_format,
+                "k_width": ws_out.column_dimensions["K"].width,
+                "k35_val": ws_out["K35"].value if note is not None else None,
+            })
+            wb_out.close()
+
+        # Cả hai trường hợp phải cho kết quả nhận diện và định dạng đồng nhất 100%
+        self.assertEqual(results[0]["detected"], 10, "Khi không có note, detected phải là 10")
+        self.assertEqual(results[1]["detected"], 10, "Khi có K35='Ghi chú cần giữ', detected vẫn phải là 10 (không bị nhảy sang 11)")
+        self.assertTrue(results[0]["k7_bold"])
+        self.assertTrue(results[1]["k7_bold"], "K7 phải giữ font.bold=True")
+        self.assertEqual(results[0]["k7_nf"], "#,##0")
+        self.assertEqual(results[1]["k7_nf"], "#,##0", "K7 phải giữ number_format=#,##0")
+        self.assertEqual(results[0]["k_width"], 17.0)
+        self.assertEqual(results[1]["k_width"], 17.0, "Cột K phải có width=17.0")
+        self.assertEqual(results[1]["k35_val"], "Ghi chú cần giữ", "Ghi chú K35 phải được bảo toàn nguyên vẹn")
+
+    def test_footer_sum_formula_does_not_affect_layout_detection(self):
+        """[Defect P2] Công thức =SUM đặt ngoài bảng (K35) không được đánh lừa detector."""
+        wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+        ws = wb["KHSX_ki"]
+        ws["J6"] = "Tổng cộng"
+        ws["K6"] = "Tổng cộng"
+        ws["K35"] = "=SUM(K7:K34)"  # Công thức ngoài bảng
+        self.assertEqual(ki._detect_current_layout(ws), 10)
+        wb.close()
+
+    def test_distinguish_sku_zero_qty_from_empty_cell(self):
+        """[Defect P2] Phân biệt rõ dữ liệu SKU = 0 với ô trống."""
+        # 1. Ô trống (None hoặc chuỗi rỗng) không phải dữ liệu SKU
+        self.assertTrue(ki._is_empty_cell(None))
+        self.assertTrue(ki._is_empty_cell(""))
+        self.assertTrue(ki._is_empty_cell("   "))
+        self.assertFalse(ki._has_sku_data(None))
+        self.assertFalse(ki._has_sku_data(""))
+
+        # 2. Giá trị 0, 0.0, "0" là dữ liệu SKU hợp lệ, không phải ô trống
+        self.assertFalse(ki._is_empty_cell(0))
+        self.assertFalse(ki._is_empty_cell(0.0))
+        self.assertTrue(ki._has_sku_data(0))
+        self.assertTrue(ki._has_sku_data(0.0))
+
+        # 3. Khi tiêu đề mâu thuẫn (cả hai là Tổng cộng), SKU có sản lượng 0 ở cột 11 chứng tỏ cột 11 có dữ liệu
+        wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+        ws = wb["KHSX_ki"]
+        ws["J6"] = "Tổng cộng"
+        ws["K6"] = "Tổng cộng"
+        ws["K7"] = 0  # Sản lượng 0 ở cột K dòng SKU 7
+        # Cột K có sản lượng 0 -> nhận diện đúng 11
+        self.assertEqual(ki._detect_current_layout(ws), 11)
+        wb.close()
+
+    def test_identical_table_contents_with_varied_external_notes_yield_identical_layout(self):
+        """[Defect P2] Hai workbook có bảng giống hệt nhau nhưng ghi chú ngoài bảng khác nhau phải cho kết quả nhận diện giống hệt."""
+        notes = [
+            None,
+            "Ghi chú người lập",
+            123456,
+            "=SUM(A1:B1)",
+            "Ghi chú rất dài kèm các ký tự đặc biệt !@#$%^&*()",
+        ]
+        results = []
+        for n in notes:
+            wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+            ws = wb["KHSX_ki"]
+            ws["J6"] = "Tổng cộng"
+            ws["K6"] = "Tổng cộng"
+            if n is not None:
+                ws["K35"] = n
+                ws["L40"] = "Ghi chú cột L"
+            results.append(ki._detect_current_layout(ws))
+            wb.close()
+
+        self.assertTrue(all(r == 10 for r in results), f"Tất cả kết quả phải bằng 10, thực tế: {results}")
+
+    def test_large_sku_table_beyond_30_rows_evaluated_completely(self):
+        """[Defect P2] Bảng có số lượng SKU lớn (>30 SKU) được quét toàn vẹn, không bị giới hạn cứng ở dòng 36."""
+        wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+        ws = wb["KHSX_ki"]
+        ws["J6"] = "Tổng cộng"
+        ws["K6"] = "Tổng cộng"
+
+        # Thêm 35 dòng SKU (từ dòng 7 đến dòng 41) và dòng tổng tại dòng 42
+        for i in range(1, 36):
+            r = 6 + i
+            ws.cell(r, 1, value=i)
+            ws.cell(r, 2, value=130100000 + i)
+            ws.cell(r, 3, value=f"SKU {i}")
+            ws.cell(r, 10, value=None)
+            ws.cell(r, 11, value=None)
+        total_r = 42
+        ws.cell(total_r, 1, value="Tổng cộng")
+        ws.cell(total_r, 2, value=None)
+
+        # Đặt công thức =SUM tại dòng SKU 40 cột 11 (vượt quá giới hạn cũ row 36)
+        ws.cell(40, 11, value="=SUM(E40:J40)")
+
+        # Detector mới phải phát hiện =SUM tại dòng 40 và trả về 11
+        self.assertEqual(ki._detect_current_layout(ws), 11)
+
+        # Xóa =SUM tại dòng 40 và đặt =SUM tại dòng 45 (ngoài bảng): detector phải trả về 10
+        ws.cell(40, 11).value = None
+        ws.cell(45, 11).value = "=SUM(E45:J45)"
+        self.assertEqual(ki._detect_current_layout(ws), 10)
+        wb.close()
+
+    def test_corrupted_headers_or_both_sum_formulas_raises_value_error(self):
+        """[Defect P2] Khi tiêu đề bị hỏng/thiếu không có =SUM hoặc cả hai cột đều có =SUM, phải báo lỗi rõ ràng."""
+        # 1. Cả hai cột đều có công thức =SUM mâu thuẫn
+        wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook(year=2026, month=9)))
+        ws = wb["KHSX_ki"]
+        ws["J6"] = "Tổng cộng"
+        ws["K6"] = "Tổng cộng"
+        ws["J7"] = "=SUM(E7:I7)"
+        ws["K7"] = "=SUM(E7:J7)"
+        with self.assertRaises(ValueError) as ctx1:
+            ki._detect_current_layout(ws)
+        err_msg1 = str(ctx1.exception)
+        self.assertIn("KHSX_ki", err_msg1)
+        self.assertIn("J6:K6", err_msg1)
+        self.assertIn("=SUM", err_msg1)
+
+        # 2. Tiêu đề không có 'Tổng cộng' và không có =SUM (tiêu đề bị ghi đè / hỏng)
+        ws["J6"] = "Ghi chú cột J"
+        ws["K6"] = "Ghi chú cột K"
+        ws["J7"] = 1000
+        ws["K7"] = 2000
+        with self.assertRaises(ValueError) as ctx2:
+            ki._detect_current_layout(ws)
+        err_msg2 = str(ctx2.exception)
+        self.assertIn("KHSX_ki", err_msg2)
+        self.assertIn("J6:K6", err_msg2)
+        wb.close()
+
 
 if __name__ == "__main__":
     unittest.main()
-
