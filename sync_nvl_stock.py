@@ -1247,6 +1247,26 @@ def run_nvl_sync(
             target_item = graph.get_item_by_path(drive_id, config.target_path)
             target_rev_final = target_item.get("eTag")
             target_bytes = graph.download_file(drive_id, target_item["id"])
+            target_sha256 = hashlib.sha256(target_bytes).hexdigest()
+            backup_raw_path = out_dir / "official_backup_target_raw.xlsx"
+            try:
+                backup_raw_path.write_bytes(target_bytes)
+                backup_meta = {
+                    "name": target_item.get("name", config.target_name),
+                    "sharepoint_path": config.target_path,
+                    "item_id": target_item.get("id"),
+                    "eTag": target_rev_final,
+                    "sourcedoc": config.target_sourcedoc,
+                    "sha256": target_sha256,
+                    "size_bytes": len(target_bytes),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                (out_dir / "official_target_backup_info.json").write_text(
+                    json.dumps(backup_meta, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                print(f"[ONLINE] Đã lưu bản backup thực tế đích trước khi patch: {backup_raw_path} (SHA-256: {target_sha256})")
+            except OSError:
+                pass
 
             # 3.5. Đối soát và lập kế hoạch patch
             current_phase = "reconcile"

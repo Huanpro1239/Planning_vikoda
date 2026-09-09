@@ -4,6 +4,7 @@ execute dry-run reconciliation, and generate audit_summary.json.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -170,6 +171,23 @@ def run_survey(
             print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
 
             target_bytes = client_graph.download_file(drive_id, target_item["id"])
+            target_sha256 = hashlib.sha256(target_bytes).hexdigest()
+            backup_raw_path = out_dir / "official_backup_target_raw.xlsx"
+            backup_raw_path.write_bytes(target_bytes)
+            backup_meta = {
+                "name": target_item.get("name", "Kế hoạch mua hàng.xlsx"),
+                "sharepoint_path": cfg.target_path,
+                "item_id": target_item.get("id"),
+                "eTag": target_etag,
+                "sourcedoc": cfg.target_sourcedoc,
+                "sha256": target_sha256,
+                "size_bytes": len(target_bytes),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            (out_dir / "official_target_backup_info.json").write_text(
+                json.dumps(backup_meta, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"[SURVEY] Đã lưu bản backup thực tế của target: {backup_raw_path} (SHA-256: {target_sha256})")
             tgt_basename = Path(cfg.target_path).name or "target.xlsx"
             target_local_path = out_dir / f"real_target_{tgt_basename}"
             target_local_path.write_bytes(target_bytes)
@@ -479,6 +497,7 @@ def run_survey(
             "target_item_id": target_item.get("id"),
             "source_etag": source_item.get("eTag"),
             "target_etag": target_item.get("eTag"),
+            "target_sha256": target_sha256 if "target_sha256" in locals() else None,
             "target_sheet": cfg.target_sheet,
             "headers": header_vals[:8],
             "total_source_codes": len(source_stock),
