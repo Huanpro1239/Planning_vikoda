@@ -532,6 +532,53 @@ class SyncNVLStockTests(unittest.TestCase):
             self.assertEqual(rep["status"], "failed")
             self.assertEqual(rep["phase"], "init_cli")
 
+    def test_preserve_missing_in_source_false_raises_error(self):
+        """Khi preserve_missing_in_source=False, gặp mã đích thiếu trong nguồn sẽ dừng và báo lỗi."""
+        import io
+        import openpyxl
+        from sync_nvl_stock import reconcile_nvl_target, NVLConfig
+        cfg = NVLConfig(
+            source_name="src.xlsm",
+            source_path="",
+            source_sheet="Sheet1",
+            source_code_col=2,
+            source_code_col_letter="B",
+            source_value_col=13,
+            source_value_col_letter="M",
+            source_start_row=2,
+            source_sourcedoc="",
+            target_name="tgt.xlsx",
+            target_path="",
+            target_sheet="Ton_NVL",
+            target_code_col=1,
+            target_code_col_letter="A",
+            target_value_col=4,
+            target_value_col_letter="D",
+            target_start_row=2,
+            target_sourcedoc="",
+            preserve_missing_in_source=False,
+        )
+        # Target has code 111 and 222
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Ton_NVL"
+        ws.cell(1, 1, "Mã NVL")
+        ws.cell(1, 4, "Tồn Cuối")
+        ws.cell(2, 1, "111")
+        ws.cell(2, 4, 10)
+        ws.cell(3, 1, "222")
+        ws.cell(3, 4, 20)
+        buf = io.BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Source only has 111, missing 222
+        source_stock = {"111": 15.0}
+        with self.assertRaises(RuntimeError) as ctx:
+            reconcile_nvl_target(buf.getvalue(), source_stock, cfg)
+        self.assertIn("preserve_missing_in_source", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+

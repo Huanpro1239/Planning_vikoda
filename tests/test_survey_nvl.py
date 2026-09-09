@@ -1,0 +1,289 @@
+"""Tests for scripts/survey_nvl_sharepoint.py."""
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import openpyxl
+
+from scripts.survey_nvl_sharepoint import run_survey
+
+
+class SurveyNVLTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp_dir.name)
+
+        # 1. Tạo file nguồn mock
+        self.src_path = self.workdir / "mock_source.xlsm"
+        wb_src = openpyxl.Workbook()
+        ws_src = wb_src.active
+        ws_src.title = "Sheet1"
+        ws_src["A5"] = "BÁO CÁO NHẬP XUẤT TỒN KẾ TOÁN"
+        ws_src["A7"] = "Từ ngày 01-08-2026 đến ngày 31-08-2026"
+
+        # Headers tại dòng 9, 10
+        ws_src.cell(9, 2, "Mã vật tư")
+        ws_src.cell(9, 6, "Đvt")
+        ws_src.cell(9, 13, "Tồn cuối kỳ")
+        ws_src.cell(10, 13, "Số lượng")
+
+        # Dữ liệu từ dòng 11
+        # Row 11: 330100005, KG, 159569.279
+        ws_src.cell(11, 2, "330100005")
+        ws_src.cell(11, 6, "KG")
+        ws_src.cell(11, 13, 159569.279)
+
+        # Row 12: 330100010, KG, 1619
+        ws_src.cell(12, 2, "330100010")
+        ws_src.cell(12, 6, "KG")
+        ws_src.cell(12, 13, 1619.0)
+
+        # Row 13: 330200010, KG, 0
+        ws_src.cell(13, 2, "330200010")
+        ws_src.cell(13, 6, "KG")
+        ws_src.cell(13, 13, 0.0)
+
+        # Row 14: 430100002, CAI, 500
+        ws_src.cell(14, 2, "430100002")
+        ws_src.cell(14, 6, "CAI")
+        ws_src.cell(14, 13, 500.0)
+
+        wb_src.save(self.src_path)
+        wb_src.close()
+
+        # 2. Tạo file đích mock
+        self.tgt_path = self.workdir / "mock_target.xlsx"
+        wb_tgt = openpyxl.Workbook()
+        ws_tgt = wb_tgt.active
+        ws_tgt.title = "Ton_NVL"
+
+        # Headers tại dòng 1
+        ws_tgt.cell(1, 1, "Mã NVL")
+        ws_tgt.cell(1, 2, "Tên NVL")
+        ws_tgt.cell(1, 3, "ĐVT")
+        ws_tgt.cell(1, 4, "Tồn Cuối")
+
+        # Row 2: 330100005, Đường RE, Kg (khác case với KG), None
+        ws_tgt.cell(2, 1, "330100005")
+        ws_tgt.cell(2, 2, "Đường tinh luyện RE")
+        ws_tgt.cell(2, 3, "Kg")
+        ws_tgt.cell(2, 4, None)
+
+        # Row 3: 330100010, Nitơ lỏng, None (thiếu ĐVT ở đích), None
+        ws_tgt.cell(3, 1, "330100010")
+        ws_tgt.cell(3, 2, "Nitơ lỏng")
+        ws_tgt.cell(3, 3, None)
+        ws_tgt.cell(3, 4, None)
+
+        # Row 4: 330200010, Taurine, KG (khớp), None
+        ws_tgt.cell(4, 1, "330200010")
+        ws_tgt.cell(4, 2, "Taurine")
+        ws_tgt.cell(4, 3, "KG")
+        ws_tgt.cell(4, 4, None)
+
+        # Row 5: 430100002, Phôi PET, Cái (khác dấu với CAI), None
+        ws_tgt.cell(5, 1, "430100002")
+        ws_tgt.cell(5, 2, "Phôi PET")
+        ws_tgt.cell(5, 3, "Cái")
+        ws_tgt.cell(5, 4, None)
+
+        # Row 6: 330500109, Premix, Cái, None (Thiếu ở nguồn)
+        ws_tgt.cell(6, 1, "330500109")
+        ws_tgt.cell(6, 2, "Premix PR0136")
+        ws_tgt.cell(6, 3, "Cái")
+        ws_tgt.cell(6, 4, None)
+
+        wb_tgt.save(self.tgt_path)
+        wb_tgt.close()
+
+        # 3. Tạo file config mock
+        self.cfg_path = self.workdir / "test_config.json"
+        cfg_data = {
+            "source": {
+                "name": "XNT_ketoan_Vikoda.xlsm",
+                "sharepoint_path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm",
+                "sourcedoc": "C0372C81-A402-4A11-B9E0-847768CC9CFB",
+                "sheet_name": "Sheet1",
+                "code_column": 2,
+                "code_column_letter": "B",
+                "value_column": 13,
+                "value_column_letter": "M",
+                "start_row": 11,
+            },
+            "target": {
+                "name": "Kế hoạch mua hàng.xlsx",
+                "sharepoint_path": "Tinh san xuat Mua hang 2027/Kế hoạch mua hàng.xlsx",
+                "sourcedoc": "89D1BA7B-006E-4527-B879-ABF120309214",
+                "sheet_name": "Ton_NVL",
+                "code_column": 1,
+                "code_column_letter": "A",
+                "value_column": 4,
+                "value_column_letter": "D",
+                "start_row": 2,
+            },
+            "policies": {
+                "reject_duplicates": True,
+                "forbid_formulas": True,
+                "forbid_merged_cells": True,
+                "forbid_sheet_protection": True,
+                "preserve_unmatched": True,
+            },
+        }
+        self.cfg_path.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+        self.out_dir = self.workdir / "survey_output"
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_survey_offline_snapshots_success(self):
+        """Khảo sát offline bằng snapshot thành công, tạo đầy đủ audit_summary với kỳ và ĐVT."""
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            source_file=str(self.src_path),
+            target_file=str(self.tgt_path),
+            out_dir_path=str(self.out_dir),
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
+        self.assertIn("tháng 8/2026", res["reporting_period_note"])
+
+        # Kiểm tra metrics
+        metrics = res["metrics"]
+        self.assertEqual(metrics["matched_count"], 4)
+        self.assertEqual(metrics["changed_count"], 4)
+        self.assertEqual(metrics["missing_in_source_count"], 1)
+        self.assertEqual(metrics["duplicate_codes_source"], 0)
+        self.assertEqual(metrics["duplicate_codes_target"], 0)
+
+        # Kiểm tra đơn vị tính (unit reconciliation)
+        unit_rec = res["unit_reconciliation"]
+        self.assertEqual(unit_rec["total_matched"], 4)
+        # 330100010 (KG vs ''), 430100002 (CAI vs 'Cái') là mismatch
+        self.assertGreater(unit_rec["unit_mismatches_count"], 0)
+
+        # Kiểm tra danh sách thiếu ở nguồn
+        missing_items = res["missing_in_source_items"]
+        self.assertEqual(len(missing_items), 1)
+        self.assertEqual(missing_items[0]["code"], "330500109")
+        self.assertEqual(missing_items[0]["action"], "PRESERVE")
+
+        # Kiểm tra file sinh ra trên đĩa
+        audit_file = self.out_dir / "audit_summary.json"
+        self.assertTrue(audit_file.exists())
+        audit_disk = json.loads(audit_file.read_text(encoding="utf-8"))
+        self.assertEqual(audit_disk["status"], "success")
+        self.assertTrue((self.out_dir / "nvl_stock_proposal.xlsx").exists())
+        self.assertTrue((self.out_dir / "nvl_stock_report.json").exists())
+
+    def test_survey_mock_graph_success(self):
+        """Khảo sát trực tuyến qua mock GraphClient: xác minh identity, kỳ báo cáo và xuất audit."""
+        mock_graph = MagicMock()
+        mock_graph.get_site_id.return_value = "site-test"
+        mock_graph.get_default_drive_id.return_value = "drive-test"
+
+        mock_target_item = {
+            "id": "item-target-123",
+            "name": "Kế hoạch mua hàng.xlsx",
+            "eTag": '"{89D1BA7B-006E-4527-B879-ABF120309214},18"',
+        }
+        mock_source_item = {
+            "id": "item-source-456",
+            "name": "XNT_ketoan_Vikoda.xlsm",
+            "eTag": '"{C0372C81-A402-4A11-B9E0-847768CC9CFB},5"',
+        }
+
+        def fake_get_item_by_path(drive_id, path):
+            if "XNT" in path:
+                return mock_source_item
+            return mock_target_item
+
+        mock_graph.get_item_by_path.side_effect = fake_get_item_by_path
+
+        def fake_download(drive_id, item_id):
+            if item_id == "item-source-456":
+                return self.src_path.read_bytes()
+            return self.tgt_path.read_bytes()
+
+        mock_graph.download_file.side_effect = fake_download
+
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            out_dir_path=str(self.out_dir),
+            graph=mock_graph,
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["source_item_id"], "item-source-456")
+        self.assertEqual(res["target_item_id"], "item-target-123")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
+        self.assertTrue((self.out_dir / "audit_summary.json").exists())
+
+    def test_survey_error_handling_emits_error_report_and_raises(self):
+        """Khi gặp lỗi (ví dụ file đích không tồn tại), survey ghi error report và ném ngoại lệ."""
+        bad_cfg = self.workdir / "bad_config.json"
+        cfg_data = json.loads(self.cfg_path.read_text(encoding="utf-8"))
+        cfg_data["target"]["sheet_name"] = "NonExistentSheet"
+        bad_cfg.write_text(json.dumps(cfg_data), encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            run_survey(
+                config_path=str(bad_cfg),
+                source_file=str(self.src_path),
+                target_file=str(self.tgt_path),
+                out_dir_path=str(self.out_dir),
+            )
+
+        err_audit = self.out_dir / "audit_summary.json"
+        self.assertTrue(err_audit.exists())
+        data = json.loads(err_audit.read_text(encoding="utf-8"))
+        self.assertEqual(data["status"], "failed")
+        self.assertEqual(data["phase"], "survey_target")
+        self.assertIn("NonExistentSheet", data["error_message"])
+
+    def test_survey_cli_exit_codes(self):
+        """Kiểm tra exit code qua CLI: 0 khi thành công, 1 khi thất bại."""
+        # Ca thành công
+        cmd_ok = [
+            sys.executable,
+            "-X",
+            "utf8",
+            "scripts/survey_nvl_sharepoint.py",
+            "--config",
+            str(self.cfg_path),
+            "--source-file",
+            str(self.src_path),
+            "--target-file",
+            str(self.tgt_path),
+            "--out-dir",
+            str(self.out_dir),
+        ]
+        p_ok = subprocess.run(cmd_ok, capture_output=True, text=True)
+        self.assertEqual(p_ok.returncode, 0)
+
+        # Ca thất bại (file nguồn không tồn tại)
+        cmd_fail = [
+            sys.executable,
+            "-X",
+            "utf8",
+            "scripts/survey_nvl_sharepoint.py",
+            "--config",
+            str(self.cfg_path),
+            "--source-file",
+            "nonexistent_source.xlsm",
+            "--target-file",
+            str(self.tgt_path),
+            "--out-dir",
+            str(self.out_dir),
+        ]
+        p_fail = subprocess.run(cmd_fail, capture_output=True, text=True)
+        self.assertEqual(p_fail.returncode, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

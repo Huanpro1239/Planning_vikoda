@@ -433,6 +433,15 @@ def read_nvl_source_stock(
         ws_val.reset_dimensions()
         ws_raw.reset_dimensions()
 
+        reporting_period = None
+        for r_hdr in range(1, min(config.source_start_row, 15)):
+            c_val = ws_val.cell(r_hdr, 1).value
+            if isinstance(c_val, str):
+                c_str = c_val.strip()
+                if any(k in c_str.lower() for k in ("từ ngày", "đến ngày", "kỳ", "tháng")):
+                    reporting_period = c_str
+                    break
+
         stock: dict[str, float] = {}
         seen_rows: dict[str, int] = {}
         total_scanned = 0
@@ -502,6 +511,7 @@ def read_nvl_source_stock(
             "total_scanned_rows": total_scanned,
             "valid_codes_count": len(stock),
             "seen_rows": seen_rows,
+            "reporting_period": reporting_period,
         }
         return stock, metadata
     finally:
@@ -626,6 +636,11 @@ def reconcile_nvl_target(
                 )
 
             if code not in source_stock:
+                if not config.preserve_missing_in_source:
+                    raise RuntimeError(
+                        f"[Đích: {config.target_name}] Mã vật tư '{code}' không có trong file nguồn và "
+                        f"cấu hình 'preserve_missing_in_source' đang tắt."
+                    )
                 missing_in_source.append({
                     "row": r,
                     "code": code,
@@ -772,6 +787,18 @@ def patch_nvl_destination_workbook(
                 new_val,
             )
 
+            spans_attr = row_element.get("spans")
+            if spans_attr and ":" in spans_attr:
+                try:
+                    s_min, s_max = map(int, spans_attr.split(":"))
+                    val_col_num = column_number(config.target_value_col_letter)
+                    if val_col_num > s_max:
+                        row_element.set("spans", f"{s_min}:{val_col_num}")
+                    elif val_col_num < s_min:
+                        row_element.set("spans", f"{val_col_num}:{s_max}")
+                except Exception:
+                    pass
+
         # Cập nhật <dimension ref="..."> nếu cần mở rộng phạm vi
         dim_nodes = sheet_root.xpath('//*[local-name()="dimension"]')
         if dim_nodes:
@@ -853,6 +880,12 @@ def verify_nvl_patched_workbook(
                     raise RuntimeError(f"Ô không liên quan '{r_coord}' trong sheet '{config.target_sheet}' bị mất sau khi patch!")
                 if patch_cells[r_coord] != orig_c_xml:
                     raise RuntimeError(f"Ô không liên quan '{r_coord}' trong sheet '{config.target_sheet}' bị biến đổi cấu trúc XML!")
+
+        for r_coord in patch_cells:
+            if r_coord not in orig_cells and r_coord not in changed_refs:
+                raise RuntimeError(
+                    f"Ô lạ ngoài ý muốn '{r_coord}' xuất hiện trong sheet '{config.target_sheet}' sau khi patch!"
+                )
     finally:
         z_orig.close()
         z_orig.fp = None
@@ -906,6 +939,7 @@ def generate_nvl_report(
     mode: str,
     source_revision: str | None = None,
     target_revision: str | None = None,
+    reporting_period: str | None = None,
 ) -> dict[str, Any]:
     """Tạo báo cáo JSON đối soát chi tiết đồng bộ tồn NVL."""
     return {
@@ -922,6 +956,7 @@ def generate_nvl_report(
             "code_column": config.source_code_col_letter,
             "value_column": config.source_value_col_letter,
             "revision": source_revision,
+            "reporting_period": reporting_period,
         },
         "target": {
             "name": config.target_name,
@@ -1115,7 +1150,7 @@ def run_nvl_sync(
             target_bytes = tgt_path.read_bytes()
 
             current_phase = "offline_reconcile"
-            source_stock, _ = read_nvl_source_stock(source_bytes, config)
+            source_stock, source_metadata = read_nvl_source_stock(source_bytes, config)
             print(f"[OFFLINE] Đọc được {len(source_stock)} mã vật tư từ nguồn.")
 
             reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
@@ -1134,7 +1169,12 @@ def run_nvl_sync(
             proposal_path.write_bytes(patched_bytes)
             print(f"[OFFLINE] Đã ghi proposal: {proposal_path}")
 
-            report = generate_nvl_report(reconcile_res, config, mode="offline")
+            report = generate_nvl_report(
+                reconcile_res,
+                config,
+                mode="offline",
+                reporting_period=source_metadata.get("reporting_period"),
+            )
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             print(f"[OFFLINE] Đã ghi báo cáo: {report_path}")
             return report
@@ -1210,7 +1250,7 @@ def run_nvl_sync(
 
             # 3.5. Đối soát và lập kế hoạch patch
             current_phase = "reconcile"
-            source_stock, _ = read_nvl_source_stock(source_bytes, config)
+            source_stock, source_metadata = read_nvl_source_stock(source_bytes, config)
             reconcile_res = reconcile_nvl_target(target_bytes, source_stock, config)
 
             # 3.6. Patch và xác minh proposal cục bộ
@@ -1230,6 +1270,7 @@ def run_nvl_sync(
                     mode="dry_run",
                     source_revision=source_rev_final,
                     target_revision=target_rev_final,
+                    reporting_period=source_metadata.get("reporting_period"),
                 )
                 report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 print(f"[ONLINE] Dry-run hoàn tất. Proposal: {proposal_path}, Report: {report_path}")
@@ -1244,6 +1285,7 @@ def run_nvl_sync(
                     mode="publish",
                     source_revision=source_rev_final,
                     target_revision=target_rev_final,
+                    reporting_period=source_metadata.get("reporting_period"),
                 )
                 report["status"] = "unchanged"
                 report["message"] = "Dữ liệu tồn kho khớp hoàn toàn, không có ô nào cần upload."
@@ -1410,6 +1452,7 @@ def run_nvl_sync(
                 mode="publish",
                 source_revision=source_rev_final,
                 target_revision=target_rev_final,
+                reporting_period=source_metadata.get("reporting_period"),
             )
             report["status"] = "published" if not reconcile_res.missing_in_source else "published_with_warnings"
             report["message"] = f"Đồng bộ và publish thành công: {len(reconcile_res.changes)} ô đã cập nhật lên SharePoint."

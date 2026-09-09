@@ -86,12 +86,6 @@ jobs:
           else
             python -X utf8 sync_planning_pipeline.py --approved-by "$APPROVED_BY" $EXTRA_FLAGS
           fi
-
-      - name: Survey and dry-run NVL stock
-        shell: bash
-        run: |
-          PYTHONPATH=. python -X utf8 scripts/survey_nvl_sharepoint.py
-
       - name: Upload planning proposal and audit
         if: always()
         uses: actions/upload-artifact@v4
@@ -102,9 +96,6 @@ jobs:
             planning_schedule_report.json
             planning_input_revision.json
             planning_publish_decision.json
-            nvl_stock_proposal.xlsx
-            nvl_stock_report.json
-            dry_run_artifacts/
           if-no-files-found: warn
           retention-days: 14
 

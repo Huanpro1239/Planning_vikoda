@@ -10,6 +10,7 @@ planning_input_revision.json
 planning_publish_decision.json
 nvl_stock_proposal.xlsx
 nvl_stock_report.json
+audit_summary.json
 dry_run_artifacts/
 offline_out/
 latest_proposal/

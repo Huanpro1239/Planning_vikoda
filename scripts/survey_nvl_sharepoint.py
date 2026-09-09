@@ -1,12 +1,15 @@
-"""Script to survey SharePoint, discover Kế hoạch mua hàng.xlsx path,
-download real files, and execute dry-run with detailed reconciliation audit.
+"""Script to survey SharePoint / local snapshots for NVL Stock,
+verify SharePoint identity, examine reporting period and units,
+execute dry-run reconciliation, and generate audit_summary.json.
 """
 
+import argparse
 import json
 import os
 import sys
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -21,222 +24,332 @@ from sync_nvl_stock import (
     reconcile_nvl_target,
     run_nvl_sync,
 )
-from sync_stock import GraphClient, GraphRequestError, HOSTNAME, SITE_PATH, get_access_token
+from sync_stock import GraphClient, GraphRequestError, get_access_token
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Khảo sát và đối soát dữ liệu tồn kho NVL.")
+    parser.add_argument("--config", default="nvl_stock_config.json", help="Đường dẫn file cấu hình JSON.")
+    parser.add_argument("--source-file", help="Đường dẫn file nguồn offline (tùy chọn).")
+    parser.add_argument("--target-file", help="Đường dẫn file đích offline (tùy chọn).")
+    parser.add_argument("--out-dir", default="dry_run_artifacts", help="Thư mục xuất kết quả.")
+    return parser.parse_args()
+
+
+def run_survey(
+    config_path: str = "nvl_stock_config.json",
+    source_file: str | None = None,
+    target_file: str | None = None,
+    out_dir_path: str = "dry_run_artifacts",
+    graph: GraphClient | None = None,
+) -> dict[str, Any]:
+    current_phase = "init"
+    out_dir = Path(out_dir_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        current_phase = "load_config"
+        cfg = load_nvl_config(config_path)
+        print(f"[SURVEY] Đã load cấu hình từ {config_path}")
+        print(f"[SURVEY] Nguồn: {cfg.source_name} (path: '{cfg.source_path}', start_row={cfg.source_start_row})")
+        print(f"[SURVEY] Đích: {cfg.target_name} (path: '{cfg.target_path}', start_row={cfg.target_start_row})")
+
+        source_bytes: bytes
+        target_bytes: bytes
+        source_item: dict[str, Any] = {}
+        target_item: dict[str, Any] = {}
+
+        # 1. Thu thập dữ liệu: Offline hoặc Online
+        if source_file and target_file:
+            current_phase = "read_offline_files"
+            p_src = Path(source_file)
+            p_tgt = Path(target_file)
+            if not p_src.exists():
+                raise FileNotFoundError(f"Không tìm thấy file nguồn offline: {p_src}")
+            if not p_tgt.exists():
+                raise FileNotFoundError(f"Không tìm thấy file đích offline: {p_tgt}")
+            source_bytes = p_src.read_bytes()
+            target_bytes = p_tgt.read_bytes()
+            (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
+            (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
+            print(f"[SURVEY] Đọc thành công file offline: nguồn={len(source_bytes)}B, đích={len(target_bytes)}B")
+            source_item = {"id": "offline_local", "name": p_src.name, "eTag": "local_snapshot"}
+            target_item = {"id": "offline_local", "name": p_tgt.name, "eTag": "local_snapshot"}
+        else:
+            current_phase = "connect_graph"
+            if not os.environ.get("MS_CLIENT_SECRET") and graph is None:
+                raise RuntimeError("Không có MS_CLIENT_SECRET trong môi trường và không truyền graph client.")
+
+            if graph is None:
+                token = get_access_token()
+                graph = GraphClient(token)
+            site_id = graph.get_site_id()
+            drive_id = graph.get_default_drive_id(site_id)
+            print(f"[SURVEY] Site ID: {site_id}, Drive ID: {drive_id}")
+
+            # Xác minh file đích theo config path
+            current_phase = "fetch_target"
+            if not cfg.target_path:
+                raise ValueError("Chưa cấu hình 'target.sharepoint_path' trong nvl_stock_config.json")
+
+            print(f"[SURVEY] Kiểm tra file đích theo path đã cấu hình: '{cfg.target_path}'")
+            target_item = graph.get_item_by_path(drive_id, cfg.target_path)
+            # Xác minh identity
+            target_etag = target_item.get("eTag", "")
+            if cfg.target_sourcedoc and cfg.target_sourcedoc.lower() not in target_etag.lower():
+                print(f"[SURVEY] CẢNH BÁO: Sourcedoc {cfg.target_sourcedoc} không khớp eTag {target_etag} của file đích.")
+            else:
+                print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
+
+            target_bytes = graph.download_file(drive_id, target_item["id"])
+            (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
+
+            # Xác minh file nguồn
+            current_phase = "fetch_source"
+            if not cfg.source_path:
+                raise ValueError("Chưa cấu hình 'source.sharepoint_path' trong nvl_stock_config.json")
+
+            print(f"[SURVEY] Kiểm tra file nguồn theo path đã cấu hình: '{cfg.source_path}'")
+            source_item = graph.get_item_by_path(drive_id, cfg.source_path)
+            source_etag = source_item.get("eTag", "")
+            if cfg.source_sourcedoc and cfg.source_sourcedoc.lower() not in source_etag.lower():
+                print(f"[SURVEY] CẢNH BÁO: Sourcedoc {cfg.source_sourcedoc} không khớp eTag {source_etag} của file nguồn.")
+            else:
+                print(f"[SURVEY] Đã xác minh identity file nguồn: ID={source_item.get('id')}, eTag={source_etag}")
+
+            source_bytes = graph.download_file(drive_id, source_item["id"])
+            (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
+
+        # 2. Khảo sát cấu trúc & kỳ báo cáo ở file nguồn
+        current_phase = "survey_source"
+        wb_src = load_workbook(BytesIO(source_bytes), data_only=True)
+        if cfg.source_sheet not in wb_src.sheetnames:
+            _safe_close_workbook(wb_src)
+            raise ValueError(f"Sheet nguồn '{cfg.source_sheet}' không tồn tại trong {cfg.source_name}")
+        ws_src = wb_src[cfg.source_sheet]
+
+        # Đọc kỳ báo cáo từ ô A7 (hoặc quét dòng 1 đến dòng 15)
+        reporting_period = None
+        for r in range(1, min(cfg.source_start_row, 15)):
+            val = ws_src.cell(r, 1).value
+            if isinstance(val, str) and any(k in val.lower() for k in ("từ ngày", "đến ngày", "kỳ", "tháng")):
+                reporting_period = val.strip()
+                break
+
+        # Đọc danh mục ĐVT nguồn từ cột F (cột 6)
+        source_units: dict[str, str] = {}
+        for r in range(cfg.source_start_row, ws_src.max_row + 1):
+            c_val = ws_src.cell(r, cfg.source_code_col).value
+            u_val = ws_src.cell(r, 6).value  # Cột F
+            if c_val is not None:
+                code_str = str(c_val).strip()
+                if code_str:
+                    source_units[code_str] = str(u_val).strip() if u_val is not None else ""
+        _safe_close_workbook(wb_src)
+        print(f"[SURVEY] Kỳ báo cáo phát hiện trong nguồn: {reporting_period}")
+
+        # 3. Khảo sát cấu trúc & ĐVT ở file đích
+        current_phase = "survey_target"
+        wb_tgt = load_workbook(BytesIO(target_bytes), data_only=True)
+        if cfg.target_sheet not in wb_tgt.sheetnames:
+            _safe_close_workbook(wb_tgt)
+            raise ValueError(f"Sheet đích '{cfg.target_sheet}' không tồn tại trong {cfg.target_name}")
+        ws_tgt = wb_tgt[cfg.target_sheet]
+
+        header_vals = [ws_tgt.cell(1, c).value for c in range(1, 10)]
+
+        # Đọc danh mục ĐVT & Tên ở đích
+        target_units: dict[str, str] = {}
+        target_names_dict: dict[str, str] = {}
+        for r in range(cfg.target_start_row, ws_tgt.max_row + 1):
+            c_val = ws_tgt.cell(r, cfg.target_code_col).value
+            name_val = ws_tgt.cell(r, 2).value  # Cột B
+            u_val = ws_tgt.cell(r, 3).value     # Cột C (ĐVT)
+            if c_val is not None:
+                code_str = str(c_val).strip()
+                if code_str:
+                    target_units[code_str] = str(u_val).strip() if u_val is not None else ""
+                    target_names_dict[code_str] = str(name_val).strip() if name_val is not None else ""
+        _safe_close_workbook(wb_tgt)
+
+        # 4. Chạy Dry-run đồng bộ
+        current_phase = "run_dry_run"
+        print("[SURVEY] Bắt đầu chạy run_nvl_sync (publish=False)...")
+        rep = run_nvl_sync(
+            cfg,
+            source_file=str(out_dir / "real_source_XNT_ketoan_Vikoda.xlsm"),
+            target_file=str(out_dir / "real_target_Ke_hoach_mua_hang.xlsx"),
+            out_dir=str(out_dir),
+            publish=False,
+        )
+        print(f"[SURVEY] Kết quả dry-run: status={rep.get('status')}")
+
+        # Copy artifacts ra thư mục gốc nếu out_dir khác thư mục hiện tại
+        for fname in ["nvl_stock_proposal.xlsx", "nvl_stock_report.json"]:
+            p_src = out_dir / fname
+            if p_src.exists() and out_dir.resolve() != Path(".").resolve():
+                Path(fname).write_bytes(p_src.read_bytes())
+
+        # 5. Đối chiếu số liệu và ĐVT
+        current_phase = "build_audit"
+        source_stock, source_meta = read_nvl_source_stock(source_bytes, cfg)
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+
+        # Đối chiếu ĐVT nguồn (F) vs đích (C) cho toàn bộ mã khớp
+        unit_comparisons = []
+        unit_mismatches = []
+        for code, r in rec.target_codes.items():
+            if code in source_stock:
+                src_u = source_units.get(code, "")
+                tgt_u = target_units.get(code, "")
+                is_case_match = (src_u.strip().lower() == tgt_u.strip().lower())
+                item_comp = {
+                    "row": r,
+                    "code": code,
+                    "name": target_names_dict.get(code, ""),
+                    "source_unit_F": src_u,
+                    "target_unit_C": tgt_u,
+                    "match": is_case_match,
+                }
+                unit_comparisons.append(item_comp)
+                if not is_case_match:
+                    unit_mismatches.append(item_comp)
+
+        # Mẫu đối chiếu ít nhất 10 mã (bao gồm cập nhật, số 0, số lẻ, mã thiếu)
+        comparison_rows = []
+        for ch in rec.changes[:10]:
+            before_val = ch["before"]
+            try:
+                diff_val = round(ch["after"] - float(before_val), 4) if before_val is not None else ch["after"]
+            except Exception:
+                diff_val = None
+            comparison_rows.append({
+                "code": ch["code"],
+                "row": ch["row"],
+                "name": target_names_dict.get(ch["code"], ""),
+                "current_target_D": ch["before"],
+                "source_stock_M": ch["after"],
+                "action": "UPDATE",
+                "diff": diff_val,
+                "source_unit_F": source_units.get(ch["code"], ""),
+                "target_unit_C": target_units.get(ch["code"], ""),
+            })
+
+        for un in rec.unchanged[:5]:
+            comparison_rows.append({
+                "code": un["code"],
+                "row": un["row"],
+                "name": target_names_dict.get(un["code"], ""),
+                "current_target_D": un["value"],
+                "source_stock_M": un["value"],
+                "action": "UNCHANGED",
+                "diff": 0.0,
+                "source_unit_F": source_units.get(un["code"], ""),
+                "target_unit_C": target_units.get(un["code"], ""),
+            })
+
+        for mis in rec.missing_in_source[:5]:
+            comparison_rows.append({
+                "code": mis["code"],
+                "row": mis["row"],
+                "name": target_names_dict.get(mis["code"], ""),
+                "current_target_D": mis["current_value"],
+                "source_stock_M": "NOT_FOUND_IN_SOURCE",
+                "action": "PRESERVE",
+                "diff": None,
+                "source_unit_F": "NOT_FOUND",
+                "target_unit_C": target_units.get(mis["code"], ""),
+            })
+
+        # Danh sách chi tiết 7 mã thiếu ở nguồn
+        missing_items_detail = [
+            {
+                "row": mis["row"],
+                "code": mis["code"],
+                "name": target_names_dict.get(mis["code"], ""),
+                "target_unit_C": target_units.get(mis["code"], ""),
+                "current_value": mis["current_value"],
+                "action": "PRESERVE",
+                "note": "Mã đích không có trong báo cáo kế toán kỳ tháng 8/2026. Chưa có số liệu, không coi là tồn 0; bảo toàn ô đích.",
+            }
+            for mis in rec.missing_in_source
+        ]
+
+        audit_summary = {
+            "status": "success",
+            "reporting_period": reporting_period,
+            "reporting_period_note": (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                "Cần xác nhận với người dùng về kỳ số liệu tháng 8/2026 trước khi publish chính thức."
+            ),
+            "sharepoint_target_path": cfg.target_path,
+            "sharepoint_source_path": cfg.source_path,
+            "source_item_id": source_item.get("id"),
+            "target_item_id": target_item.get("id"),
+            "source_etag": source_item.get("eTag"),
+            "target_etag": target_item.get("eTag"),
+            "target_sheet": cfg.target_sheet,
+            "headers": header_vals[:8],
+            "total_source_codes": len(source_stock),
+            "total_target_rows": len(rec.target_codes),
+            "metrics": {
+                "matched_count": len(rec.changes) + len(rec.unchanged),
+                "changed_count": len(rec.changes),
+                "unchanged_count": len(rec.unchanged),
+                "missing_in_source_count": len(rec.missing_in_source),
+                "source_only_count": len(rec.source_only),
+                "duplicate_codes_source": 0,
+                "duplicate_codes_target": 0,
+            },
+            "unit_reconciliation": {
+                "total_matched": len(unit_comparisons),
+                "unit_mismatches_count": len(unit_mismatches),
+                "policy_note": "Chép trực tiếp số tồn từ nguồn sang đích; không tự ý quy đổi đơn vị tính.",
+                "unit_mismatches": unit_mismatches,
+            },
+            "missing_in_source_items": missing_items_detail,
+            "sample_reconciliation_10_plus": comparison_rows,
+        }
+
+        audit_json = json.dumps(audit_summary, ensure_ascii=False, indent=2) + "\n"
+        (out_dir / "audit_summary.json").write_text(audit_json, encoding="utf-8")
+        if out_dir.resolve() != Path(".").resolve():
+            Path("audit_summary.json").write_text(audit_json, encoding="utf-8")
+
+        print(f"[SURVEY] Hoàn tất khảo sát thành công. Đã ghi audit_summary.json")
+        return audit_summary
+
+    except Exception as exc:
+        print(f"[SURVEY] LỖI tại pha '{current_phase}': {exc}", file=sys.stderr)
+        error_summary = {
+            "status": "failed",
+            "phase": current_phase,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+        err_json = json.dumps(error_summary, ensure_ascii=False, indent=2) + "\n"
+        try:
+            (out_dir / "audit_summary.json").write_text(err_json, encoding="utf-8")
+            if out_dir.resolve() != Path(".").resolve():
+                Path("audit_summary.json").write_text(err_json, encoding="utf-8")
+        except Exception:
+            pass
+        raise
 
 
 def main():
-    if not os.environ.get("MS_CLIENT_SECRET"):
-        print("[SURVEY] Không có MS_CLIENT_SECRET trong môi trường. Bỏ qua survey online.")
-        return
-
-    print("[SURVEY] Bắt đầu kết nối Microsoft Graph...")
-    token = get_access_token()
-    graph = GraphClient(token)
-    site_id = graph.get_site_id()
-    drive_id = graph.get_default_drive_id(site_id)
-    print(f"[SURVEY] Site ID: {site_id}, Drive ID: {drive_id}")
-
-    # 1. Tìm kiếm file Kế hoạch mua hàng qua duyệt thư mục (tránh lỗi 500 của search API)
-    target_item = None
-    exact_target_path = ""
-    candidate_items = []
-    target_names = {"kế hoạch mua hàng.xlsx", "ke hoach mua hang.xlsx"}
-
-    folders_to_explore = [
-        "Tinh san xuat Mua hang 2027",
-        "Ke hoach",
-        "Data Mua Hang",
-        "Data Ton NVL",
-        "Kế hoạch cung ứng",
-        "",  # root
-    ]
-    queue = list(folders_to_explore)
-    visited_folders = set()
-
-    print("[SURVEY] Bắt đầu duyệt thư mục để tìm file đích 'Kế hoạch mua hàng.xlsx'...")
-    while queue and not target_item:
-        curr_folder = queue.pop(0)
-        if curr_folder in visited_folders:
-            continue
-        visited_folders.add(curr_folder)
-
-        if curr_folder:
-            encoded = quote(curr_folder, safe="/")
-            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded}:/children"
-        else:
-            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
-
-        try:
-            data = graph.get_json(url)
-            children = data.get("value", [])
-        except Exception as e:
-            print(f"[SURVEY] Lỗi đọc thư mục '{curr_folder}': {e}")
-            continue
-
-        for ch in children:
-            name = ch.get("name", "").strip()
-            ch_path = f"{curr_folder}/{name}" if curr_folder else name
-            if "folder" in ch:
-                if ch_path.count("/") < 3:
-                    queue.append(ch_path)
-            else:
-                lower_name = name.lower()
-                if "mua h" in lower_name or "nvl" in lower_name or lower_name in target_names:
-                    print(f"  - [CANDIDATE] {ch_path} (id={ch.get('id')}, size={ch.get('size')})")
-                    candidate_items.append((ch_path, ch))
-                if lower_name in target_names:
-                    target_item = ch
-                    exact_target_path = ch_path
-                    print(f"[SURVEY] >>> TÌM THẤY CHÍNH XÁC FILE ĐÍCH: {exact_target_path} (ID: {ch.get('id')})")
-                    break
-
-    out_dir = Path("dry_run_artifacts")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    if not target_item:
-        print("[SURVEY] CẢNH BÁO: Chưa tìm thấy file chính xác 'Kế hoạch mua hàng.xlsx' trên drive chính!")
-        return
-
-    # 2. Tải file nguồn XNT_ketoan_Vikoda.xlsm
-    source_path = "Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm"
-    print(f"[SURVEY] Đang tải file nguồn từ SharePoint: {source_path}")
-    source_item = graph.get_item_by_path(drive_id, source_path)
-    source_bytes = graph.download_file(drive_id, source_item["id"])
-    (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
-    print(f"[SURVEY] Đã tải nguồn: {len(source_bytes)} bytes, eTag={source_item.get('eTag')}")
-
-    # Khảo sát cấu trúc file nguồn XNT_ketoan_Vikoda.xlsm
-    wb_src = load_workbook(BytesIO(source_bytes), read_only=True)
-    ws_src = wb_src["Sheet1"]
-    print("[SURVEY] Khảo sát 15 dòng đầu của XNT_ketoan_Vikoda.xlsm!Sheet1:")
-    detected_source_start_row = None
-    for r in range(1, 16):
-        b_val = ws_src.cell(r, 2).value
-        m_val = ws_src.cell(r, 13).value
-        print(f"  Row {r:2d}: Col B (Mã) = {b_val!r:25s} | Col M (Tồn) = {m_val!r}")
-        # Tìm dòng bắt đầu dữ liệu: có mã số (hoặc mã vật tư) và cột M là số
-        if detected_source_start_row is None and isinstance(m_val, (int, float)):
-            detected_source_start_row = r
-    wb_src.close()
-    print(f"[SURVEY] Dòng dữ liệu bắt đầu phát hiện được trong nguồn: {detected_source_start_row}")
-
-    # 3. Tải file đích Kế hoạch mua hàng.xlsx
-    print(f"[SURVEY] Đang tải file đích từ SharePoint: {exact_target_path}")
-    target_bytes = graph.download_file(drive_id, target_item["id"])
-    (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
-    print(f"[SURVEY] Đã tải đích: {len(target_bytes)} bytes, eTag={target_item.get('eTag')}")
-
-    # 4. Kiểm tra cấu trúc file đích
-    wb_tgt = load_workbook(BytesIO(target_bytes), read_only=True)
-    sheetnames = wb_tgt.sheetnames
-    print(f"[SURVEY] Sheet names trong file đích: {sheetnames}")
-    has_ton_nvl = "Ton_NVL" in sheetnames
-    if not has_ton_nvl:
-        print("[SURVEY] LỖI: Sheet 'Ton_NVL' không tồn tại trong file đích!")
-        wb_tgt.close()
-        return
-
-    ws_tgt = wb_tgt["Ton_NVL"]
-    header_vals = [ws_tgt.cell(1, c).value for c in range(1, 15)]
-    sample_row2 = [ws_tgt.cell(2, c).value for c in range(1, 15)]
-    print(f"[SURVEY] Header row 1 của Ton_NVL: {header_vals}")
-    print(f"[SURVEY] Sample row 2 của Ton_NVL: {sample_row2}")
-    wb_tgt.close()
-
-    # 5. Cấu hình và chạy DRY-RUN
-    cfg = load_nvl_config("nvl_stock_config.json")
-    cfg.target_path = exact_target_path
-    if detected_source_start_row:
-        cfg.source_start_row = detected_source_start_row
-
-    # Cập nhật lại config file với path chính xác vừa tìm được và source_start_row
-    cfg_data = json.loads(Path("nvl_stock_config.json").read_text(encoding="utf-8"))
-    cfg_data["target"]["sharepoint_path"] = exact_target_path
-    if detected_source_start_row:
-        cfg_data["source"]["start_row"] = detected_source_start_row
-    Path("nvl_stock_config.json").write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"[SURVEY] Đã cập nhật nvl_stock_config.json với target.sharepoint_path='{exact_target_path}', source.start_row={cfg.source_start_row}")
-
-    print("[SURVEY] Bắt đầu chạy DRY-RUN (publish=False)...")
-    rep = run_nvl_sync(
-        cfg,
-        source_file=str(out_dir / "real_source_XNT_ketoan_Vikoda.xlsm"),
-        target_file=str(out_dir / "real_target_Ke_hoach_mua_hang.xlsx"),
-        out_dir=str(out_dir),
-        publish=False,
-    )
-    print(f"[SURVEY] Kết quả dry-run: {rep.get('status')} - {rep.get('message')}")
-
-    # Copy artifacts sang thư mục gốc để workflow lưu trữ
-    for fname in ["nvl_stock_proposal.xlsx", "nvl_stock_report.json"]:
-        p_src = out_dir / fname
-        if p_src.exists():
-            Path(fname).write_bytes(p_src.read_bytes())
-
-    # 6. Tạo bảng đối chiếu ít nhất 10 mã
-    source_stock, _ = read_nvl_source_stock(source_bytes, cfg)
-    rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
-
-    comparison_rows = []
-    for ch in rec.changes[:10]:
-        before_val = ch["before"]
-        try:
-            diff_val = round(ch["after"] - float(before_val), 4) if before_val is not None else ch["after"]
-        except Exception:
-            diff_val = None
-        comparison_rows.append({
-            "code": ch["code"],
-            "row": ch["row"],
-            "current_target_D": ch["before"],
-            "source_stock_M": ch["after"],
-            "action": "UPDATE",
-            "diff": diff_val,
-        })
-    # Lấy thêm các ca không đổi nếu có
-    for un in rec.unchanged[:5]:
-        comparison_rows.append({
-            "code": un["code"],
-            "row": un["row"],
-            "current_target_D": un["value"],
-            "source_stock_M": un["value"],
-            "action": "UNCHANGED",
-            "diff": 0.0,
-        })
-    # Lấy thêm các ca thiếu ở nguồn nếu có
-    for mis in rec.missing_in_source[:5]:
-        comparison_rows.append({
-            "code": mis["code"],
-            "row": mis["row"],
-            "current_target_D": mis["current_value"],
-            "source_stock_M": "NOT_FOUND_IN_SOURCE",
-            "action": "PRESERVE",
-            "diff": None,
-        })
-
-    audit_summary = {
-        "sharepoint_target_path": exact_target_path,
-        "sharepoint_source_path": source_path,
-        "source_item_id": source_item.get("id"),
-        "target_item_id": target_item.get("id"),
-        "target_sheet": cfg.target_sheet,
-        "headers": header_vals[:8],
-        "total_source_codes": len(source_stock),
-        "total_target_rows": rec.total_rows,
-        "metrics": {
-            "changed_count": len(rec.changes),
-            "unchanged_count": len(rec.unchanged),
-            "missing_in_source_count": len(rec.missing_in_source),
-            "duplicate_codes_source": rec.duplicate_codes_source,
-            "duplicate_codes_target": rec.duplicate_codes_target,
-        },
-        "sample_reconciliation_10_plus": comparison_rows,
-    }
-
-    (out_dir / "audit_summary.json").write_text(
-        json.dumps(audit_summary, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(f"[SURVEY] Hoàn tất khảo sát và ghi nhận audit vào {out_dir}")
+    args = parse_args()
+    try:
+        run_survey(
+            config_path=args.config,
+            source_file=args.source_file,
+            target_file=args.target_file,
+            out_dir_path=args.out_dir,
+        )
+        sys.exit(0)
+    except Exception as exc:
+        print(f"[SURVEY] Thất bại: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

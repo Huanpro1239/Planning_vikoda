@@ -54,7 +54,7 @@ jobs:
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
             python -X utf8 sync_nvl_stock.py --config nvl_stock_config.json --publish
           else
-            python -X utf8 sync_nvl_stock.py --config nvl_stock_config.json
+            python -X utf8 scripts/survey_nvl_sharepoint.py
           fi
 
       - name: Upload NVL proposal and report audit
@@ -65,5 +65,6 @@ jobs:
           path: |
             nvl_stock_proposal.xlsx
             nvl_stock_report.json
+            audit_summary.json
           if-no-files-found: warn
           retention-days: 14
