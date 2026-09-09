@@ -194,6 +194,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--workflow", default=WORKFLOW, help="Tên file workflow.")
     parser.add_argument("--repo", default=REPO, help="Định dạng owner/repo trên GitHub.")
     parser.add_argument("--no-dispatch", action="store_true", help="Không dispatch mới, chỉ tìm run có sẵn của SHA.")
+    parser.add_argument("--publish", action="store_true", help="Publish lên SharePoint.")
+    parser.add_argument("--config-file", default="nvl_stock_config.json", help="Tên file cấu hình JSON.")
     parser.add_argument("--out-dir", default="dry_run_artifacts", help="Thư mục lưu artifacts.")
     return parser.parse_args(argv)
 
@@ -217,7 +219,11 @@ def main(argv: list[str] | None = None) -> int:
         # Nếu chưa có run-id cụ thể, kiểm tra xem có dispatch mới không
         if not args.no_dispatch:
             try:
-                dispatch_workflow(token, args.repo, args.workflow, args.branch, {"publish": False})
+                inputs_payload = {
+                    "publish": bool(args.publish),
+                    "config_file": args.config_file,
+                }
+                dispatch_workflow(token, args.repo, args.workflow, args.branch, inputs_payload)
             except Exception as exc:
                 print(f"[TRIGGER] LỖI DISPATCH: {exc}", file=sys.stderr)
                 return 1

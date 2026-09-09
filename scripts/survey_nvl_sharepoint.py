@@ -50,6 +50,41 @@ def normalize_unit_for_report(u: str) -> str:
     return EQUIVALENT_UNIT_ALIASES.get(s, s)
 
 
+def format_nvl_quantity(val: Any) -> str:
+    """Định dạng số lượng tồn kho hiển thị trong audit (ví dụ 473992 -> '473,992', 934.388 -> '934.388')."""
+    if val is None:
+        return ""
+    try:
+        fval = float(val)
+        if fval.is_integer():
+            return f"{int(fval):,}"
+        return f"{fval:,.4f}".rstrip("0").rstrip(".")
+    except (ValueError, TypeError):
+        return str(val)
+
+
+# Xác nhận chính thức của người dùng được gắn cụ thể với kỳ báo cáo, mã và đơn vị:
+# 1. Dùng số tồn theo báo cáo nguồn cho kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026'.
+# 2. Mã 430200173: chép trực tiếp theo ĐVT 'CAI' (Cái), không quy đổi sang Kg.
+# 3. 7 mã thiếu ở nguồn: xác nhận theo file cũ, bảo toàn (PRESERVE), không gán 0.
+# 4. 17 dòng thiếu ĐVT đích ở cột C: chừa trống, không tự ý điền.
+APPROVED_USER_SCOPE: dict[str, Any] = {
+    "reporting_period": "Từ ngày 01-08-2026 đến ngày 31-08-2026",
+    "confirmed_units": {
+        "430200173": "CAI",
+    },
+    "preserve_missing": True,
+    "leave_empty_target_units": True,
+}
+
+
+def is_approved_reporting_period(period: str | None) -> bool:
+    """Kiểm tra kỳ báo cáo nguồn hiện tại có khớp với kỳ người dùng đã phê duyệt không."""
+    if not period:
+        return False
+    return period.strip() == APPROVED_USER_SCOPE["reporting_period"].strip()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Khảo sát và đối soát dữ liệu tồn kho NVL.")
     parser.add_argument("--config", default="nvl_stock_config.json", help="Đường dẫn file cấu hình JSON.")
@@ -93,8 +128,10 @@ def run_survey(
                 raise FileNotFoundError(f"Không tìm thấy file đích offline: {p_tgt}")
             source_bytes = p_src.read_bytes()
             target_bytes = p_tgt.read_bytes()
-            (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
-            (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
+            source_local_path = out_dir / f"real_source_{p_src.name}"
+            target_local_path = out_dir / f"real_target_{p_tgt.name}"
+            source_local_path.write_bytes(source_bytes)
+            target_local_path.write_bytes(target_bytes)
             print(f"[SURVEY] Đọc thành công file offline: nguồn={len(source_bytes)}B, đích={len(target_bytes)}B")
             source_item = {"id": "offline_local", "name": p_src.name, "eTag": "local_snapshot"}
             target_item = {"id": "offline_local", "name": p_tgt.name, "eTag": "local_snapshot"}
@@ -126,7 +163,9 @@ def run_survey(
             print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
 
             target_bytes = graph.download_file(drive_id, target_item["id"])
-            (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
+            tgt_basename = Path(cfg.target_path).name or "target.xlsx"
+            target_local_path = out_dir / f"real_target_{tgt_basename}"
+            target_local_path.write_bytes(target_bytes)
 
             # Xác minh file nguồn
             current_phase = "fetch_source"
@@ -143,7 +182,9 @@ def run_survey(
             print(f"[SURVEY] Đã xác minh identity file nguồn: ID={source_item.get('id')}, eTag={source_etag}")
 
             source_bytes = graph.download_file(drive_id, source_item["id"])
-            (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
+            src_basename = Path(cfg.source_path).name or "source.xlsm"
+            source_local_path = out_dir / f"real_source_{src_basename}"
+            source_local_path.write_bytes(source_bytes)
 
         # 2. Khảo sát cấu trúc & kỳ báo cáo ở file nguồn
         current_phase = "survey_source"
@@ -202,8 +243,8 @@ def run_survey(
         print("[SURVEY] Bắt đầu chạy run_nvl_sync (publish=False)...")
         rep = run_nvl_sync(
             cfg,
-            source_file=str(out_dir / "real_source_XNT_ketoan_Vikoda.xlsm"),
-            target_file=str(out_dir / "real_target_Ke_hoach_mua_hang.xlsx"),
+            source_file=str(source_local_path),
+            target_file=str(target_local_path),
             out_dir=str(out_dir),
             publish=False,
         )
@@ -228,6 +269,7 @@ def run_survey(
             target_before_vals[un["code"]] = un["value"]
 
         # Đối chiếu ĐVT nguồn (F) vs đích (C) cho toàn bộ mã khớp
+        is_approved_period = is_approved_reporting_period(reporting_period)
         exact_matches: list[dict[str, Any]] = []
         alias_matches: list[dict[str, Any]] = []
         missing_target_units: list[dict[str, Any]] = []
@@ -239,6 +281,7 @@ def run_survey(
                 src_u = source_units.get(code, "")
                 tgt_u = target_units.get(code, "")
                 qty = source_stock[code]
+                qty_str = format_nvl_quantity(qty)
                 src_clean = src_u.strip().lower()
                 tgt_clean = tgt_u.strip().lower()
 
@@ -255,10 +298,16 @@ def run_survey(
                 if not tgt_clean:
                     item_comp["classification"] = "MISSING_TARGET_UNIT"
                     item_comp["match"] = False
-                    item_comp["note"] = (
-                        f"Đơn vị đích trống (nguồn: '{src_u}'). Người dùng đã CHỐT: Dòng trống không có thì chừa "
-                        "(bảo toàn ô C đích trống, không tự ý điền)."
-                    )
+                    if is_approved_period:
+                        item_comp["note"] = (
+                            f"Đơn vị đích trống (nguồn: '{src_u}'). Người dùng đã CHỐT cho kỳ '{reporting_period}': Dòng trống không có thì chừa "
+                            "(bảo toàn ô C đích trống, không tự ý điền)."
+                        )
+                    else:
+                        item_comp["note"] = (
+                            f"Đơn vị đích trống (nguồn: '{src_u}'). Chưa có xác nhận cho kỳ '{reporting_period}' "
+                            "(áp dụng chính sách mặc định: bảo toàn ô C đích trống, không tự ý điền)."
+                        )
                     missing_target_units.append(item_comp)
                 elif src_clean == tgt_clean:
                     item_comp["classification"] = "EXACT_MATCH"
@@ -277,12 +326,33 @@ def run_survey(
                     item_comp["classification"] = "DIVERGENT"
                     item_comp["match"] = False
                     if code == "430200173":
-                        note = (
-                            f"ĐVT nguồn '{src_u}' ({qty} nhãn thân PET 1.5L) vs đích ghi '{tgt_u}'. "
-                            "Người dùng đã CHỐT: Ghi nhận theo ĐVT Cái, chép trực tiếp 473,992 vào cột D, không quy đổi sang Kg."
+                        is_code_approved = (
+                            is_approved_period
+                            and src_u.strip().upper() == APPROVED_USER_SCOPE["confirmed_units"].get("430200173")
                         )
+                        if is_code_approved:
+                            note = (
+                                f"ĐVT nguồn '{src_u}' ({qty_str} nhãn thân PET 1.5L) vs đích ghi '{tgt_u}'. "
+                                f"Người dùng đã CHỐT cho kỳ '{reporting_period}': Ghi nhận theo ĐVT Cái, "
+                                f"chép trực tiếp {qty_str} vào cột D, không quy đổi sang Kg."
+                            )
+                        else:
+                            note = (
+                                f"ĐVT nguồn '{src_u}' ({qty_str} nhãn thân PET 1.5L) vs đích ghi '{tgt_u}'. "
+                                f"Xác nhận trước đó gắn với kỳ '{APPROVED_USER_SCOPE['reporting_period']}' (ĐVT 'CAI') "
+                                f"và không tự áp dụng cho kỳ hiện tại '{reporting_period}'. Cần người dùng xác nhận cho kỳ mới."
+                            )
                     else:
-                        note = f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}'. Chép trực tiếp số tồn theo chính sách đã chốt."
+                        if is_approved_period:
+                            note = (
+                                f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}'. "
+                                f"Người dùng đã CHỐT cho kỳ '{reporting_period}': dùng theo báo cáo nguồn (chép trực tiếp số tồn {qty_str})."
+                            )
+                        else:
+                            note = (
+                                f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}' (số tồn {qty_str}). "
+                                f"Kỳ '{reporting_period}' chưa có xác nhận người dùng; áp dụng chính sách mặc định: chép trực tiếp số tồn."
+                            )
                     item_comp["note"] = note
                     divergent_units.append(item_comp)
 
@@ -334,29 +404,52 @@ def run_survey(
                 "target_unit_C": target_units.get(mis["code"], ""),
             })
 
-        # Danh sách chi tiết 7 mã thiếu ở nguồn
-        missing_items_detail = [
-            {
+        # Danh sách chi tiết các mã thiếu ở nguồn
+        missing_items_detail = []
+        for mis in rec.missing_in_source:
+            if is_approved_period:
+                note_mis = (
+                    f"Mã đích không có trong báo cáo kế toán kỳ '{reporting_period}'. "
+                    "Người dùng đã CHỐT cho kỳ này: Xác nhận theo file cũ, bảo toàn ô đích (PRESERVE), không gán 0."
+                )
+            else:
+                note_mis = (
+                    f"Mã đích không có trong báo cáo kế toán kỳ '{reporting_period}'. "
+                    f"Xác nhận cũ cho kỳ '{APPROVED_USER_SCOPE['reporting_period']}' không tự áp dụng; "
+                    "áp dụng chính sách mặc định: bảo toàn ô đích (PRESERVE), không gán 0."
+                )
+            missing_items_detail.append({
                 "row": mis["row"],
                 "code": mis["code"],
                 "name": target_names_dict.get(mis["code"], ""),
                 "target_unit_C": target_units.get(mis["code"], ""),
                 "current_value": mis["current_value"],
                 "action": "PRESERVE",
-                "note": "Mã đích không có trong báo cáo kế toán kỳ tháng 8/2026. Người dùng đã CHỐT: Xác nhận theo file cũ, bảo toàn ô đích (PRESERVE), không gán 0.",
-            }
-            for mis in rec.missing_in_source
-        ]
+                "note": note_mis,
+            })
+
+        stock_430200173 = source_stock.get("430200173")
+        qty_430200173_str = format_nvl_quantity(stock_430200173) if stock_430200173 is not None else "N/A"
+
+        if is_approved_period:
+            reporting_period_note = (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                f"Đã được người dùng xác nhận và CHỐT chính thức cho kỳ này: sử dụng số tồn theo báo cáo nguồn, "
+                f"ĐVT Cái (chép trực tiếp {qty_430200173_str} Cái cho mã 430200173), bảo toàn {len(rec.missing_in_source)} mã thiếu theo file cũ, "
+                f"và chừa trống cột C cho {len(missing_target_units)} dòng thiếu ĐVT đích."
+            )
+        else:
+            reporting_period_note = (
+                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
+                f"CẢNH BÁO: Xác nhận của người dùng trước đây gắn với kỳ '{APPROVED_USER_SCOPE['reporting_period']}' "
+                f"và không tự động áp dụng cho kỳ hiện tại '{reporting_period}'. "
+                f"Cần người dùng rà soát và xác nhận lại các mã lệch ĐVT và mã thiếu cho kỳ mới."
+            )
 
         audit_summary = {
             "status": "success",
             "reporting_period": reporting_period,
-            "reporting_period_note": (
-                f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
-                "Đã được người dùng xác nhận và CHỐT chính thức: sử dụng số tồn chốt kỳ tháng 8/2026, "
-                "ĐVT Cái (chép trực tiếp 473,992 Cái cho mã 430200173), bảo toàn 7 mã thiếu theo file cũ, "
-                "và chừa trống cột C cho 17 dòng thiếu ĐVT đích."
-            ),
+            "reporting_period_note": reporting_period_note,
             "sharepoint_target_path": cfg.target_path,
             "sharepoint_source_path": cfg.source_path,
             "source_item_id": source_item.get("id"),

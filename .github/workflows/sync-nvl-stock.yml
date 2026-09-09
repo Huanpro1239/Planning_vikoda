@@ -8,6 +8,11 @@ on:
         required: true
         type: boolean
         default: false
+      config_file:
+        description: "File cấu hình NVL sử dụng (mặc định nvl_stock_config.json, có thể chọn nvl_stock_staging_config.json)"
+        required: false
+        type: string
+        default: "nvl_stock_config.json"
   push:
     branches:
       - feat/sync-nvl-stock
@@ -53,11 +58,12 @@ jobs:
         shell: bash
         env:
           REQUEST_PUBLISH: ${{ inputs.publish && 'true' || 'false' }}
+          CONFIG_FILE: ${{ inputs.config_file || 'nvl_stock_config.json' }}
         run: |
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
-            python -X utf8 sync_nvl_stock.py --config nvl_stock_config.json --publish
+            python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
           else
-            python -X utf8 scripts/survey_nvl_sharepoint.py
+            python -X utf8 scripts/survey_nvl_sharepoint.py --config "$CONFIG_FILE"
           fi
 
       - name: Upload NVL proposal and report audit

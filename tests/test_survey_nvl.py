@@ -162,7 +162,8 @@ class SurveyNVLTests(unittest.TestCase):
 
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
-        self.assertIn("tháng 8/2026", res["reporting_period_note"])
+        self.assertIn("Từ ngày 01-08-2026 đến ngày 31-08-2026", res["reporting_period_note"])
+        self.assertIn("xác nhận và CHỐT chính thức cho kỳ này", res["reporting_period_note"])
 
         # Kiểm tra metrics
         metrics = res["metrics"]
@@ -373,6 +374,103 @@ class SurveyNVLTests(unittest.TestCase):
         ]
         p_fail = subprocess.run(cmd_fail, capture_output=True, text=True)
         self.assertEqual(p_fail.returncode, 1)
+
+    def test_survey_dynamic_snapshot_values_and_approved_period(self):
+        """Khi số tồn snapshot thay đổi (ví dụ mã 430200173 có 555,666), audit hiển thị số động,
+        không rơi về số hardcode 473,992, và áp dụng xác nhận khi đúng kỳ được duyệt.
+        """
+        # Thêm mã 430200173 vào source với tồn 555666.0
+        wb_src = openpyxl.load_workbook(self.src_path)
+        ws_src = wb_src["Sheet1"]
+        ws_src.cell(16, 2, "430200173")
+        ws_src.cell(16, 6, "CAI")
+        ws_src.cell(16, 13, 555666.0)
+        wb_src.save(self.src_path)
+        wb_src.close()
+
+        # Thêm mã 430200173 vào target với ĐVT Kg
+        wb_tgt = openpyxl.load_workbook(self.tgt_path)
+        ws_tgt = wb_tgt["Ton_NVL"]
+        ws_tgt.cell(8, 1, "430200173")
+        ws_tgt.cell(8, 2, "Nhãn thân PVC")
+        ws_tgt.cell(8, 3, "Kg")
+        ws_tgt.cell(8, 4, None)
+        wb_tgt.save(self.tgt_path)
+        wb_tgt.close()
+
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            source_file=str(self.src_path),
+            target_file=str(self.tgt_path),
+            out_dir_path=str(self.out_dir),
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
+        # Kiểm tra ghi chú tổng quan kỳ báo cáo hiển thị số tồn động 555,666
+        self.assertIn("555,666 Cái cho mã 430200173", res["reporting_period_note"])
+        self.assertNotIn("473,992", res["reporting_period_note"])
+
+        # Kiểm tra ghi chú cụ thể của mã 430200173 trong divergent_units
+        divergent = res["unit_reconciliation"]["divergent_units"]
+        item_430 = next((item for item in divergent if item["code"] == "430200173"), None)
+        self.assertIsNotNone(item_430)
+        self.assertIn("555,666", item_430["note"])
+        self.assertIn("Người dùng đã CHỐT cho kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026'", item_430["note"])
+        self.assertNotIn("473,992", item_430["note"])
+
+    def test_survey_period_changed_does_not_apply_stale_approvals(self):
+        """Khi kỳ báo cáo nguồn thay đổi (ví dụ sang kỳ tháng 9/2026), audit ghi rõ kỳ mới,
+        hiển thị số tồn động mới, và cảnh báo rằng xác nhận cũ không tự động áp dụng.
+        """
+        # Thay đổi kỳ báo cáo trong file nguồn sang tháng 9/2026 và thêm mã 430200173 với tồn 888999.0
+        wb_src = openpyxl.load_workbook(self.src_path)
+        ws_src = wb_src["Sheet1"]
+        ws_src["A7"] = "Từ ngày 01-09-2026 đến ngày 30-09-2026"
+        ws_src.cell(16, 2, "430200173")
+        ws_src.cell(16, 6, "CAI")
+        ws_src.cell(16, 13, 888999.0)
+        wb_src.save(self.src_path)
+        wb_src.close()
+
+        # Thêm mã 430200173 vào target với ĐVT Kg
+        wb_tgt = openpyxl.load_workbook(self.tgt_path)
+        ws_tgt = wb_tgt["Ton_NVL"]
+        ws_tgt.cell(8, 1, "430200173")
+        ws_tgt.cell(8, 2, "Nhãn thân PVC")
+        ws_tgt.cell(8, 3, "Kg")
+        ws_tgt.cell(8, 4, None)
+        wb_tgt.save(self.tgt_path)
+        wb_tgt.close()
+
+        res = run_survey(
+            config_path=str(self.cfg_path),
+            source_file=str(self.src_path),
+            target_file=str(self.tgt_path),
+            out_dir_path=str(self.out_dir),
+        )
+
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["reporting_period"], "Từ ngày 01-09-2026 đến ngày 30-09-2026")
+
+        # Ghi chú tổng quan phải cảnh báo xác nhận cũ không áp dụng
+        self.assertIn("CẢNH BÁO: Xác nhận của người dùng trước đây gắn với kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026'", res["reporting_period_note"])
+        self.assertIn("không tự động áp dụng cho kỳ hiện tại 'Từ ngày 01-09-2026 đến ngày 30-09-2026'", res["reporting_period_note"])
+        self.assertNotIn("473,992", res["reporting_period_note"])
+
+        # Kiểm tra ghi chú cụ thể của mã 430200173: không được ghi 'Người dùng đã CHỐT cho kỳ này'
+        divergent = res["unit_reconciliation"]["divergent_units"]
+        item_430 = next((item for item in divergent if item["code"] == "430200173"), None)
+        self.assertIsNotNone(item_430)
+        self.assertIn("888,999", item_430["note"])
+        self.assertIn("Xác nhận trước đó gắn với kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026'", item_430["note"])
+        self.assertIn("không tự áp dụng cho kỳ hiện tại 'Từ ngày 01-09-2026 đến ngày 30-09-2026'", item_430["note"])
+        self.assertNotIn("473,992", item_430["note"])
+
+        # Kiểm tra mã thiếu ở nguồn: ghi chú bảo toàn nhưng nêu rõ xác nhận cũ không tự áp dụng
+        missing_items = res["missing_in_source_items"]
+        self.assertEqual(len(missing_items), 1)
+        self.assertIn("Xác nhận cũ cho kỳ 'Từ ngày 01-08-2026 đến ngày 31-08-2026' không tự áp dụng", missing_items[0]["note"])
 
 
 if __name__ == "__main__":
