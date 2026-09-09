@@ -21,7 +21,7 @@ from sync_nvl_stock import (
     reconcile_nvl_target,
     run_nvl_sync,
 )
-from sync_stock import GraphClient, GraphRequestError, HOSTNAME, SITE_PATH
+from sync_stock import GraphClient, GraphRequestError, HOSTNAME, SITE_PATH, get_access_token
 
 
 def main():
@@ -30,7 +30,8 @@ def main():
         return
 
     print("[SURVEY] Bắt đầu kết nối Microsoft Graph...")
-    graph = GraphClient()
+    token = get_access_token()
+    graph = GraphClient(token)
     site_id = graph.get_site_id()
     drive_id = graph.get_default_drive_id(site_id)
     print(f"[SURVEY] Site ID: {site_id}, Drive ID: {drive_id}")
