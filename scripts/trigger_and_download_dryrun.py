@@ -174,15 +174,20 @@ def verify_run_execution(
 
     # 3. Kiểm tra mode hợp lệ
     actual_mode = report_data.get("mode")
-    valid_modes = {"dry_run", "publish", "offline", "failed"}
+    valid_modes = {"dry_run", "publish", "offline", "failed", "ensure_staging_copy"}
     if actual_mode not in valid_modes:
         raise ValueError(f"Report có mode không hợp lệ: {actual_mode!r}. Mode hợp lệ: {valid_modes}")
 
-    if expected_publish and actual_mode != "publish":
+    if expected_publish == "ensure_staging_copy":
+        if actual_mode != "ensure_staging_copy":
+            raise ValueError(
+                f"Mode không khớp: yêu cầu mode='ensure_staging_copy' nhưng report ghi nhận mode='{actual_mode}'"
+            )
+    elif expected_publish and actual_mode != "publish":
         raise ValueError(
             f"Publish mode không khớp: yêu cầu publish=True nhưng report ghi nhận mode='{actual_mode}'"
         )
-    if not expected_publish and actual_mode == "publish":
+    elif not expected_publish and actual_mode == "publish":
         raise ValueError(
             f"Publish mode không khớp: yêu cầu dry-run (publish=False) nhưng report ghi nhận mode='publish' (nguy cơ ghi đè!)"
         )
@@ -367,6 +372,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo", default=REPO, help="Định dạng owner/repo trên GitHub.")
     parser.add_argument("--no-dispatch", action="store_true", help="Không dispatch mới, chỉ tìm run có sẵn của SHA.")
     parser.add_argument("--publish", action="store_true", help="Publish lên SharePoint.")
+    parser.add_argument("--ensure-staging-copy", action="store_true", help="Kiểm tra hoặc tạo file bản sao staging Test_Ke_hoach_mua_hang_copy.xlsx trên SharePoint.")
     parser.add_argument("--config-file", default="nvl_stock_config.json", help="Tên file cấu hình JSON.")
     parser.add_argument("--out-dir", default="dry_run_artifacts", help="Thư mục lưu artifacts.")
     return parser.parse_args(argv)
@@ -396,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                 inputs_payload = {
                     "publish": bool(args.publish),
                     "config_file": args.config_file,
+                    "ensure_staging_copy": bool(args.ensure_staging_copy),
                 }
                 dispatch_workflow(token, args.repo, args.workflow, args.branch, inputs_payload)
             except Exception as exc:
@@ -501,12 +508,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Xác minh artifact khớp với config_file và publish mode
+    expected_verify_mode = "ensure_staging_copy" if args.ensure_staging_copy else args.publish
     try:
-        verify_run_execution(run_artifacts_dir, args.config_file, args.publish)
-        print(f"[TRIGGER] Đã xác minh thành công: Artifacts khớp đúng config '{args.config_file}' và mode (publish={args.publish}).")
+        verify_run_execution(run_artifacts_dir, args.config_file, expected_verify_mode)
+        print(f"[TRIGGER] Đã xác minh thành công: Artifacts khớp đúng config '{args.config_file}' và mode ({expected_verify_mode}).")
     except Exception as ver_exc:
         print(f"[TRIGGER] LỖI XÁC MINH ARTIFACTS: {ver_exc}", file=sys.stderr)
         return 1
+
+    info_file = run_artifacts_dir / "staging_copy_info.json"
+    if info_file.exists():
+        try:
+            copy_info = json.loads(info_file.read_text(encoding="utf-8"))
+            print("\n" + "=" * 60)
+            print("THÔNG TIN BẢN SAO STAGING SHAREPOINT VỪA TẢI VỀ:")
+            print(f"  - Trạng thái:      {copy_info.get('status', '').upper()}")
+            print(f"  - Tên file:        {copy_info.get('name')}")
+            print(f"  - Đường dẫn:       {copy_info.get('sharepoint_path')}")
+            print(f"  - Item ID:         {copy_info.get('item_id')}")
+            print(f"  - eTag:            {copy_info.get('eTag')}")
+            print(f"  - Sourcedoc GUID:  {copy_info.get('sourcedoc')}")
+            print("=" * 60 + "\n")
+        except Exception:
+            pass
 
     print(f"SUCCESS: Workflow {run_id} hoàn tất thành công với conclusion: {conclusion}")
     return 0

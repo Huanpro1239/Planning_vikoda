@@ -230,6 +230,34 @@ class GraphClient:
         self._raise(response)
         return response.json()
 
+    def create_file_by_path(
+        self,
+        drive_id,
+        file_path,
+        content,
+        conflict_behavior="fail",
+    ):
+        encoded = quote(file_path.strip().strip("/"), safe="/")
+        url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/content"
+        params = {}
+        if conflict_behavior:
+            params["@microsoft.graph.conflictBehavior"] = conflict_behavior
+        headers = {
+            "Content-Type": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        }
+        response = self.session.put(
+            url,
+            headers=headers,
+            params=params,
+            data=content,
+            timeout=180,
+        )
+        self._raise(response)
+        return response.json()
+
 
 def load_state():
     if not STATE_FILE.exists():

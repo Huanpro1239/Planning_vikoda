@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: "nvl_stock_config.json"
+      ensure_staging_copy:
+        description: "Chỉ kiểm tra hoặc tạo bản sao staging Test_Ke_hoach_mua_hang_copy.xlsx trên SharePoint (không ghi đè)"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - feat/sync-nvl-stock
@@ -56,9 +61,16 @@ jobs:
 
       - name: Clean test artifacts from workspace
         run: |
-          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json
+
+      - name: Ensure staging copy on SharePoint
+        if: ${{ inputs.ensure_staging_copy }}
+        shell: bash
+        run: |
+          python -X utf8 scripts/ensure_staging_copy.py
 
       - name: Generate NVL proposal or controlled publish
+        if: ${{ !inputs.ensure_staging_copy }}
         shell: bash
         env:
           REQUEST_PUBLISH: ${{ inputs.publish && 'true' || 'false' }}
@@ -79,5 +91,6 @@ jobs:
             nvl_stock_proposal.xlsx
             nvl_stock_report.json
             audit_summary.json
+            staging_copy_info.json
           if-no-files-found: warn
           retention-days: 14
