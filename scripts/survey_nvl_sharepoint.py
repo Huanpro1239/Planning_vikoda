@@ -256,7 +256,8 @@ def run_survey(
                     item_comp["classification"] = "MISSING_TARGET_UNIT"
                     item_comp["match"] = False
                     item_comp["note"] = (
-                        f"Đơn vị đích trống (nguồn: '{src_u}'); bảo toàn ô C đích trống, không tự ý điền."
+                        f"Đơn vị đích trống (nguồn: '{src_u}'). Người dùng đã CHỐT: Dòng trống không có thì chừa "
+                        "(bảo toàn ô C đích trống, không tự ý điền)."
                     )
                     missing_target_units.append(item_comp)
                 elif src_clean == tgt_clean:
@@ -277,11 +278,11 @@ def run_survey(
                     item_comp["match"] = False
                     if code == "430200173":
                         note = (
-                            f"CẢNH BÁO QUAN TRỌNG: Nguồn ghi ĐVT '{src_u}' ({qty} nhãn thân PET 1.5L), đích ghi '{tgt_u}'. "
-                            "Chênh lệch này có thể làm sai ý nghĩa số tồn nếu chép trực tiếp mà không xác nhận người dùng."
+                            f"ĐVT nguồn '{src_u}' ({qty} nhãn thân PET 1.5L) vs đích ghi '{tgt_u}'. "
+                            "Người dùng đã CHỐT: Ghi nhận theo ĐVT Cái, chép trực tiếp 473,992 vào cột D, không quy đổi sang Kg."
                         )
                     else:
-                        note = f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}'. Cần người dùng xác minh trước khi publish."
+                        note = f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}'. Chép trực tiếp số tồn theo chính sách đã chốt."
                     item_comp["note"] = note
                     divergent_units.append(item_comp)
 
@@ -342,7 +343,7 @@ def run_survey(
                 "target_unit_C": target_units.get(mis["code"], ""),
                 "current_value": mis["current_value"],
                 "action": "PRESERVE",
-                "note": "Mã đích không có trong báo cáo kế toán kỳ tháng 8/2026. Chưa có số liệu, không coi là tồn 0; bảo toàn ô đích.",
+                "note": "Mã đích không có trong báo cáo kế toán kỳ tháng 8/2026. Người dùng đã CHỐT: Xác nhận theo file cũ, bảo toàn ô đích (PRESERVE), không gán 0.",
             }
             for mis in rec.missing_in_source
         ]
@@ -352,7 +353,9 @@ def run_survey(
             "reporting_period": reporting_period,
             "reporting_period_note": (
                 f"Kỳ nguồn từ {cfg.source_name}: '{reporting_period}'. "
-                "Cần xác nhận với người dùng về kỳ số liệu tháng 8/2026 trước khi publish chính thức."
+                "Đã được người dùng xác nhận và CHỐT chính thức: sử dụng số tồn chốt kỳ tháng 8/2026, "
+                "ĐVT Cái (chép trực tiếp 473,992 Cái cho mã 430200173), bảo toàn 7 mã thiếu theo file cũ, "
+                "và chừa trống cột C cho 17 dòng thiếu ĐVT đích."
             ),
             "sharepoint_target_path": cfg.target_path,
             "sharepoint_source_path": cfg.source_path,
