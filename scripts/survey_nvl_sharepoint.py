@@ -105,6 +105,21 @@ def main():
     (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
     print(f"[SURVEY] Đã tải nguồn: {len(source_bytes)} bytes, eTag={source_item.get('eTag')}")
 
+    # Khảo sát cấu trúc file nguồn XNT_ketoan_Vikoda.xlsm
+    wb_src = load_workbook(BytesIO(source_bytes), read_only=True)
+    ws_src = wb_src["Sheet1"]
+    print("[SURVEY] Khảo sát 15 dòng đầu của XNT_ketoan_Vikoda.xlsm!Sheet1:")
+    detected_source_start_row = None
+    for r in range(1, 16):
+        b_val = ws_src.cell(r, 2).value
+        m_val = ws_src.cell(r, 13).value
+        print(f"  Row {r:2d}: Col B (Mã) = {b_val!r:25s} | Col M (Tồn) = {m_val!r}")
+        # Tìm dòng bắt đầu dữ liệu: có mã số (hoặc mã vật tư) và cột M là số
+        if detected_source_start_row is None and isinstance(m_val, (int, float)):
+            detected_source_start_row = r
+    wb_src.close()
+    print(f"[SURVEY] Dòng dữ liệu bắt đầu phát hiện được trong nguồn: {detected_source_start_row}")
+
     # 3. Tải file đích Kế hoạch mua hàng.xlsx
     print(f"[SURVEY] Đang tải file đích từ SharePoint: {exact_target_path}")
     target_bytes = graph.download_file(drive_id, target_item["id"])
@@ -131,12 +146,16 @@ def main():
     # 5. Cấu hình và chạy DRY-RUN
     cfg = load_nvl_config("nvl_stock_config.json")
     cfg.target_path = exact_target_path
+    if detected_source_start_row:
+        cfg.source_start_row = detected_source_start_row
 
-    # Cập nhật lại config file với path chính xác vừa tìm được
+    # Cập nhật lại config file với path chính xác vừa tìm được và source_start_row
     cfg_data = json.loads(Path("nvl_stock_config.json").read_text(encoding="utf-8"))
     cfg_data["target"]["sharepoint_path"] = exact_target_path
+    if detected_source_start_row:
+        cfg_data["source"]["start_row"] = detected_source_start_row
     Path("nvl_stock_config.json").write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"[SURVEY] Đã cập nhật nvl_stock_config.json với target.sharepoint_path='{exact_target_path}'")
+    print(f"[SURVEY] Đã cập nhật nvl_stock_config.json với target.sharepoint_path='{exact_target_path}', source.start_row={cfg.source_start_row}")
 
     print("[SURVEY] Bắt đầu chạy DRY-RUN (publish=False)...")
     rep = run_nvl_sync(
