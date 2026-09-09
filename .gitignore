@@ -14,5 +14,6 @@ audit_summary.json
 dry_run_artifacts/
 offline_out/
 latest_proposal/
+staging_reconciliation/
 *.zip
 temp_audit/
