@@ -5,6 +5,7 @@ execute dry-run reconciliation, and generate audit_summary.json.
 
 import argparse
 import json
+import os
 import sys
 
 if sys.platform == "win32":
