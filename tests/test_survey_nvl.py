@@ -53,6 +53,11 @@ class SurveyNVLTests(unittest.TestCase):
         ws_src.cell(14, 6, "CAI")
         ws_src.cell(14, 13, 500.0)
 
+        # Row 15: 430100118, BIH, 743 (Divergent unit)
+        ws_src.cell(15, 2, "430100118")
+        ws_src.cell(15, 6, "BIH")
+        ws_src.cell(15, 13, 743.0)
+
         wb_src.save(self.src_path)
         wb_src.close()
 
@@ -97,6 +102,12 @@ class SurveyNVLTests(unittest.TestCase):
         ws_tgt.cell(6, 2, "Premix PR0136")
         ws_tgt.cell(6, 3, "Cái")
         ws_tgt.cell(6, 4, None)
+
+        # Row 7: 430100118, Bình 5 gallon, Cái (khác đơn vị BIH vs Cái), None
+        ws_tgt.cell(7, 1, "430100118")
+        ws_tgt.cell(7, 2, "Bình 5 gallon")
+        ws_tgt.cell(7, 3, "Cái")
+        ws_tgt.cell(7, 4, None)
 
         wb_tgt.save(self.tgt_path)
         wb_tgt.close()
@@ -155,17 +166,21 @@ class SurveyNVLTests(unittest.TestCase):
 
         # Kiểm tra metrics
         metrics = res["metrics"]
-        self.assertEqual(metrics["matched_count"], 4)
-        self.assertEqual(metrics["changed_count"], 4)
+        self.assertEqual(metrics["matched_count"], 5)
+        self.assertEqual(metrics["changed_count"], 5)
         self.assertEqual(metrics["missing_in_source_count"], 1)
         self.assertEqual(metrics["duplicate_codes_source"], 0)
         self.assertEqual(metrics["duplicate_codes_target"], 0)
 
         # Kiểm tra đơn vị tính (unit reconciliation)
         unit_rec = res["unit_reconciliation"]
-        self.assertEqual(unit_rec["total_matched"], 4)
-        # 330100010 (KG vs ''), 430100002 (CAI vs 'Cái') là mismatch
-        self.assertGreater(unit_rec["unit_mismatches_count"], 0)
+        self.assertEqual(unit_rec["total_matched"], 5)
+        self.assertEqual(unit_rec["exact_matches_count"], 2)       # 330100005 (KG vs Kg), 330200010 (KG vs KG)
+        self.assertEqual(unit_rec["alias_matches_count"], 1)       # 430100002 (CAI vs Cái)
+        self.assertEqual(unit_rec["missing_target_units_count"], 1) # 330100010 (KG vs '')
+        self.assertEqual(unit_rec["divergent_units_count"], 1)     # 430100118 (BIH vs Cái)
+        self.assertEqual(unit_rec["unit_mismatches_count"], 2)     # missing + divergent
+        self.assertIn("không tự ý quy đổi", unit_rec["policy_note"])
 
         # Kiểm tra danh sách thiếu ở nguồn
         missing_items = res["missing_in_source_items"]
@@ -223,6 +238,81 @@ class SurveyNVLTests(unittest.TestCase):
         self.assertEqual(res["target_item_id"], "item-target-123")
         self.assertEqual(res["reporting_period"], "Từ ngày 01-08-2026 đến ngày 31-08-2026")
         self.assertTrue((self.out_dir / "audit_summary.json").exists())
+
+    def test_survey_target_identity_mismatch_raises_error_and_emits_failed_audit(self):
+        """Khi target identity (sourcedoc trong eTag) không khớp, survey báo lỗi RuntimeError và ghi status=failed."""
+        mock_graph = MagicMock()
+        mock_graph.get_site_id.return_value = "site-test"
+        mock_graph.get_default_drive_id.return_value = "drive-test"
+
+        # eTag đích không chứa GUID '89D1BA7B-006E-4527-B879-ABF120309214'
+        mock_target_item = {
+            "id": "item-target-wrong",
+            "name": "Kế hoạch mua hàng.xlsx",
+            "eTag": '"{11111111-2222-3333-4444-555555555555},1"',
+        }
+        mock_source_item = {
+            "id": "item-source-456",
+            "name": "XNT_ketoan_Vikoda.xlsm",
+            "eTag": '"{C0372C81-A402-4A11-B9E0-847768CC9CFB},5"',
+        }
+
+        mock_graph.get_item_by_path.side_effect = lambda drive_id, path: mock_source_item if "XNT" in path else mock_target_item
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run_survey(
+                config_path=str(self.cfg_path),
+                out_dir_path=str(self.out_dir),
+                graph=mock_graph,
+            )
+
+        self.assertIn("Target sourcedoc", str(ctx.exception))
+        self.assertIn("không khớp eTag", str(ctx.exception))
+
+        err_audit = self.out_dir / "audit_summary.json"
+        self.assertTrue(err_audit.exists())
+        data = json.loads(err_audit.read_text(encoding="utf-8"))
+        self.assertEqual(data["status"], "failed")
+        self.assertEqual(data["phase"], "fetch_target")
+        self.assertIn("Target sourcedoc", data["error_message"])
+
+    def test_survey_source_identity_mismatch_raises_error_and_emits_failed_audit(self):
+        """Khi source identity (sourcedoc trong eTag) không khớp, survey báo lỗi RuntimeError và ghi status=failed."""
+        mock_graph = MagicMock()
+        mock_graph.get_site_id.return_value = "site-test"
+        mock_graph.get_default_drive_id.return_value = "drive-test"
+
+        mock_target_item = {
+            "id": "item-target-123",
+            "name": "Kế hoạch mua hàng.xlsx",
+            "eTag": '"{89D1BA7B-006E-4527-B879-ABF120309214},18"',
+        }
+        # eTag nguồn không chứa GUID 'C0372C81-A402-4A11-B9E0-847768CC9CFB'
+        mock_source_item = {
+            "id": "item-source-wrong",
+            "name": "XNT_ketoan_Vikoda.xlsm",
+            "eTag": '"{99999999-8888-7777-6666-555555555555},1"',
+        }
+
+        mock_graph.get_item_by_path.side_effect = lambda drive_id, path: mock_source_item if "XNT" in path else mock_target_item
+        mock_graph.download_file.return_value = self.tgt_path.read_bytes()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run_survey(
+                config_path=str(self.cfg_path),
+                out_dir_path=str(self.out_dir),
+                graph=mock_graph,
+            )
+
+        self.assertIn("Source sourcedoc", str(ctx.exception))
+        self.assertIn("không khớp eTag", str(ctx.exception))
+
+        err_audit = self.out_dir / "audit_summary.json"
+        self.assertTrue(err_audit.exists())
+        data = json.loads(err_audit.read_text(encoding="utf-8"))
+        self.assertEqual(data["status"], "failed")
+        self.assertEqual(data["phase"], "fetch_source")
+        self.assertIn("Source sourcedoc", data["error_message"])
 
     def test_survey_error_handling_emits_error_report_and_raises(self):
         """Khi gặp lỗi (ví dụ file đích không tồn tại), survey ghi error report và ném ngoại lệ."""

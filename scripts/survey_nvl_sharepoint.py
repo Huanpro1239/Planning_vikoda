@@ -27,6 +27,21 @@ from sync_nvl_stock import (
 from sync_stock import GraphClient, GraphRequestError, get_access_token
 
 
+EQUIVALENT_UNIT_ALIASES: dict[str, str] = {
+    "cai": "cái",
+    "cái": "cái",
+    "kg": "kg",
+}
+
+
+def normalize_unit_for_report(u: str) -> str:
+    """Chuẩn hóa chuỗi đơn vị chỉ để phục vụ đối chiếu phân loại trong báo cáo kiểm toán (audit).
+    TUYỆT ĐỐI KHÔNG sửa đổi cột C của workbook đích và KHÔNG tự ý quy đổi số lượng.
+    """
+    s = (u or "").strip().lower()
+    return EQUIVALENT_UNIT_ALIASES.get(s, s)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Khảo sát và đối soát dữ liệu tồn kho NVL.")
     parser.add_argument("--config", default="nvl_stock_config.json", help="Đường dẫn file cấu hình JSON.")
@@ -97,9 +112,10 @@ def run_survey(
             # Xác minh identity
             target_etag = target_item.get("eTag", "")
             if cfg.target_sourcedoc and cfg.target_sourcedoc.lower() not in target_etag.lower():
-                print(f"[SURVEY] CẢNH BÁO: Sourcedoc {cfg.target_sourcedoc} không khớp eTag {target_etag} của file đích.")
-            else:
-                print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
+                raise RuntimeError(
+                    f"Target sourcedoc '{cfg.target_sourcedoc}' không khớp eTag '{target_etag}' của file đích ({target_item.get('id')})."
+                )
+            print(f"[SURVEY] Đã xác minh identity file đích: ID={target_item.get('id')}, eTag={target_etag}")
 
             target_bytes = graph.download_file(drive_id, target_item["id"])
             (out_dir / "real_target_Ke_hoach_mua_hang.xlsx").write_bytes(target_bytes)
@@ -113,9 +129,10 @@ def run_survey(
             source_item = graph.get_item_by_path(drive_id, cfg.source_path)
             source_etag = source_item.get("eTag", "")
             if cfg.source_sourcedoc and cfg.source_sourcedoc.lower() not in source_etag.lower():
-                print(f"[SURVEY] CẢNH BÁO: Sourcedoc {cfg.source_sourcedoc} không khớp eTag {source_etag} của file nguồn.")
-            else:
-                print(f"[SURVEY] Đã xác minh identity file nguồn: ID={source_item.get('id')}, eTag={source_etag}")
+                raise RuntimeError(
+                    f"Source sourcedoc '{cfg.source_sourcedoc}' không khớp eTag '{source_etag}' của file nguồn ({source_item.get('id')})."
+                )
+            print(f"[SURVEY] Đã xác minh identity file nguồn: ID={source_item.get('id')}, eTag={source_etag}")
 
             source_bytes = graph.download_file(drive_id, source_item["id"])
             (out_dir / "real_source_XNT_ketoan_Vikoda.xlsm").write_bytes(source_bytes)
@@ -195,25 +212,72 @@ def run_survey(
         source_stock, source_meta = read_nvl_source_stock(source_bytes, cfg)
         rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
 
+        # Tra cứu giá trị trước thay đổi của cột D
+        target_before_vals: dict[str, Any] = {}
+        for ch in rec.changes:
+            target_before_vals[ch["code"]] = ch["before"]
+        for un in rec.unchanged:
+            target_before_vals[un["code"]] = un["value"]
+
         # Đối chiếu ĐVT nguồn (F) vs đích (C) cho toàn bộ mã khớp
-        unit_comparisons = []
-        unit_mismatches = []
-        for code, r in rec.target_codes.items():
+        exact_matches: list[dict[str, Any]] = []
+        alias_matches: list[dict[str, Any]] = []
+        missing_target_units: list[dict[str, Any]] = []
+        divergent_units: list[dict[str, Any]] = []
+        unit_comparisons: list[dict[str, Any]] = []
+
+        for code, r in sorted(rec.target_codes.items(), key=lambda kv: kv[1]):
             if code in source_stock:
                 src_u = source_units.get(code, "")
                 tgt_u = target_units.get(code, "")
-                is_case_match = (src_u.strip().lower() == tgt_u.strip().lower())
+                qty = source_stock[code]
+                src_clean = src_u.strip().lower()
+                tgt_clean = tgt_u.strip().lower()
+
                 item_comp = {
                     "row": r,
                     "code": code,
                     "name": target_names_dict.get(code, ""),
                     "source_unit_F": src_u,
                     "target_unit_C": tgt_u,
-                    "match": is_case_match,
+                    "source_stock_M": qty,
+                    "target_stock_D_before": target_before_vals.get(code),
                 }
+
+                if not tgt_clean:
+                    item_comp["classification"] = "MISSING_TARGET_UNIT"
+                    item_comp["match"] = False
+                    item_comp["note"] = (
+                        f"Đơn vị đích trống (nguồn: '{src_u}'); bảo toàn ô C đích trống, không tự ý điền."
+                    )
+                    missing_target_units.append(item_comp)
+                elif src_clean == tgt_clean:
+                    item_comp["classification"] = "EXACT_MATCH"
+                    item_comp["match"] = True
+                    item_comp["note"] = f"Khớp chính xác ('{src_u}' == '{tgt_u}')."
+                    exact_matches.append(item_comp)
+                elif normalize_unit_for_report(src_u) == normalize_unit_for_report(tgt_u):
+                    item_comp["classification"] = "ALIAS_MATCH"
+                    item_comp["match"] = True
+                    item_comp["note"] = (
+                        f"Khớp alias ('{src_u}' vs '{tgt_u}'): cùng đại lượng chuẩn hóa "
+                        f"'{normalize_unit_for_report(src_u)}', khác cách viết/chữ hoa/dấu."
+                    )
+                    alias_matches.append(item_comp)
+                else:
+                    item_comp["classification"] = "DIVERGENT"
+                    item_comp["match"] = False
+                    if code == "430200173":
+                        note = (
+                            f"CẢNH BÁO QUAN TRỌNG: Nguồn ghi ĐVT '{src_u}' ({qty} nhãn thân PET 1.5L), đích ghi '{tgt_u}'. "
+                            "Chênh lệch này có thể làm sai ý nghĩa số tồn nếu chép trực tiếp mà không xác nhận người dùng."
+                        )
+                    else:
+                        note = f"Khác đơn vị đo lường: nguồn='{src_u}' vs đích='{tgt_u}'. Cần người dùng xác minh trước khi publish."
+                    item_comp["note"] = note
+                    divergent_units.append(item_comp)
+
                 unit_comparisons.append(item_comp)
-                if not is_case_match:
-                    unit_mismatches.append(item_comp)
 
         # Mẫu đối chiếu ít nhất 10 mã (bao gồm cập nhật, số 0, số lẻ, mã thiếu)
         comparison_rows = []
@@ -303,9 +367,21 @@ def run_survey(
             },
             "unit_reconciliation": {
                 "total_matched": len(unit_comparisons),
-                "unit_mismatches_count": len(unit_mismatches),
-                "policy_note": "Chép trực tiếp số tồn từ nguồn sang đích; không tự ý quy đổi đơn vị tính.",
-                "unit_mismatches": unit_mismatches,
+                "exact_matches_count": len(exact_matches),
+                "alias_matches_count": len(alias_matches),
+                "missing_target_units_count": len(missing_target_units),
+                "divergent_units_count": len(divergent_units),
+                "unit_mismatches_count": len(divergent_units) + len(missing_target_units),
+                "policy_note": (
+                    "Chép trực tiếp số tồn từ nguồn sang đích; không tự ý quy đổi đơn vị tính, "
+                    "không sửa đổi cột C (ĐVT đích), và không biến mã thiếu thành 0."
+                ),
+                "alias_mapping_used": EQUIVALENT_UNIT_ALIASES,
+                "divergent_units": divergent_units,
+                "missing_target_units": missing_target_units,
+                "alias_matches": alias_matches,
+                "exact_matches": exact_matches,
+                "unit_mismatches": divergent_units + missing_target_units,
             },
             "missing_in_source_items": missing_items_detail,
             "sample_reconciliation_10_plus": comparison_rows,
