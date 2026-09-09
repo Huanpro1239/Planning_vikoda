@@ -36,54 +36,65 @@ def main():
     drive_id = graph.get_default_drive_id(site_id)
     print(f"[SURVEY] Site ID: {site_id}, Drive ID: {drive_id}")
 
-    # 1. Tìm kiếm file Kế hoạch mua hàng trên SharePoint
-    search_queries = ["Kế hoạch mua hàng", "Ke hoach mua hang", "Ton_NVL", "89D1BA7B"]
-    candidate_items = []
-    seen_ids = set()
-
-    for q in search_queries:
-        try:
-            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/search(q='{q}')"
-            data = graph.get_json(url)
-            for it in data.get("value", []):
-                if it["id"] not in seen_ids:
-                    seen_ids.add(it["id"])
-                    candidate_items.append(it)
-        except Exception as e:
-            print(f"[SURVEY] Lỗi khi search '{q}': {e}")
-
-    print(f"[SURVEY] Tìm thấy {len(candidate_items)} ứng viên:")
+    # 1. Tìm kiếm file Kế hoạch mua hàng qua duyệt thư mục (tránh lỗi 500 của search API)
     target_item = None
     exact_target_path = ""
+    candidate_items = []
+    target_names = {"kế hoạch mua hàng.xlsx", "ke hoach mua hang.xlsx"}
 
-    for it in candidate_items:
-        parent_ref = it.get("parentReference", {})
-        parent_path = parent_ref.get("path", "")
-        folder = ""
-        if "root:" in parent_path:
-            folder = unquote(parent_path.split("root:", 1)[1]).lstrip("/")
-        name = it.get("name", "")
-        rel_path = f"{folder}/{name}" if folder else name
-        print(f"  - [{it.get('id')}] {rel_path} (size={it.get('size')} bytes)")
+    folders_to_explore = [
+        "Tinh san xuat Mua hang 2027",
+        "Ke hoach",
+        "Data Mua Hang",
+        "Data Ton NVL",
+        "Kế hoạch cung ứng",
+        "",  # root
+    ]
+    queue = list(folders_to_explore)
+    visited_folders = set()
 
-        # Kiểm tra nếu khớp chính xác Kế hoạch mua hàng.xlsx
-        if name.strip().lower() == "kế hoạch mua hàng.xlsx" or name.strip().lower() == "ke hoach mua hang.xlsx":
-            target_item = it
-            exact_target_path = rel_path
-            print(f"[SURVEY] >>> KHỚP CHÍNH XÁC FILE ĐÍCH: {exact_target_path}")
+    print("[SURVEY] Bắt đầu duyệt thư mục để tìm file đích 'Kế hoạch mua hàng.xlsx'...")
+    while queue and not target_item:
+        curr_folder = queue.pop(0)
+        if curr_folder in visited_folders:
+            continue
+        visited_folders.add(curr_folder)
+
+        if curr_folder:
+            encoded = quote(curr_folder, safe="/")
+            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded}:/children"
+        else:
+            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
+
+        try:
+            data = graph.get_json(url)
+            children = data.get("value", [])
+        except Exception as e:
+            print(f"[SURVEY] Lỗi đọc thư mục '{curr_folder}': {e}")
+            continue
+
+        for ch in children:
+            name = ch.get("name", "").strip()
+            ch_path = f"{curr_folder}/{name}" if curr_folder else name
+            if "folder" in ch:
+                if ch_path.count("/") < 3:
+                    queue.append(ch_path)
+            else:
+                lower_name = name.lower()
+                if "mua h" in lower_name or "nvl" in lower_name or lower_name in target_names:
+                    print(f"  - [CANDIDATE] {ch_path} (id={ch.get('id')}, size={ch.get('size')})")
+                    candidate_items.append((ch_path, ch))
+                if lower_name in target_names:
+                    target_item = ch
+                    exact_target_path = ch_path
+                    print(f"[SURVEY] >>> TÌM THẤY CHÍNH XÁC FILE ĐÍCH: {exact_target_path} (ID: {ch.get('id')})")
+                    break
 
     out_dir = Path("dry_run_artifacts")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not target_item:
         print("[SURVEY] CẢNH BÁO: Chưa tìm thấy file chính xác 'Kế hoạch mua hàng.xlsx' trên drive chính!")
-        try:
-            root_children = graph.get_json(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children")
-            print("[SURVEY] Danh sách thư mục/file gốc trên drive:")
-            for ch in root_children.get("value", []):
-                print(f"    - {ch.get('name')} ({'folder' if 'folder' in ch else 'file'})")
-        except Exception as e:
-            print(f"[SURVEY] Lỗi khi list root children: {e}")
         return
 
     # 2. Tải file nguồn XNT_ketoan_Vikoda.xlsm
