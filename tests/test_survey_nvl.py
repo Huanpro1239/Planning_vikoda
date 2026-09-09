@@ -366,7 +366,7 @@ class SurveyNVLTests(unittest.TestCase):
             "--out-dir",
             str(self.out_dir),
         ]
-        p_ok = subprocess.run(cmd_ok, capture_output=True, text=True)
+        p_ok = subprocess.run(cmd_ok, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(p_ok.returncode, 0)
 
         # Ca thất bại (file nguồn không tồn tại)
@@ -384,7 +384,7 @@ class SurveyNVLTests(unittest.TestCase):
             "--out-dir",
             str(self.out_dir),
         ]
-        p_fail = subprocess.run(cmd_fail, capture_output=True, text=True)
+        p_fail = subprocess.run(cmd_fail, capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(p_fail.returncode, 1)
 
     def test_survey_dynamic_snapshot_values_and_approved_period(self):
