@@ -577,6 +577,229 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["phase"], "validate_config")
 
+    # =========================================================================
+    # BỘ REGRESSION TESTS REVIEW VÒNG 3: TIMEOUT UPLOAD VÀ VÒNG ĐỜI ARTIFACT CLI
+    # =========================================================================
+
+    def test_timeout_server_committed_concurrent_edit_in_d_stops_without_reupload(self):
+        """[Vòng 3 - P1] Timeout upload nhưng server đã ghi và D bị sửa đồng thời:
+        Dừng ngay, không retry PUT với ETag mới, không đè 777 về 100, chỉ upload 1 lần."""
+        class TimeoutConcurrentEditD(FakeGraphClient):
+            def __init__(self, target_path: str):
+                super().__init__()
+                self.target_path = target_path
+
+            def upload_file(self, drive_id, item_id, content, expected_etag=None):
+                super().upload_file(drive_id, item_id, content, expected_etag)
+                if self.upload_attempts == 1:
+                    # Giả lập server đã nhận nhưng socket timeout; đồng thời D2 bị sửa thành 777
+                    self.files[item_id] = make_mock_target_bytes([("VT001", 777), ("VT002", 70)])
+                    self.items[self.target_path]["eTag"] = "etag-user-edit-777"
+                    raise TimeoutError("The write operation timed out waiting for server ack")
+                return {"id": item_id, "name": "uploaded.xlsx", "eTag": "etag-new"}
+
+        fake_graph = TimeoutConcurrentEditD(self.cfg.target_path)
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+            self.assertIn("xác minh sau đó thất bại", str(ctx.exception).lower())
+
+            # Tuyệt đối chỉ upload 1 lần, không lặp lại với ETag mới
+            self.assertEqual(fake_graph.upload_attempts, 1)
+
+            # Dữ liệu 777 của người dùng trên server được bảo toàn nguyên vẹn
+            wb = load_workbook(BytesIO(fake_graph.files["tgt-1"]), data_only=True)
+            self.assertEqual(wb["Ton_NVL"]["D2"].value, 777)
+            wb.close()
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertTrue(report.get("upload_acknowledged"))
+            self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
+
+    def test_timeout_server_committed_concurrent_edit_outside_d_stops_without_reupload(self):
+        """[Vòng 3 - P1] Timeout upload nhưng server đã ghi và ô ngoài cột D bị sửa đồng thời:
+        Dừng ngay, chỉ upload 1 lần, bảo toàn dữ liệu server."""
+        class TimeoutConcurrentEditOutsideD(FakeGraphClient):
+            def __init__(self, target_path: str):
+                super().__init__()
+                self.target_path = target_path
+
+            def upload_file(self, drive_id, item_id, content, expected_etag=None):
+                super().upload_file(drive_id, item_id, content, expected_etag)
+                if self.upload_attempts == 1:
+                    # Giả lập sửa tên vật tư ở cột B hoặc thêm dòng ngoài D
+                    corrupted = make_mock_target_bytes([("VT001", 50), ("VT002", 70)])
+                    wb_mod = load_workbook(BytesIO(corrupted))
+                    wb_mod["Ton_NVL"]["B2"].value = "Tên bị sửa đồng thời"
+                    buf = BytesIO()
+                    wb_mod.save(buf)
+                    wb_mod.close()
+                    self.files[item_id] = buf.getvalue()
+                    self.items[self.target_path]["eTag"] = "etag-outside-d-changed"
+                    raise TimeoutError("Socket timed out")
+                return {"id": item_id, "name": "uploaded.xlsx", "eTag": "etag-new"}
+
+        fake_graph = TimeoutConcurrentEditOutsideD(self.cfg.target_path)
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+            self.assertIn("xác minh sau đó thất bại", str(ctx.exception).lower())
+
+            self.assertEqual(fake_graph.upload_attempts, 1)
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
+
+    def test_timeout_get_transient_error_recovers_and_publishes(self):
+        """[Vòng 3 - P1] Timeout upload nhưng server đã ghi; GET verify gặp lỗi mạng tạm thời (503/timeout):
+        Retry GET thành công, xác minh đạt và hoàn tất publish với 1 lượt upload duy nhất."""
+        class TimeoutRecoveringClient(FakeGraphClient):
+            def __init__(self):
+                super().__init__(timeout_then_server_committed=True)
+                self.post_download_calls = 0
+
+            def download_file(self, drive_id, item_id):
+                # Khi đang download để verify sau upload (item_id là tgt-1 sau khi upload_attempts >= 1)
+                if self.upload_attempts >= 1 and item_id == "tgt-1":
+                    self.post_download_calls += 1
+                    if self.post_download_calls == 1:
+                        err = GraphRequestError("Service Unavailable", status_code=503, error_code="serviceUnavailable")
+                        err.retry_after_seconds = 0.01
+                        raise err
+                return super().download_file(drive_id, item_id)
+
+        fake_graph = TimeoutRecoveringClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            report = run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+            self.assertEqual(report["status"], "published")
+            self.assertEqual(fake_graph.upload_attempts, 1)
+            self.assertTrue(report.get("post_upload_verified"))
+
+    def test_timeout_get_exhausted_stops_as_unverified_without_reupload(self):
+        """[Vòng 3 - P1] Timeout upload nhưng GET verify hết lượt thử (lỗi mạng liên tục):
+        Dừng ngay với status unverified, ghi nhận upload có thể đã thành công, không upload lại."""
+        class TimeoutGetExhaustedClient(FakeGraphClient):
+            def __init__(self):
+                super().__init__(timeout_then_server_committed=True)
+
+            def download_file(self, drive_id, item_id):
+                if self.upload_attempts >= 1:
+                    raise TimeoutError("Network timeout during verification download")
+                return super().download_file(drive_id, item_id)
+
+        fake_graph = TimeoutGetExhaustedClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+            self.assertIn("không thể tải lại file để xác minh", str(ctx.exception).lower())
+
+            self.assertEqual(fake_graph.upload_attempts, 1)
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertEqual(report.get("verification_status"), "unverified")
+
+    def test_cli_missing_config_cleans_stale_proposal_and_writes_failed_report(self):
+        """[Vòng 3 - P2] Chạy CLI với file cấu hình không tồn tại:
+        Xóa proposal cũ của lần chạy trước, ghi đè report cũ bằng status=failed, phase=init_cli."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stale_report = Path(tmpdir) / "nvl_stock_report.json"
+            stale_report.write_text('{"status":"published","message":"old success"}', encoding="utf-8")
+            stale_proposal = Path(tmpdir) / "nvl_stock_proposal.xlsx"
+            stale_proposal.write_bytes(b"old-proposal-content")
+
+            import subprocess, sys
+            proc = subprocess.run(
+                [sys.executable, "-X", "utf8", "sync_nvl_stock.py", "--config", str(Path(tmpdir) / "non_existent.json"), "--out", tmpdir],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            self.assertNotEqual(proc.returncode, 0)
+
+            # Proposal cũ phải bị xóa sạch
+            self.assertFalse(stale_proposal.exists())
+
+            # Report phải được ghi đè bằng lỗi init_cli hiện tại
+            report = json.loads(stale_report.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "init_cli")
+            self.assertEqual(report["error_type"], "FileNotFoundError")
+
+    def test_cli_corrupt_json_config_cleans_stale_proposal_and_writes_failed_report(self):
+        """[Vòng 3 - P2] Chạy CLI với file JSON hỏng:
+        Xóa proposal cũ, ghi đè report cũ bằng status=failed, phase=init_cli."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corrupt_cfg = Path(tmpdir) / "corrupt.json"
+            corrupt_cfg.write_text('{"invalid_json": [missing_bracket', encoding="utf-8")
+
+            stale_report = Path(tmpdir) / "nvl_stock_report.json"
+            stale_report.write_text('{"status":"published","message":"old success"}', encoding="utf-8")
+            stale_proposal = Path(tmpdir) / "nvl_stock_proposal.xlsx"
+            stale_proposal.write_bytes(b"old-proposal-content")
+
+            import subprocess, sys
+            proc = subprocess.run(
+                [sys.executable, "-X", "utf8", "sync_nvl_stock.py", "--config", str(corrupt_cfg), "--out", tmpdir],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            self.assertNotEqual(proc.returncode, 0)
+
+            self.assertFalse(stale_proposal.exists())
+            report = json.loads(stale_report.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "init_cli")
+
+    def test_cli_post_upload_verify_failure_preserves_detailed_report(self):
+        """[Vòng 3 - P2] Khi run_nvl_sync thất bại ở post_upload_verify, CLI không ghi đè làm mất báo cáo lỗi chi tiết."""
+        corrupted_bytes = make_mock_target_bytes([("VT001", 777), ("VT002", 70)])
+
+        class MismatchClient(FakeGraphClient):
+            def upload_file(self, drive_id, item_id, content, expected_etag=None):
+                res = super().upload_file(drive_id, item_id, content, expected_etag)
+                self.files[item_id] = corrupted_bytes
+                return res
+
+        fake_graph = MismatchClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = Path(tmpdir) / "config.json"
+            cfg_file.write_text(
+                json.dumps({
+                    "source": {"name": "src", "sharepoint_path": self.cfg.source_path, "sourcedoc": "SRC"},
+                    "target": {"name": "tgt", "sharepoint_path": self.cfg.target_path, "sourcedoc": "TGT"},
+                }),
+                encoding="utf-8",
+            )
+
+            # Gọi run_nvl_sync với mismatch để xác nhận report lưu đúng phase post_upload_verify
+            with self.assertRaises(RuntimeError):
+                run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph)
+
+            report = json.loads((Path(tmpdir) / "nvl_stock_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "post_upload_verify")
+            self.assertEqual(report.get("verification_status"), "conflict_or_mismatch")
+
 
 if __name__ == "__main__":
     unittest.main()

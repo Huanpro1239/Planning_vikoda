@@ -1274,7 +1274,7 @@ def run_nvl_sync(
             current_phase = "upload_target"
             print(f"[ONLINE] Đang upload file đích với ETag {target_rev_final}...")
             upload_response = None
-            upload_verified = False
+            is_timeout_upload = False
             try:
                 upload_response = graph.upload_file(
                     drive_id,
@@ -1284,74 +1284,88 @@ def run_nvl_sync(
                 )
                 print(f"[ONLINE] Upload hoàn tất: {upload_response.get('name')} (Lượt {attempt})")
             except Exception as up_exc:
-                last_error = up_exc
                 if _is_network_timeout_or_reset(up_exc):
-                    print(f"[ONLINE] Upload bị ngắt kết nối/timeout ({up_exc}). Đang tải lại để xác định kết quả...")
-                    try:
-                        check_bytes = graph.download_file(drive_id, target_item["id"])
-                        chk = verify_nvl_patched_workbook(target_bytes, check_bytes, reconcile_res, config)
-                        if chk.get("ok"):
-                            print("[ONLINE] Server đã nhận đủ dữ liệu trước khi timeout; xác nhận thành công.")
-                            upload_response = {
-                                "id": target_item["id"],
-                                "name": target_item.get("name"),
-                                "status": "verified_post_timeout",
-                            }
-                            upload_verified = True
-                    except Exception:
-                        pass
-                if not upload_verified:
-                    raise
+                    print(f"[ONLINE] Upload bị ngắt kết nối/timeout ({up_exc}). Chuyển sang xác minh trạng thái server...")
+                    is_timeout_upload = True
+                    upload_response = {
+                        "id": target_item["id"],
+                        "name": target_item.get("name"),
+                        "status": "timeout_unconfirmed_ack",
+                        "raw_timeout_error": str(up_exc),
+                    }
+                else:
+                    # Lỗi không phải timeout (ví dụ 412 ETag conflict, 403 Forbidden...):
+                    # Chắc chắn server chưa ghi nhận nội dung này. Ném lỗi ra ngoài xử lý.
+                    raise up_exc
 
             # 3.9. Tải lại file đích sau upload để xác minh toàn vẹn trên server
-            # LƯU Ý BẢO TOÀN VÀ ĐỐI SOÁT:
-            # - Khi server đã nhận file hoặc phản hồi upload thành công, tuyệt đối KHÔNG tự ý upload lại toàn bộ
-            #   hoặc rollback ghi đè file của người khác.
+            # LƯU Ý BẢO TOÀN VÀ ĐỐI SOÁT (Áp dụng cho CẢ trường hợp có ACK và trường hợp timeout):
+            # - Khi server đã nhận file hoặc gặp timeout chờ phản hồi: tuyệt đối KHÔNG tự ý upload lại toàn bộ
+            #   với ETag mới hoặc rollback ghi đè file của người khác nếu phát hiện xung đột.
             # - Nếu GET tải lại gặp lỗi mạng tạm thời (429, 503, timeout): retry đọc tối đa 3 lần.
             # - Nếu dữ liệu trên server không khớp với patch hoặc bị chỉnh sửa đồng thời ngoài cột D: dừng ngay,
             #   báo lỗi, ghi report failed với phase='post_upload_verify' và giữ upload_acknowledged=True.
+            # - Nếu GET thất bại sau 3 lần thử: dừng ngay với trạng thái unverified.
             current_phase = "post_upload_verify"
-            if not upload_verified:
-                max_verify_download_attempts = 3
-                post_upload_err = None
-                verify_success = False
+            max_verify_download_attempts = 3
+            post_upload_err = None
+            verify_success = False
 
-                for v_attempt in range(1, max_verify_download_attempts + 1):
-                    try:
-                        server_bytes = graph.download_file(drive_id, target_item["id"])
-                        verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
-                        verify_success = True
+            for v_attempt in range(1, max_verify_download_attempts + 1):
+                try:
+                    server_bytes = graph.download_file(drive_id, target_item["id"])
+                    verify_nvl_patched_workbook(target_bytes, server_bytes, reconcile_res, config)
+                    verify_success = True
+                    if is_timeout_upload:
+                        print("[ONLINE] Server đã nhận đủ dữ liệu trước khi timeout; xác nhận thành công 100%.")
+                        upload_response["status"] = "verified_post_timeout"
+                    else:
                         print("[ONLINE] Đã tải lại file đích từ SharePoint và đối soát thành công 100%.")
-                        break
-                    except Exception as verr:
-                        post_upload_err = verr
-                        # Kiểm tra nếu là lỗi đối soát dữ liệu (mismatch/conflict): dừng ngay, không retry GET!
-                        is_data_mismatch = isinstance(verr, RuntimeError) and any(
-                            k in str(verr) for k in ("Xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp")
-                        )
-                        if is_data_mismatch:
-                            print(f"[ONLINE] LỖI XÁC MINH SAU UPLOAD (Xung đột dữ liệu trên server): {verr}")
-                            break
-
-                        # Nếu là lỗi Graph hoặc timeout tạm thời khi download: retry GET
-                        is_temp = (
-                            isinstance(verr, GraphRequestError) and is_retryable_graph_error(verr)
-                        ) or _is_network_timeout_or_reset(verr)
-                        if is_temp and v_attempt < max_verify_download_attempts:
-                            delay = retry_delay_seconds(verr, 1.0) if isinstance(verr, GraphRequestError) else 1.0
-                            print(
-                                f"[ONLINE] Lỗi tạm thời khi tải lại để xác minh ({verr}). "
-                                f"Thử lại lượt {v_attempt + 1}/{max_verify_download_attempts} sau {delay}s..."
-                            )
-                            time.sleep(delay)
-                            continue
-                        break
-
-                if not verify_success:
-                    is_data_mismatch = isinstance(post_upload_err, RuntimeError) and any(
-                        k in str(post_upload_err) for k in ("Xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp")
+                    break
+                except Exception as verr:
+                    post_upload_err = verr
+                    # Kiểm tra nếu là lỗi đối soát dữ liệu (mismatch/conflict): dừng ngay, không retry GET!
+                    is_data_mismatch = isinstance(verr, RuntimeError) and (
+                        any(k in str(verr).lower() for k in ("xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp", "biến đổi", "bị mất"))
+                        or (not _is_network_timeout_or_reset(verr) and not isinstance(verr, GraphRequestError))
                     )
-                    v_status = "conflict_or_mismatch" if is_data_mismatch else "unverified"
+                    if is_data_mismatch:
+                        prefix = "LỖI XÁC MINH SAU TIMEOUT" if is_timeout_upload else "LỖI XÁC MINH SAU UPLOAD"
+                        print(f"[ONLINE] {prefix} (Xung đột dữ liệu trên server): {verr}")
+                        break
+
+                    # Nếu là lỗi Graph hoặc timeout tạm thời khi download: retry GET
+                    is_temp = (
+                        isinstance(verr, GraphRequestError) and is_retryable_graph_error(verr)
+                    ) or _is_network_timeout_or_reset(verr)
+                    if is_temp and v_attempt < max_verify_download_attempts:
+                        delay = retry_delay_seconds(verr, 1.0) if isinstance(verr, GraphRequestError) else 1.0
+                        print(
+                            f"[ONLINE] Lỗi tạm thời khi tải lại để xác minh ({verr}). "
+                            f"Thử lại lượt {v_attempt + 1}/{max_verify_download_attempts} sau {delay}s..."
+                        )
+                        time.sleep(delay)
+                        continue
+                    break
+
+            if not verify_success:
+                is_data_mismatch = isinstance(post_upload_err, RuntimeError) and (
+                    any(k in str(post_upload_err).lower() for k in ("xác minh thất bại", "bị thay đổi", "khác biệt", "không khớp", "biến đổi", "bị mất"))
+                    or (not _is_network_timeout_or_reset(post_upload_err) and not isinstance(post_upload_err, GraphRequestError))
+                )
+                v_status = "conflict_or_mismatch" if is_data_mismatch else "unverified"
+                if is_timeout_upload:
+                    err_msg = (
+                        f"Upload bị timeout/mất kết nối và xác minh sau đó thất bại do dữ liệu trên server bị chỉnh sửa "
+                        f"đồng thời hoặc không khớp với bản patch: {post_upload_err}. Dữ liệu trên server được giữ nguyên, "
+                        f"tuyệt đối không tự ý upload lại."
+                        if is_data_mismatch
+                        else (
+                            f"Upload bị timeout/mất kết nối và không thể tải lại file để xác minh sau "
+                            f"{max_verify_download_attempts} lần thử: {post_upload_err}. Upload có thể đã được server ghi nhận."
+                        )
+                    )
+                else:
                     err_msg = (
                         f"Upload đã được SharePoint ghi nhận nhưng xác minh sau upload thất bại do dữ liệu bị sửa đổi "
                         f"đồng thời hoặc không khớp: {post_upload_err}"
@@ -1361,20 +1375,21 @@ def run_nvl_sync(
                             f"{max_verify_download_attempts} lần thử: {post_upload_err}"
                         )
                     )
-                    final_err = RuntimeError(err_msg)
-                    _emit_error_and_raise(
-                        "post_upload_verify",
-                        final_err,
-                        attempt=attempt,
-                        src_rev=source_rev_final,
-                        tgt_rev=target_rev_final,
-                        extra={
-                            "upload_acknowledged": True,
-                            "upload_result": upload_response,
-                            "verification_status": v_status,
-                            "raw_verification_error": str(post_upload_err),
-                        },
-                    )
+                final_err = RuntimeError(err_msg)
+                _emit_error_and_raise(
+                    "post_upload_verify",
+                    final_err,
+                    attempt=attempt,
+                    src_rev=source_rev_final,
+                    tgt_rev=target_rev_final,
+                    extra={
+                        "upload_acknowledged": True,
+                        "upload_result": upload_response,
+                        "verification_status": v_status,
+                        "is_timeout_upload": is_timeout_upload,
+                        "raw_verification_error": str(post_upload_err),
+                    },
+                )
 
             # 3.10. Ghi nhận báo cáo thành công (Chỉ khi xác minh thành công!)
             current_phase = "finalize_published"
@@ -1460,11 +1475,13 @@ def main():
 
     out_dir = Path(args.out) if args.out else (Path("offline_out/nvl") if (args.source_file or args.target_file) else Path("."))
 
+    sync_started = False
     try:
         cfg = load_nvl_config(args.config)
         if args.target_path:
             cfg.target_path = args.target_path
 
+        sync_started = True
         rep = run_nvl_sync(
             cfg,
             source_file=args.source_file,
@@ -1475,7 +1492,18 @@ def main():
         print(f"Hoàn thành ({rep.get('status')}): {rep.get('message')}")
     except Exception as exc:
         report_file = out_dir / "nvl_stock_report.json"
-        if not report_file.exists():
+        proposal_file = out_dir / "nvl_stock_proposal.xlsx"
+
+        if not sync_started:
+            # Lỗi xảy ra TRƯỚC KHI sync khởi động (ví dụ load config lỗi, thiếu file config, JSON hỏng):
+            # 1. Xóa proposal cũ từ lần chạy trước nếu có để tránh proposal không hợp lệ tồn tại
+            try:
+                if proposal_file.exists():
+                    proposal_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+            # 2. Luôn ghi đè báo cáo lỗi hiện tại (phase="init_cli", status="failed") thay thế report cũ
             try:
                 out_dir.mkdir(parents=True, exist_ok=True)
                 err_rep = generate_nvl_error_report(
@@ -1488,6 +1516,23 @@ def main():
                 report_file.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             except OSError:
                 pass
+        else:
+            # Nếu sync đã khởi động, run_nvl_sync đã chủ động ghi báo cáo lỗi chi tiết chuyên sâu (như post_upload_verify)
+            # Chỉ ghi fallback nếu report_file vì lý do nào đó chưa tồn tại
+            if not report_file.exists():
+                try:
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    err_rep = generate_nvl_error_report(
+                        None,
+                        mode="publish" if args.publish else ("offline" if (args.source_file or args.target_file) else "dry_run"),
+                        phase="cli_unhandled",
+                        attempt=1,
+                        error=exc,
+                    )
+                    report_file.write_text(json.dumps(err_rep, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                except OSError:
+                    pass
+
         print(f"LỖI: {exc}", file=sys.stderr)
         sys.exit(1)
 
