@@ -1,0 +1,98 @@
+name: Sync SharePoint NVL Stock
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish workbook Kế hoạch mua hàng.xlsx chính thức sau khi proposal đã được review"
+        required: true
+        type: boolean
+        default: false
+      config_file:
+        description: "File cấu hình NVL sử dụng (mặc định nvl_stock_config.json, có thể chọn nvl_stock_staging_config.json)"
+        required: false
+        type: string
+        default: "nvl_stock_config.json"
+      ensure_staging_copy:
+        description: "Chỉ kiểm tra hoặc tạo bản sao staging Test_Ke_hoach_mua_hang_copy.xlsx trên SharePoint (không ghi đè)"
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - feat/sync-nvl-stock
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sharepoint-nvl-stock-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite gate
+        run: |
+          python -X utf8 -m unittest discover -s tests -v
+
+      - name: Clean test artifacts from workspace
+        run: |
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json
+
+      - name: Ensure staging copy on SharePoint
+        if: ${{ inputs.ensure_staging_copy }}
+        shell: bash
+        run: |
+          python -X utf8 scripts/ensure_staging_copy.py
+
+      - name: Generate NVL proposal or controlled publish
+        if: ${{ !inputs.ensure_staging_copy }}
+        shell: bash
+        env:
+          REQUEST_PUBLISH: ${{ inputs.publish && 'true' || 'false' }}
+          CONFIG_FILE: ${{ inputs.config_file || 'nvl_stock_config.json' }}
+        run: |
+          if [[ "$REQUEST_PUBLISH" == "true" ]]; then
+            python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
+          else
+            python -X utf8 scripts/survey_nvl_sharepoint.py --config "$CONFIG_FILE"
+          fi
+
+      - name: Upload NVL proposal and report audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvl-audit-${{ github.run_id }}
+          path: |
+            nvl_stock_proposal.xlsx
+            nvl_stock_report.json
+            audit_summary.json
+            staging_copy_info.json
+            official_backup_*
+            official_target_backup_info.json
+          if-no-files-found: warn
+          retention-days: 14

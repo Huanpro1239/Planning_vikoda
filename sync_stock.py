@@ -179,6 +179,19 @@ class GraphClient:
             {"$select": "id,name,eTag,size,lastModifiedDateTime"},
         )
 
+    def list_folder_children(self, drive_id, folder_path=""):
+        """Liệt kê các file/folder con trong một thư mục SharePoint."""
+        if not folder_path or folder_path.strip() in ("", "/"):
+            url = f"{GRAPH}/drives/{drive_id}/root/children"
+        else:
+            encoded = quote(folder_path.strip().strip("/"), safe="/")
+            url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/children"
+        res = self.get_json(
+            url,
+            {"$select": "id,name,eTag,size,lastModifiedDateTime,folder,file"},
+        )
+        return res.get("value", [])
+
     def download_file(self, drive_id, item_id):
         url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
         response = self.session.get(
@@ -214,6 +227,34 @@ class GraphClient:
                 error_code="preconditionFailed",
             )
 
+        self._raise(response)
+        return response.json()
+
+    def create_file_by_path(
+        self,
+        drive_id,
+        file_path,
+        content,
+        conflict_behavior="fail",
+    ):
+        encoded = quote(file_path.strip().strip("/"), safe="/")
+        url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/content"
+        params = {}
+        if conflict_behavior:
+            params["@microsoft.graph.conflictBehavior"] = conflict_behavior
+        headers = {
+            "Content-Type": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        }
+        response = self.session.put(
+            url,
+            headers=headers,
+            params=params,
+            data=content,
+            timeout=180,
+        )
         self._raise(response)
         return response.json()
 
