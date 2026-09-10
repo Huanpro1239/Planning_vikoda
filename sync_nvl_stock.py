@@ -978,6 +978,45 @@ def identify_sharepoint_metadata_exemption(
         except Exception:
             return None
 
+    # 4. Kiểm tra nếu là phần tử [trash]/*.dat phát sinh do cơ chế lưu trữ phân đoạn máy chủ SharePoint
+    if re.match(r"^\[trash\]/[0-9]{4,}\.dat$", name_clean):
+        # 4a. Cấu trúc gói: Tuyệt đối không được khai báo trong [Content_Types].xml (nếu có là active document part)
+        try:
+            if "[Content_Types].xml" in z_patch.namelist():
+                ct_root = etree.fromstring(z_patch.read("[Content_Types].xml"))
+                for override in ct_root.findall(".//{http://schemas.openxmlformats.org/package/2006/content-types}Override"):
+                    if (override.get("PartName") or "").strip("/").lower() == name_clean:
+                        return None
+                for default_type in ct_root.findall(".//{http://schemas.openxmlformats.org/package/2006/content-types}Default"):
+                    if (default_type.get("Extension") or "").lower() == "dat":
+                        return None
+        except Exception:
+            return None
+
+        # 4b. Quan hệ tham chiếu: Tuyệt đối không có bất kỳ file .rels nào trong gói tham chiếu đến
+        try:
+            target_basename = name_clean.split("/")[-1]
+            for rel_file in z_patch.namelist():
+                if rel_file.endswith(".rels"):
+                    rel_root = etree.fromstring(z_patch.read(rel_file))
+                    for rel in rel_root.findall(".//{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+                        tgt = (rel.get("Target") or "").lower()
+                        if "trash" in tgt or target_basename in tgt:
+                            return None
+        except Exception:
+            return None
+
+        # 4c. Định dạng nội dung: Padding nhị phân chuẩn máy chủ SharePoint (\xff\xff\xff\xff + byte 0 hoặc 255)
+        #     Tuyệt đối không phải văn bản XML, HTML hay binary thực thi (không chứa header PE MZ / ELF)
+        if patch_bytes.startswith(b"\xff\xff\xff\xff") and set(patch_bytes) <= {0, 255}:
+            return {
+                "part": name,
+                "type": "server_trash_dat_part",
+                "namespace": "urn:schemas-microsoft-com:sharepoint:storage:trash",
+                "reason": "Phần tử [trash]/*.dat phát sinh do cơ chế lưu trữ phân đoạn máy chủ SharePoint (không tham chiếu trong OOXML package)",
+            }
+        return None
+
     return None
 
 

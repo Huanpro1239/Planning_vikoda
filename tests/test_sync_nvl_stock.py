@@ -455,6 +455,156 @@ class SyncNVLStockTests(unittest.TestCase):
             verify_nvl_patched_workbook(target_bytes, tampered.getvalue(), rec, cfg, is_server_comparison=True)
         self.assertIn("Phần tử không liên quan 'xl/worksheets/sheet2.xml' trong file ZIP bị thay đổi ngoài ý muốn!", str(ctx.exception))
 
+    def test_server_comparison_allows_sharepoint_trash_dat_artifacts(self):
+        """Khi is_server_comparison=True, [trash]/*.dat sinh bởi cơ chế lưu trữ SharePoint được miễn trừ."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        # Giả lập SharePoint sinh [trash]/0000.dat và [trash]/0001.dat
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("[trash]/0000.dat", b"\xff\xff\xff\xff" + b"\x00" * 100)
+            z_out.writestr("[trash]/0001.dat", b"\xff\xff\xff\xff" + b"\x00" * 50)
+        server_bytes = server_sim.getvalue()
+
+        # Với is_server_comparison=False, phải chặn
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=False)
+        self.assertIn("[trash]/0000.dat", str(ctx.exception))
+
+        # Với is_server_comparison=True, phải miễn trừ và ghi vào exempted_parts
+        res = verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertTrue(res["ok"])
+        part_names = [ep["part"] for ep in res.get("exempted_parts", [])]
+        self.assertIn("[trash]/0000.dat", part_names)
+        self.assertIn("[trash]/0001.dat", part_names)
+
+    def test_server_comparison_blocks_trash_with_content_type(self):
+        """Nếu [trash]/0000.dat được khai báo trong [Content_Types].xml (là document part), phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        # Thêm Override vào target_bytes ngay từ đầu để [Content_Types].xml giống nhau giữa target và server
+        orig_with_ct = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_with_ct, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename == "[Content_Types].xml":
+                    ct_root = etree.fromstring(z_in.read(item.filename))
+                    etree.SubElement(
+                        ct_root,
+                        "{http://schemas.openxmlformats.org/package/2006/content-types}Override",
+                        PartName="/[trash]/0000.dat",
+                        ContentType="application/octet-stream",
+                    )
+                    z_out.writestr(item.filename, etree.tostring(ct_root, xml_declaration=True, encoding="UTF-8"))
+                else:
+                    z_out.writestr(item, z_in.read(item.filename))
+        target_bytes = orig_with_ct.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("[trash]/0000.dat", b"\xff\xff\xff\xff" + b"\x00" * 100)
+        server_bytes = server_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("Phần tử lạ ngoài ý muốn '[trash]/0000.dat' xuất hiện trong file ZIP sau khi ghi!", str(ctx.exception))
+
+    def test_server_comparison_blocks_trash_with_relationship(self):
+        """Nếu có file .rels tham chiếu đến [trash]/0000.dat, phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        # Thêm Relationship vào target_bytes ngay từ đầu để xl/_rels/workbook.xml.rels giống nhau giữa target và server
+        orig_with_rel = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_with_rel, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename == "xl/_rels/workbook.xml.rels":
+                    rels_root = etree.fromstring(z_in.read(item.filename))
+                    etree.SubElement(
+                        rels_root,
+                        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+                        Id="rId_trash",
+                        Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+                        Target="../[trash]/0000.dat",
+                    )
+                    z_out.writestr(item.filename, etree.tostring(rels_root, xml_declaration=True, encoding="UTF-8"))
+                else:
+                    z_out.writestr(item, z_in.read(item.filename))
+        target_bytes = orig_with_rel.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("[trash]/0000.dat", b"\xff\xff\xff\xff" + b"\x00" * 100)
+        server_bytes = server_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("Phần tử lạ ngoài ý muốn '[trash]/0000.dat' xuất hiện trong file ZIP sau khi ghi!", str(ctx.exception))
+
+    def test_server_comparison_blocks_trash_with_non_padding_content(self):
+        """Nếu [trash]/0000.dat chứa nội dung không phải padding chuẩn (\xff\xff\xff\xff + 0), phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("[trash]/0000.dat", b"<evil>XML content inside trash</evil>")
+        server_bytes = server_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("[trash]/0000.dat", str(ctx.exception))
+
+    def test_server_comparison_blocks_non_dat_trash(self):
+        """Nếu file trong [trash] không phải .dat hoặc tên không phải số 4 chữ số, phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        server_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("[trash]/payload.exe", b"\xff\xff\xff\xff" + b"\x00" * 100)
+        server_bytes = server_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("[trash]/payload.exe", str(ctx.exception))
+
     def test_target_cell_in_merge_range_blocked(self):
         """Chặn cập nhật khi cột D nằm trong dải ô gộp."""
         cfg = make_mock_config()
