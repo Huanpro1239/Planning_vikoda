@@ -5,6 +5,7 @@ Strictly matches expected commit SHA or run ID to prevent using stale artifacts 
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -254,6 +255,22 @@ def verify_run_execution(
                 raise ValueError(
                     f"Config file trong audit_summary ('{act_cfg}') không khớp với '{exp_cfg}'"
                 )
+
+    # 7. Kiểm tra official_target_backup_info.json và backup raw nếu có
+    info_file = artifacts_dir / "official_target_backup_info.json"
+    raw_file = artifacts_dir / "official_backup_target_raw.xlsx"
+    if info_file.exists():
+        info_data = json.loads(info_file.read_text(encoding="utf-8"))
+        exp_sha = info_data.get("sha256")
+        if not raw_file.exists():
+            raise FileNotFoundError(
+                "Artifact chứa 'official_target_backup_info.json' nhưng thiếu file backup raw 'official_backup_target_raw.xlsx'."
+            )
+        act_sha = hashlib.sha256(raw_file.read_bytes()).hexdigest()
+        if exp_sha and act_sha.lower() != exp_sha.lower():
+            raise ValueError(
+                f"SHA-256 của official_backup_target_raw.xlsx ({act_sha}) không khớp với official_target_backup_info.json ({exp_sha})!"
+            )
 
 
 def wait_for_run_completion(

@@ -397,6 +397,101 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
                 verify_run_execution(p, str(cfg_file), expected_publish=False)
             self.assertIn('Config file trong audit_summary', str(ctx.exception))
 
+    def test_verify_run_execution_checks_backup_info_and_raw_match(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(
+                json.dumps({
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            rep_file = p / 'nvl_stock_report.json'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            raw_file = p / 'official_backup_target_raw.xlsx'
+            raw_content = b'test-raw-bytes'
+            raw_file.write_bytes(raw_content)
+            raw_sha = hashlib.sha256(raw_content).hexdigest()
+
+            info_file = p / 'official_target_backup_info.json'
+            info_file.write_text(json.dumps({'sha256': raw_sha}), encoding='utf-8')
+
+            # Phải pass thành công khi SHA-256 khớp
+            verify_run_execution(p, str(cfg_file), expected_publish=False)
+
+    def test_verify_run_execution_rejects_backup_sha256_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(
+                json.dumps({
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            rep_file = p / 'nvl_stock_report.json'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            raw_file = p / 'official_backup_target_raw.xlsx'
+            raw_file.write_bytes(b'tampered-bytes')
+
+            info_file = p / 'official_target_backup_info.json'
+            info_file.write_text(json.dumps({'sha256': 'expected_sha_123'}), encoding='utf-8')
+
+            with self.assertRaises(ValueError) as ctx:
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
+            self.assertIn('không khớp với official_target_backup_info.json', str(ctx.exception))
+
+    def test_verify_run_execution_rejects_missing_raw_when_info_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir)
+            cfg_file = p / 'valid_cfg.json'
+            cfg_file.write_text(
+                json.dumps({
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            rep_file = p / 'nvl_stock_report.json'
+            rep_file.write_text(
+                json.dumps({
+                    'mode': 'dry_run',
+                    'source': {'name': 'src', 'sharepoint_path': 'p_src'},
+                    'target': {'name': 'tgt', 'sharepoint_path': 'p_tgt'},
+                }),
+                encoding='utf-8',
+            )
+
+            info_file = p / 'official_target_backup_info.json'
+            info_file.write_text(json.dumps({'sha256': 'expected_sha_123'}), encoding='utf-8')
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                verify_run_execution(p, str(cfg_file), expected_publish=False)
+            self.assertIn('thiếu file backup raw', str(ctx.exception))
+
     def test_main_fails_when_conclusion_is_failure(self):
         with patch('scripts.trigger_and_download_dryrun.get_token', return_value='fake-token'):
             with patch('scripts.trigger_and_download_dryrun.dispatch_workflow'):

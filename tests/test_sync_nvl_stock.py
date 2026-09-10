@@ -308,14 +308,30 @@ class SyncNVLStockTests(unittest.TestCase):
         target_rows = [("VT001", 50)]
         target_bytes = make_mock_target_bytes(target_rows)
 
-        # Thêm customXml/item2.xml và cập nhật docProps/core.xml vào target_bytes ban đầu
+        # Thêm customXml/item2.xml (SharePoint contentTypeSchema) và docProps/core.xml (coreProperties)
         orig_with_custom = BytesIO()
         with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_with_custom, "w") as z_out:
             for item in z_in.infolist():
-                if item.filename != "docProps/core.xml":
+                if item.filename == "xl/_rels/workbook.xml.rels":
+                    rels_root = etree.fromstring(z_in.read(item.filename))
+                    etree.SubElement(
+                        rels_root,
+                        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+                        Id="rId_customXml2",
+                        Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+                        Target="../customXml/item2.xml",
+                    )
+                    z_out.writestr(item.filename, etree.tostring(rels_root, xml_declaration=True, encoding="UTF-8"))
+                elif item.filename != "docProps/core.xml":
                     z_out.writestr(item, z_in.read(item.filename))
-            z_out.writestr("customXml/item2.xml", b"<customXml>version_1</customXml>")
-            z_out.writestr("docProps/core.xml", b"<core>author_old</core>")
+            z_out.writestr(
+                "customXml/item2.xml",
+                b"<ct:contentTypeSchema xmlns:ct='http://schemas.microsoft.com/office/2006/metadata/contentType'>v1</ct:contentTypeSchema>",
+            )
+            z_out.writestr(
+                "docProps/core.xml",
+                b"<coreProperties xmlns='http://schemas.openxmlformats.org/package/2006/metadata/core-properties' xmlns:dcterms='http://purl.org/dc/terms/'><dcterms:modified>2026-09-08T00:00:00Z</dcterms:modified></coreProperties>",
+            )
         target_bytes = orig_with_custom.getvalue()
 
         rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
@@ -326,9 +342,15 @@ class SyncNVLStockTests(unittest.TestCase):
         with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server_sim, "w") as z_out:
             for item in z_in.infolist():
                 if item.filename == "customXml/item2.xml":
-                    z_out.writestr(item, b"<customXml>version_2_from_sharepoint</customXml>")
+                    z_out.writestr(
+                        item,
+                        b"<ct:contentTypeSchema xmlns:ct='http://schemas.microsoft.com/office/2006/metadata/contentType'>v2_sp</ct:contentTypeSchema>",
+                    )
                 elif item.filename == "docProps/core.xml":
-                    z_out.writestr(item, b"<core>author_sharepoint_updated</core>")
+                    z_out.writestr(
+                        item,
+                        b"<coreProperties xmlns='http://schemas.openxmlformats.org/package/2006/metadata/core-properties' xmlns:dcterms='http://purl.org/dc/terms/'><dcterms:modified>2026-09-09T12:00:00Z</dcterms:modified></coreProperties>",
+                    )
                 else:
                     z_out.writestr(item, z_in.read(item.filename))
         server_bytes = server_sim.getvalue()
@@ -341,6 +363,74 @@ class SyncNVLStockTests(unittest.TestCase):
         # Với is_server_comparison=True, phải bỏ qua metadata SharePoint và kiểm tra hợp lệ
         res = verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
         self.assertTrue(res["ok"])
+        # Kiểm tra danh sách exempted_parts được ghi nhận chính xác
+        exempted_parts = res.get("exempted_parts", [])
+        self.assertTrue(len(exempted_parts) >= 1)
+        part_names = [ep["part"] for ep in exempted_parts]
+        self.assertIn("customXml/item2.xml", part_names)
+        self.assertIn("docProps/core.xml", part_names)
+
+    def test_server_comparison_blocks_unrelated_customxml_tampering(self):
+        """Dù is_server_comparison=True, nếu customXml không phải SharePoint metadata (VD: dữ liệu ứng dụng riêng) bị sửa thì phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        # Thêm customXml/item99.xml với namespace không thuộc SharePoint
+        orig_custom = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_custom, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("customXml/item99.xml", b"<userPayload xmlns='http://mycorp.com/schema'><data>100</data></userPayload>")
+        target_bytes = orig_custom.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        # Server bytes bị sửa đổi item99.xml
+        tampered_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(tampered_sim, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename == "customXml/item99.xml":
+                    z_out.writestr(item, b"<userPayload xmlns='http://mycorp.com/schema'><data>200_HACK</data></userPayload>")
+                else:
+                    z_out.writestr(item, z_in.read(item.filename))
+        server_bytes = tampered_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("Phần tử không liên quan 'customXml/item99.xml' trong file ZIP bị thay đổi ngoài ý muốn!", str(ctx.exception))
+
+    def test_server_comparison_blocks_docprops_custom_tampering(self):
+        """Dù is_server_comparison=True, nếu docProps/custom.xml bị sửa đổi ngoài ý muốn thì vẫn phải chặn."""
+        cfg = make_mock_config()
+        source_stock = {"VT001": 100}
+        target_rows = [("VT001", 50)]
+        target_bytes = make_mock_target_bytes(target_rows)
+
+        orig_custom = BytesIO()
+        with zipfile.ZipFile(BytesIO(target_bytes), "r") as z_in, zipfile.ZipFile(orig_custom, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("docProps/custom.xml", b"<customProperties xmlns='http://schemas.openxmlformats.org/officeDocument/2006/custom-properties'><property>old</property></customProperties>")
+        target_bytes = orig_custom.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, source_stock, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+
+        tampered_sim = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(tampered_sim, "w") as z_out:
+            for item in z_in.infolist():
+                if item.filename == "docProps/custom.xml":
+                    z_out.writestr(item, b"<customProperties xmlns='http://schemas.openxmlformats.org/officeDocument/2006/custom-properties'><property>tampered</property></customProperties>")
+                else:
+                    z_out.writestr(item, z_in.read(item.filename))
+        server_bytes = tampered_sim.getvalue()
+
+        with self.assertRaises(RuntimeError) as ctx:
+            verify_nvl_patched_workbook(target_bytes, server_bytes, rec, cfg, is_server_comparison=True)
+        self.assertIn("Phần tử không liên quan 'docProps/custom.xml' trong file ZIP bị thay đổi ngoài ý muốn!", str(ctx.exception))
 
     def test_server_comparison_still_blocks_worksheet_tampering(self):
         """Dù is_server_comparison=True, nếu sheet khác (DanhMuc) bị sửa đổi thì vẫn phải chặn."""

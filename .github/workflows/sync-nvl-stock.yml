@@ -61,7 +61,7 @@ jobs:
 
       - name: Clean test artifacts from workspace
         run: |
-          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_*
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json
 
       - name: Ensure staging copy on SharePoint
         if: ${{ inputs.ensure_staging_copy }}
@@ -93,5 +93,6 @@ jobs:
             audit_summary.json
             staging_copy_info.json
             official_backup_*
+            official_target_backup_info.json
           if-no-files-found: warn
           retention-days: 14

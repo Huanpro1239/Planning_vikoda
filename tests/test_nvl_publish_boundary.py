@@ -719,6 +719,31 @@ class NVLPublishBoundaryTests(unittest.TestCase):
             self.assertTrue(report.get("upload_may_have_committed"))
             self.assertEqual(report.get("verification_status"), "unverified")
 
+    def test_backup_write_failure_stops_with_zero_upload_attempts(self):
+        """Khi lưu hoặc xác minh backup thực tế thất bại trước upload:
+        Dừng ngay lập tức với report failed phase=pre_upload_backup và KHÔNG gọi upload (upload_attempts=0)."""
+        fake_graph = FakeGraphClient()
+        fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
+        fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            with patch.object(Path, "write_bytes", side_effect=OSError("Disk full: không thể ghi backup raw")):
+                with self.assertRaises(RuntimeError) as ctx:
+                    run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
+                self.assertIn("backup thực tế đích thất bại", str(ctx.exception).lower())
+
+            # BẮT BUỘC: upload_attempts phải bằng 0!
+            self.assertEqual(fake_graph.upload_attempts, 0)
+
+            # Report phải ghi nhận trạng thái failed tại phase pre_upload_backup
+            rep_file = out_dir / "nvl_stock_report.json"
+            self.assertTrue(rep_file.exists())
+            rep = json.loads(rep_file.read_text(encoding="utf-8"))
+            self.assertEqual(rep["status"], "failed")
+            self.assertEqual(rep["phase"], "pre_upload_backup")
+            self.assertIn("Disk full", rep["error_message"])
+
     def test_cli_missing_config_cleans_stale_proposal_and_writes_failed_report(self):
         """[Vòng 3 - P2] Chạy CLI với file cấu hình không tồn tại:
         Xóa proposal cũ của lần chạy trước, ghi đè report cũ bằng status=failed, phase=init_cli."""

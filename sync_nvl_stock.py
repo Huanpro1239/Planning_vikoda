@@ -834,9 +834,151 @@ def patch_nvl_destination_workbook(
     return output_buffer.getvalue()
 
 
-def _is_server_managed_part(name: str) -> bool:
+SHAREPOINT_METADATA_NAMESPACES = (
+    "http://schemas.microsoft.com/office/2006/metadata/contentType",
+    "http://schemas.microsoft.com/office/2006/metadata/properties",
+    "http://schemas.microsoft.com/office/2006/metadata/properties/metaAttributes",
+    "http://schemas.microsoft.com/sharepoint/v3/contenttype/forms",
+    "http://schemas.microsoft.com/sharepoint/",
+)
+
+
+def identify_sharepoint_metadata_exemption(
+    name: str,
+    orig_bytes: bytes,
+    patch_bytes: bytes,
+    z_orig: zipfile.ZipFile,
+    z_patch: zipfile.ZipFile,
+) -> dict[str, str] | None:
+    """Xác thực một phần tử trong file ZIP có phải là metadata SharePoint được máy chủ
+    SharePoint tự động cập nhật khi upload hay không.
+
+    Yêu cầu nhận diện chính xác theo:
+    1. Cấu trúc XML và root element.
+    2. Namespace chính thức của SharePoint metadata.
+    3. Quan hệ liên kết trong file quan hệ (_rels/.rels, workbook.xml.rels hoặc customXml/_rels/*.rels).
+
+    TUYỆT ĐỐI không bỏ qua toàn bộ customXml hay docProps:
+    - Nếu phần tử không chứa cấu trúc/namespace SharePoint chuẩn -> trả về None (bị chặn).
+    - Nếu phần tử nằm ngoài customXml và docProps (như xl/worksheets, xl/styles...) -> trả về None.
+    """
     name_clean = name.strip("/").lower()
-    return name_clean.startswith("customxml/") or name_clean.startswith("docprops/")
+
+    # 1. Kiểm tra nếu là customXml/_rels/*.rels
+    if name_clean.startswith("customxml/_rels/") and name_clean.endswith(".rels"):
+        try:
+            root_orig = etree.fromstring(orig_bytes)
+            root_patch = etree.fromstring(patch_bytes)
+            rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+            if root_orig.tag != f"{{{rel_ns}}}Relationships" or root_patch.tag != f"{{{rel_ns}}}Relationships":
+                return None
+            prop_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps"
+            rels = root_orig.findall(f"{{{rel_ns}}}Relationship")
+            if not rels or not all(r.get("Type") == prop_type for r in rels):
+                return None
+            return {
+                "part": name,
+                "type": "sharepoint_customxml_rels",
+                "namespace": prop_type,
+                "reason": "File quan hệ customXmlProps của SharePoint metadata",
+            }
+        except Exception:
+            return None
+
+    # 2. Kiểm tra nếu là customXml/item*.xml hoặc customXml/itemProps*.xml
+    if name_clean.startswith("customxml/") and name_clean.endswith(".xml"):
+        try:
+            root_orig = etree.fromstring(orig_bytes)
+            root_patch = etree.fromstring(patch_bytes)
+        except Exception:
+            return None
+
+        # 2a. Trường hợp itemProps*.xml (ds:datastoreItem)
+        ds_ns = "http://schemas.openxmlformats.org/officeDocument/2006/customXml"
+        if root_orig.tag == f"{{{ds_ns}}}datastoreItem" and root_patch.tag == f"{{{ds_ns}}}datastoreItem":
+            schema_refs = root_orig.findall(f".//{{{ds_ns}}}schemaRef")
+            matched_ns = None
+            for sref in schema_refs:
+                uri = sref.get(f"{{{ds_ns}}}uri") or sref.get("uri") or ""
+                if any(sp_ns in uri for sp_ns in SHAREPOINT_METADATA_NAMESPACES):
+                    matched_ns = uri
+                    break
+            if matched_ns:
+                return {
+                    "part": name,
+                    "type": "sharepoint_datastore_item",
+                    "namespace": matched_ns,
+                    "reason": f"SharePoint datastore item properties tham chiếu schema '{matched_ns}'",
+                }
+            return None
+
+        # 2b. Trường hợp item*.xml (ct:contentTypeSchema, p:properties, FormTemplates...)
+        orig_nsmap = root_orig.nsmap.values()
+        patch_nsmap = root_patch.nsmap.values()
+        root_tag_orig = root_orig.tag
+        root_tag_patch = root_patch.tag
+
+        matched_ns = None
+        for sp_ns in SHAREPOINT_METADATA_NAMESPACES:
+            if (
+                sp_ns in root_tag_orig
+                or sp_ns in root_tag_patch
+                or any(sp_ns in str(v) for v in orig_nsmap)
+                or any(sp_ns in str(v) for v in patch_nsmap)
+            ):
+                matched_ns = sp_ns
+                break
+
+        if matched_ns:
+            # Kiểm tra quan hệ từ xl/_rels/workbook.xml.rels hoặc _rels/.rels
+            has_valid_rel = False
+            try:
+                rels_checked = 0
+                for rels_name in ("xl/_rels/workbook.xml.rels", "_rels/.rels"):
+                    if rels_name in z_orig.namelist():
+                        rels_checked += 1
+                        rels_root = etree.fromstring(z_orig.read(rels_name))
+                        rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml"
+                        for rel in rels_root.findall(".//{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+                            if rel.get("Type") == rel_type:
+                                target = (rel.get("Target") or "").replace("../", "").strip("/").lower()
+                                if target == name_clean or target.endswith(name_clean):
+                                    has_valid_rel = True
+                                    break
+                    if has_valid_rel:
+                        break
+                if rels_checked == 0:
+                    has_valid_rel = True
+            except Exception:
+                has_valid_rel = False
+
+            if has_valid_rel:
+                tag_short = root_tag_orig.split("}")[-1] if "}" in root_tag_orig else root_tag_orig
+                return {
+                    "part": name,
+                    "type": "sharepoint_customxml_metadata",
+                    "namespace": matched_ns,
+                    "reason": f"SharePoint document contentType/DIP metadata ({tag_short})",
+                }
+        return None
+
+    # 3. Kiểm tra nếu là docProps/core.xml
+    if name_clean == "docprops/core.xml":
+        try:
+            root_orig = etree.fromstring(orig_bytes)
+            root_patch = etree.fromstring(patch_bytes)
+            core_ns = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+            if root_orig.tag == f"{{{core_ns}}}coreProperties" and root_patch.tag == f"{{{core_ns}}}coreProperties":
+                return {
+                    "part": name,
+                    "type": "server_core_properties",
+                    "namespace": core_ns,
+                    "reason": "Dublin Core properties cập nhật bởi SharePoint/Office",
+                }
+        except Exception:
+            return None
+
+    return None
 
 
 def verify_nvl_patched_workbook(
@@ -853,11 +995,14 @@ def verify_nvl_patched_workbook(
     2. Các ô unchanged và missing_in_source giữ nguyên giá trị ban đầu (hỗ trợ cả văn bản/blank/lỗi).
     3. Tất cả các ô không thuộc danh sách thay đổi trong chính sheet Ton_NVL giữ nguyên định dạng và nội dung XML.
     4. Tất cả các phần tử trong file ZIP ngoài sheet đích đều giống nhau từng byte (SHA-256 đối chiếu 1-1).
-       Khi đối chiếu với file tải lại từ server SharePoint (is_server_comparison=True), bỏ qua các metadata
-       riêng do SharePoint tự động đóng dấu (customXml/*, docProps/*).
+       Khi đối chiếu với file tải lại từ server SharePoint (is_server_comparison=True), chỉ miễn trừ các metadata
+       được xác thực chính xác là do máy chủ SharePoint tự động đóng dấu (theo cấu trúc/namespace và quan hệ liên kết).
+       Ghi nhận danh sách các phần tử được miễn trừ trong kết quả trả về.
     """
     if not reconcile_result.changes:
-        return {"ok": True, "message": "Không có thay đổi cần xác minh."}
+        return {"ok": True, "message": "Không có thay đổi cần xác minh.", "exempted_parts": []}
+
+    exempted_parts: list[dict[str, str]] = []
 
     # 1. So sánh các ZIP parts không liên quan (byte-level SHA-256)
     orig_buf = BytesIO(original_bytes)
@@ -868,14 +1013,37 @@ def verify_nvl_patched_workbook(
         target_sheet_path = find_sheet_xml_path(z_orig, config.target_sheet)
         for name in z_orig.namelist():
             if name != target_sheet_path:
-                if is_server_comparison and _is_server_managed_part(name):
-                    continue
-                orig_hash = hashlib.sha256(z_orig.read(name)).hexdigest()
-                patch_hash = hashlib.sha256(z_patch.read(name)).hexdigest()
+                if name not in z_patch.namelist():
+                    raise RuntimeError(f"Phần tử '{name}' bị thiếu trong file sau khi ghi/tải lại!")
+                orig_raw = z_orig.read(name)
+                patch_raw = z_patch.read(name)
+                orig_hash = hashlib.sha256(orig_raw).hexdigest()
+                patch_hash = hashlib.sha256(patch_raw).hexdigest()
                 if orig_hash != patch_hash:
+                    if is_server_comparison:
+                        exemption = identify_sharepoint_metadata_exemption(
+                            name, orig_raw, patch_raw, z_orig, z_patch
+                        )
+                        if exemption is not None:
+                            exempted_parts.append(exemption)
+                            continue
                     raise RuntimeError(
                         f"Phần tử không liên quan '{name}' trong file ZIP bị thay đổi ngoài ý muốn!"
                     )
+
+        # Kiểm tra không có phần tử lạ xuất hiện trong z_patch ngoài các metadata hợp lệ
+        for name in z_patch.namelist():
+            if name not in z_orig.namelist() and name != target_sheet_path:
+                if is_server_comparison:
+                    exemption = identify_sharepoint_metadata_exemption(
+                        name, b"", z_patch.read(name), z_orig, z_patch
+                    )
+                    if exemption is not None:
+                        exempted_parts.append(exemption)
+                        continue
+                raise RuntimeError(
+                    f"Phần tử lạ ngoài ý muốn '{name}' xuất hiện trong file ZIP sau khi ghi!"
+                )
 
         # Kiểm tra tính toàn vẹn của các ô không thay đổi trong chính sheet đích
         orig_sheet_root = etree.fromstring(z_orig.read(target_sheet_path))
@@ -940,7 +1108,11 @@ def verify_nvl_patched_workbook(
     finally:
         _safe_close_workbook(wb)
 
-    return {"ok": True, "message": "Xác minh toàn vẹn thành công 100%."}
+    return {
+        "ok": True,
+        "message": "Xác minh toàn vẹn thành công 100%.",
+        "exempted_parts": exempted_parts,
+    }
 
 
 def generate_nvl_report(
@@ -951,6 +1123,7 @@ def generate_nvl_report(
     source_revision: str | None = None,
     target_revision: str | None = None,
     reporting_period: str | None = None,
+    exempted_parts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Tạo báo cáo JSON đối soát chi tiết đồng bộ tồn NVL."""
     return {
@@ -996,6 +1169,7 @@ def generate_nvl_report(
             for item in reconcile_result.missing_in_source
         ],
         "source_only_codes": reconcile_result.source_only,
+        "exempted_server_metadata_parts": exempted_parts or [],
     }
 
 
@@ -1028,6 +1202,7 @@ def generate_nvl_error_report(
         "attempt": attempt,
         "error_type": type(error).__name__,
         "message": str(error),
+        "error_message": str(error),
         "source": {
             "name": src_name,
             "sharepoint_path": src_path,
@@ -1259,9 +1434,19 @@ def run_nvl_sync(
             target_rev_final = target_item.get("eTag")
             target_bytes = graph.download_file(drive_id, target_item["id"])
             target_sha256 = hashlib.sha256(target_bytes).hexdigest()
+
+            # 3.4.1. Lưu và xác minh bản backup thực tế đích trước khi patch/upload
+            current_phase = "pre_upload_backup"
             backup_raw_path = out_dir / "official_backup_target_raw.xlsx"
+            backup_info_path = out_dir / "official_target_backup_info.json"
             try:
                 backup_raw_path.write_bytes(target_bytes)
+                saved_raw_bytes = backup_raw_path.read_bytes()
+                saved_raw_sha = hashlib.sha256(saved_raw_bytes).hexdigest()
+                if saved_raw_sha != target_sha256:
+                    raise RuntimeError(
+                        f"Xác minh SHA-256 backup đích thất bại: kỳ vọng {target_sha256}, thực tế {saved_raw_sha}"
+                    )
                 backup_meta = {
                     "name": target_item.get("name", config.target_name),
                     "sharepoint_path": config.target_path,
@@ -1272,12 +1457,24 @@ def run_nvl_sync(
                     "size_bytes": len(target_bytes),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
-                (out_dir / "official_target_backup_info.json").write_text(
+                backup_info_path.write_text(
                     json.dumps(backup_meta, indent=2, ensure_ascii=False), encoding="utf-8"
                 )
-                print(f"[ONLINE] Đã lưu bản backup thực tế đích trước khi patch: {backup_raw_path} (SHA-256: {target_sha256})")
-            except OSError:
-                pass
+                saved_meta = json.loads(backup_info_path.read_text(encoding="utf-8"))
+                if saved_meta.get("sha256") != target_sha256:
+                    raise RuntimeError(
+                        "Xác minh metadata backup thất bại: SHA-256 trong file JSON không khớp với target_sha256."
+                    )
+                print(f"[ONLINE] Đã lưu và xác minh bản backup thực tế đích trước khi patch: {backup_raw_path} (SHA-256: {target_sha256})")
+            except Exception as backup_exc:
+                err = RuntimeError(f"Lưu hoặc xác minh backup thực tế đích thất bại trước khi upload: {backup_exc}")
+                _emit_error_and_raise(
+                    "pre_upload_backup",
+                    err,
+                    attempt=attempt,
+                    src_rev=source_rev_final,
+                    tgt_rev=target_rev_final,
+                )
 
             # 3.5. Đối soát và lập kế hoạch patch
             current_phase = "reconcile"
@@ -1393,11 +1590,12 @@ def run_nvl_sync(
             max_verify_download_attempts = 3
             post_upload_err = None
             verify_success = False
+            verify_res: dict[str, Any] | None = None
 
             for v_attempt in range(1, max_verify_download_attempts + 1):
                 try:
                     server_bytes = graph.download_file(drive_id, target_item["id"])
-                    verify_nvl_patched_workbook(
+                    verify_res = verify_nvl_patched_workbook(
                         target_bytes, server_bytes, reconcile_res, config, is_server_comparison=True
                     )
                     verify_success = True
@@ -1479,6 +1677,7 @@ def run_nvl_sync(
 
             # 3.10. Ghi nhận báo cáo thành công (Chỉ khi xác minh thành công!)
             current_phase = "finalize_published"
+            exempted_list = verify_res.get("exempted_parts", []) if verify_res else []
             report = generate_nvl_report(
                 reconcile_res,
                 config,
@@ -1486,16 +1685,18 @@ def run_nvl_sync(
                 source_revision=source_rev_final,
                 target_revision=target_rev_final,
                 reporting_period=source_metadata.get("reporting_period"),
+                exempted_parts=exempted_list,
             )
             report["status"] = "published" if not reconcile_res.missing_in_source else "published_with_warnings"
             report["message"] = f"Đồng bộ và publish thành công: {len(reconcile_res.changes)} ô đã cập nhật lên SharePoint."
             report["upload_result"] = upload_response
             report["post_upload_verified"] = True
+            report["exempted_server_metadata_parts"] = exempted_list
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return report
 
         except Exception as exc:
-            if current_phase == "post_upload_verify":
+            if current_phase in ("pre_upload_backup", "post_upload_verify"):
                 raise
 
             last_error = exc

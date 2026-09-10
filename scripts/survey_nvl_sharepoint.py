@@ -173,7 +173,13 @@ def run_survey(
             target_bytes = client_graph.download_file(drive_id, target_item["id"])
             target_sha256 = hashlib.sha256(target_bytes).hexdigest()
             backup_raw_path = out_dir / "official_backup_target_raw.xlsx"
+            backup_info_path = out_dir / "official_target_backup_info.json"
             backup_raw_path.write_bytes(target_bytes)
+            saved_raw_sha = hashlib.sha256(backup_raw_path.read_bytes()).hexdigest()
+            if saved_raw_sha != target_sha256:
+                raise RuntimeError(
+                    f"Xác minh SHA-256 backup target thất bại: kỳ vọng {target_sha256}, thực tế {saved_raw_sha}"
+                )
             backup_meta = {
                 "name": target_item.get("name", "Kế hoạch mua hàng.xlsx"),
                 "sharepoint_path": cfg.target_path,
@@ -184,10 +190,13 @@ def run_survey(
                 "size_bytes": len(target_bytes),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            (out_dir / "official_target_backup_info.json").write_text(
+            backup_info_path.write_text(
                 json.dumps(backup_meta, indent=2, ensure_ascii=False), encoding="utf-8"
             )
-            print(f"[SURVEY] Đã lưu bản backup thực tế của target: {backup_raw_path} (SHA-256: {target_sha256})")
+            saved_meta = json.loads(backup_info_path.read_text(encoding="utf-8"))
+            if saved_meta.get("sha256") != target_sha256:
+                raise RuntimeError("Xác minh metadata backup thất bại: SHA-256 không khớp.")
+            print(f"[SURVEY] Đã lưu và xác minh bản backup thực tế của target: {backup_raw_path} (SHA-256: {target_sha256})")
             tgt_basename = Path(cfg.target_path).name or "target.xlsx"
             target_local_path = out_dir / f"real_target_{tgt_basename}"
             target_local_path.write_bytes(target_bytes)
