@@ -1,0 +1,20 @@
+{
+  "source": {
+    "name": "BCTheodoiDMHANG.xlsm",
+    "sourcedoc": "1836226D-FB9D-4F8A-B6D5-3508A975936C",
+    "sheet_name": "REPORT_DONMUAHANG",
+    "start_row": 6,
+    "code_column": 6,
+    "code_column_letter": "F",
+    "purchase_quantity_column": 9,
+    "purchase_quantity_column_letter": "I",
+    "received_quantity_column": 11,
+    "received_quantity_column_letter": "K",
+    "status_column": 28,
+    "status_column_letter": "AB",
+    "open_status": ""
+  },
+  "business_rule": {
+    "description": "Chỉ lấy AB trống; tồn đơn từng dòng = MAX(I-K,0); cộng theo mã F; ghi Ton_NVL!E; mã không có PO mở = 0."
+  }
+}
