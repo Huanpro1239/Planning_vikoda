@@ -25,6 +25,9 @@ on:
 
 permissions:
   contents: write
+  # Cho phép GitHub runner xin OIDC JWT. Auth mode vẫn mặc định `secret`
+  # cho đến khi Federated Credential bên Entra được cấu hình và MS_AUTH_MODE=oidc.
+  id-token: write
 
 concurrency:
   group: sharepoint-stock-sync
@@ -38,7 +41,9 @@ jobs:
     env:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      # Giữ secret trong giai đoạn chuyển tiếp; xóa sau khi OIDC production đã verify.
       MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'secret' }}
 
     steps:
       - name: Checkout repository
@@ -76,15 +81,16 @@ jobs:
             EXTRA_FLAGS="--force"
           fi
 
+          echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
-            python -X utf8 sync_planning_pipeline.py \
+            python -X utf8 scripts/auth_runner.py sync_planning_pipeline \
               --publish \
               --approval-proposal-id "$APPROVAL_PROPOSAL_ID" \
               --approval-reason "$APPROVAL_REASON" \
               --approved-by "$APPROVED_BY" \
               $EXTRA_FLAGS
           else
-            python -X utf8 sync_planning_pipeline.py --approved-by "$APPROVED_BY" $EXTRA_FLAGS
+            python -X utf8 scripts/auth_runner.py sync_planning_pipeline --approved-by "$APPROVED_BY" $EXTRA_FLAGS
           fi
       - name: Upload planning proposal and audit
         if: always()
