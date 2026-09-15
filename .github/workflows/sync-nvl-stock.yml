@@ -1,6 +1,10 @@
 name: Sync SharePoint NVL Stock
 
 on:
+  schedule:
+    # 06:15 AM VN (UTC+7) = 23:15 UTC ngày trước.
+    # Chạy sau workflow Planning 15 phút để giảm tải đồng thời lên Microsoft Graph.
+    - cron: "15 23 * * *"
   workflow_dispatch:
     inputs:
       publish:
@@ -18,9 +22,11 @@ on:
         required: false
         type: boolean
         default: false
-  push:
-    branches:
-      - feat/sync-nvl-stock
+  repository_dispatch:
+    types:
+      - sharepoint_nvl_updated
+      - nvl_stock_updated
+      - nvl_open_po_updated
 
 permissions:
   contents: read
@@ -64,18 +70,24 @@ jobs:
           rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
 
       - name: Ensure staging copy on SharePoint
-        if: ${{ inputs.ensure_staging_copy }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy }}
         shell: bash
         run: |
           python -X utf8 scripts/ensure_staging_copy.py
 
       - name: Generate NVL proposal or controlled publish
-        if: ${{ !inputs.ensure_staging_copy }}
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) }}
         shell: bash
         env:
-          REQUEST_PUBLISH: ${{ inputs.publish && 'true' || 'false' }}
-          CONFIG_FILE: ${{ inputs.config_file || 'nvl_stock_config.json' }}
+          # Schedule/repository_dispatch là luồng tự động production; workflow_dispatch
+          # vẫn mặc định proposal-only trừ khi người dùng bật publish=true.
+          REQUEST_PUBLISH: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
+          CONFIG_FILE: ${{ (github.event_name == 'workflow_dispatch' && inputs.config_file) || 'nvl_stock_config.json' }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_ACTION: ${{ github.event.action }}
         run: |
+          echo "[NVL] trigger event=$TRIGGER_EVENT action=$TRIGGER_ACTION publish=$REQUEST_PUBLISH config=$CONFIG_FILE"
+
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
             python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
             python -X utf8 sync_nvl_open_po_safe.py --target-config "$CONFIG_FILE" --publish
