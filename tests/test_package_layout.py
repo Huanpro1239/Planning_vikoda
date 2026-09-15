@@ -15,7 +15,7 @@ class PackageLayoutTests(unittest.TestCase):
         import nvl.open_po as open_po
 
         self.assertTrue(callable(stock.run_nvl_sync))
-        self.assertTrue(callable(open_po.read_open_po_by_code))
+        self.assertTrue(callable(open_po.read_open_po))
 
     def test_planning_facade_imports(self):
         import planning.pipeline as pipeline
