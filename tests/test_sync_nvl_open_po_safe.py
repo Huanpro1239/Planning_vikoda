@@ -83,7 +83,7 @@ class SafeOpenPOResolverTests(unittest.TestCase):
     @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_transient_graph_500_is_retried(self, _):
         graph = FakeGraph(failures=1)
-        with patch("sync_nvl_open_po_safe.time.sleep") as mocked_sleep:
+        with patch("sharepoint.client.time.sleep") as mocked_sleep:
             item = resolve_source_item_exact_url(graph, "drive-1", make_config())
         self.assertEqual(item["id"], SOURCE_ITEM_ID)
         self.assertEqual(len(graph.urls), 2)
