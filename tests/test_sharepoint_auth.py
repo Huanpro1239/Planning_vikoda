@@ -1,7 +1,7 @@
 import os
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import sharepoint.auth as auth
 from scripts.auth_runner import run_module
@@ -81,13 +81,14 @@ class SharePointAuthTests(unittest.TestCase):
             self.assertEqual(auth.get_access_token(), "legacy")
         legacy.assert_called_once()
 
-    def test_auth_runner_patches_before_target_import(self):
+    def test_auth_runner_patches_before_target_import_and_restores_provider(self):
         fake_target = types.ModuleType("fake_target_auth_test")
         captured = {}
+        import sync_stock
+        original = sync_stock.get_access_token
 
         def fake_import(name):
             if name == "fake_target_auth_test":
-                import sync_stock
                 captured["provider"] = sync_stock.get_access_token
                 fake_target.main = lambda: 0
                 return fake_target
@@ -98,6 +99,32 @@ class SharePointAuthTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIs(captured["provider"], auth.get_access_token)
+        self.assertIs(sync_stock.get_access_token, original)
+
+    def test_auth_runner_bridges_legacy_secret_precheck_only_during_oidc_run(self):
+        fake_target = types.ModuleType("fake_target_secret_check")
+        observed = {}
+
+        def fake_import(name):
+            if name == "fake_target_secret_check":
+                observed["during_import"] = os.environ.get("MS_CLIENT_SECRET")
+
+                def target_main():
+                    observed["during_main"] = os.environ.get("MS_CLIENT_SECRET")
+                    return 0
+
+                fake_target.main = target_main
+                return fake_target
+            return __import__(name)
+
+        with (
+            patch.dict(os.environ, {"MS_AUTH_MODE": "oidc"}, clear=True),
+            patch("scripts.auth_runner.importlib.import_module", side_effect=fake_import),
+        ):
+            self.assertEqual(run_module("fake_target_secret_check", []), 0)
+            self.assertEqual(observed["during_import"], "__OIDC_AUTH_PROVIDER_ACTIVE__")
+            self.assertEqual(observed["during_main"], "__OIDC_AUTH_PROVIDER_ACTIVE__")
+            self.assertNotIn("MS_CLIENT_SECRET", os.environ)
 
 
 if __name__ == "__main__":
