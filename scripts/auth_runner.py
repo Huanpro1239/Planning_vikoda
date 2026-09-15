@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 import sys
 
@@ -21,6 +22,20 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+_OIDC_COMPAT_SENTINEL = "__OIDC_AUTH_PROVIDER_ACTIVE__"
+
+
+def _oidc_mode_active() -> bool:
+    mode = str(os.environ.get("MS_AUTH_MODE", "secret")).strip().casefold()
+    if mode == "oidc":
+        return True
+    if mode == "auto":
+        return bool(
+            str(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")).strip()
+            and str(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")).strip()
+        )
+    return False
 
 
 def run_module(module_name: str, argv: list[str] | None = None):
@@ -31,6 +46,17 @@ def run_module(module_name: str, argv: list[str] | None = None):
     # inside the target captures the canonical provider.
     original_provider = sync_stock.get_access_token
     sync_stock.get_access_token = get_access_token
+
+    # Một helper legacy (survey NVL) từng check sự tồn tại của MS_CLIENT_SECRET
+    # trước khi gọi get_access_token(). Khi chạy OIDC, đặt sentinel chỉ trong process
+    # để vượt pre-check cũ. Canonical auth không đọc sentinel ở oidc mode và runner
+    # luôn khôi phục environment sau khi target kết thúc.
+    secret_was_present = "MS_CLIENT_SECRET" in os.environ
+    original_secret = os.environ.get("MS_CLIENT_SECRET")
+    compat_secret_set = False
+    if _oidc_mode_active() and not str(original_secret or "").strip():
+        os.environ["MS_CLIENT_SECRET"] = _OIDC_COMPAT_SENTINEL
+        compat_secret_set = True
 
     old_argv = sys.argv
     try:
@@ -46,6 +72,11 @@ def run_module(module_name: str, argv: list[str] | None = None):
         # Quan trọng cho test/in-process tooling. Các target đã import provider mới
         # vào namespace riêng; production CLI cũng kết thúc ngay sau main().
         sync_stock.get_access_token = original_provider
+        if compat_secret_set:
+            if secret_was_present:
+                os.environ["MS_CLIENT_SECRET"] = original_secret or ""
+            else:
+                os.environ.pop("MS_CLIENT_SECRET", None)
 
 
 def main() -> int:
