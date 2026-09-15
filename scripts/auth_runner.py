@@ -29,19 +29,23 @@ def run_module(module_name: str, argv: list[str] | None = None):
 
     # Patch before importing the target so ``from sync_stock import get_access_token``
     # inside the target captures the canonical provider.
+    original_provider = sync_stock.get_access_token
     sync_stock.get_access_token = get_access_token
-
-    module = importlib.import_module(module_name)
-    main = getattr(module, "main", None)
-    if not callable(main):
-        raise RuntimeError(f"Module {module_name!r} không có hàm main() callable.")
 
     old_argv = sys.argv
     try:
+        module = importlib.import_module(module_name)
+        main = getattr(module, "main", None)
+        if not callable(main):
+            raise RuntimeError(f"Module {module_name!r} không có hàm main() callable.")
+
         sys.argv = [module_name, *(argv or [])]
         return main()
     finally:
         sys.argv = old_argv
+        # Quan trọng cho test/in-process tooling. Các target đã import provider mới
+        # vào namespace riêng; production CLI cũng kết thúc ngay sau main().
+        sync_stock.get_access_token = original_provider
 
 
 def main() -> int:
