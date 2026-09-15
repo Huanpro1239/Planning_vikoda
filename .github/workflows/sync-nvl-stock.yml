@@ -61,7 +61,7 @@ jobs:
 
       - name: Clean test artifacts from workspace
         run: |
-          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
 
       - name: Ensure staging copy on SharePoint
         if: ${{ inputs.ensure_staging_copy }}
@@ -78,8 +78,10 @@ jobs:
         run: |
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
             python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
+            python -X utf8 sync_nvl_open_po.py --target-config "$CONFIG_FILE" --publish
           else
             python -X utf8 scripts/survey_nvl_sharepoint.py --config "$CONFIG_FILE"
+            python -X utf8 sync_nvl_open_po.py --target-config "$CONFIG_FILE"
           fi
 
       - name: Upload NVL proposal and report audit
@@ -90,6 +92,8 @@ jobs:
           path: |
             nvl_stock_proposal.xlsx
             nvl_stock_report.json
+            nvl_open_po_proposal.xlsx
+            nvl_open_po_report.json
             audit_summary.json
             staging_copy_info.json
             official_backup_*
