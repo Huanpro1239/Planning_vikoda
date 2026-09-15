@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: sharepoint-nvl-stock-sync
@@ -43,7 +44,9 @@ jobs:
     env:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      # Giữ secret trong giai đoạn chuyển tiếp; xóa sau khi OIDC production đã verify.
       MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'secret' }}
 
     steps:
       - name: Checkout repository
@@ -73,7 +76,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy }}
         shell: bash
         run: |
-          python -X utf8 scripts/ensure_staging_copy.py
+          echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
+          python -X utf8 scripts/auth_runner.py scripts.ensure_staging_copy
 
       - name: Generate NVL proposal or controlled publish
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) }}
@@ -87,13 +91,14 @@ jobs:
           TRIGGER_ACTION: ${{ github.event.action }}
         run: |
           echo "[NVL] trigger event=$TRIGGER_EVENT action=$TRIGGER_ACTION publish=$REQUEST_PUBLISH config=$CONFIG_FILE"
+          echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
 
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
-            python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
-            python -X utf8 sync_nvl_open_po_safe.py --target-config "$CONFIG_FILE" --publish
+            python -X utf8 scripts/auth_runner.py sync_nvl_stock --config "$CONFIG_FILE" --publish
+            python -X utf8 scripts/auth_runner.py sync_nvl_open_po_safe --target-config "$CONFIG_FILE" --publish
           else
-            python -X utf8 scripts/survey_nvl_sharepoint.py --config "$CONFIG_FILE"
-            python -X utf8 sync_nvl_open_po_safe.py --target-config "$CONFIG_FILE"
+            python -X utf8 scripts/auth_runner.py scripts.survey_nvl_sharepoint --config "$CONFIG_FILE"
+            python -X utf8 scripts/auth_runner.py sync_nvl_open_po_safe --target-config "$CONFIG_FILE"
           fi
 
       - name: Upload NVL proposal and report audit
