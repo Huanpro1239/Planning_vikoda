@@ -25,8 +25,7 @@ on:
 
 permissions:
   contents: write
-  # Cho phép GitHub runner xin OIDC JWT. Auth mode vẫn mặc định `secret`
-  # cho đến khi Federated Credential bên Entra được cấu hình và MS_AUTH_MODE=oidc.
+  # Production auth uses GitHub OIDC -> Microsoft Entra federated credential.
   id-token: write
 
 concurrency:
@@ -41,16 +40,14 @@ jobs:
     env:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
-      # Giữ secret trong giai đoạn chuyển tiếp; xóa sau khi OIDC production đã verify.
-      MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
-      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'secret' }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -92,9 +89,10 @@ jobs:
           else
             python -X utf8 scripts/auth_runner.py sync_planning_pipeline --approved-by "$APPROVED_BY" $EXTRA_FLAGS
           fi
+
       - name: Upload planning proposal and audit
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: planning-audit-${{ github.run_id }}
           path: |
