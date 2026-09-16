@@ -44,16 +44,14 @@ jobs:
     env:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
-      # Giữ secret trong giai đoạn chuyển tiếp; xóa sau khi OIDC production đã verify.
-      MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
-      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'secret' }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -103,7 +101,7 @@ jobs:
 
       - name: Upload NVL proposal and report audit
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nvl-audit-${{ github.run_id }}
           path: |
