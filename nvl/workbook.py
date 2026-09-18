@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import hashlib
 import re
 from typing import Any
 import zipfile
