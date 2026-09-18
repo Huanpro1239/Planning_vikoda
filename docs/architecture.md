@@ -28,3 +28,12 @@ docs/         # architecture, review history, runbooks
 - Phase C: migrate NVL modules.
 - Phase D: migrate planning modules.
 - Phase E: xóa compatibility shim sau khi workflow/tests không còn phụ thuộc.
+
+
+## Repository hygiene
+
+- `scripts/` chỉ chứa công cụ vận hành/audit dùng cho production hoặc support.
+- `scripts/dev/` chứa công cụ chẩn đoán thủ công dành cho developer.
+- `docs/archive/` chứa kế hoạch/review lịch sử; không để tài liệu tạm ở repository root.
+- Package canonical không dùng `import *`; chỉ export API ổn định qua `__all__`.
+- CI compile toàn bộ repository trước khi chạy unit tests.
