@@ -22,7 +22,7 @@ MASTER_SHEET = "Danh_muc"
 START_COLUMN = 19  # S
 EPS = 1e-6
 BALANCE_EPS = 1e-5
-ENGINE_VERSION = "ke_hoach_sx_tuan_v5_khsx_ki_20260908"
+ENGINE_VERSION = "ke_hoach_sx_tuan_v6_khsx_ki_20260909"
 
 
 @dataclass(frozen=True)

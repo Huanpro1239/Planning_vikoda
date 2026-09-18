@@ -897,12 +897,22 @@ class KHSXKiTests(unittest.TestCase):
         self.assertEqual(ki._detect_current_layout(ws5), 10)
         wb5.close()
 
-        # Trường hợp 3: Tiêu đề dòng 6 bị xóa sạch (None)
+        # Trường hợp 3a: Tiêu đề dòng 6 bị xóa sạch (None) và không có dữ liệu SKU nào trong bảng
+        # -> Thiếu bằng chứng hoàn toàn, phải từ chối rõ ràng bằng RuntimeError thay vì tự đoán 10
         raw5_blank = make_mock_khsx_ki_workbook(year=2026, month=9)
         wb_blank = load_workbook(BytesIO(raw5_blank))
         ws_blank = wb_blank["KHSX_ki"]
         ws_blank["J6"].value = None
         ws_blank["K6"].value = None
+        with self.assertRaises(RuntimeError) as ctx:
+            ki._detect_current_layout(ws_blank)
+        self.assertIn("KHSX_ki", str(ctx.exception))
+        self.assertIn("J6", str(ctx.exception))
+        self.assertIn("K6", str(ctx.exception))
+
+        # Trường hợp 3b: Tiêu đề dòng 6 bị xóa sạch (None) nhưng cột 10 có dữ liệu SKU trong bảng
+        # -> Phân giải an toàn thành 10 dựa trên bằng chứng nội bộ dòng SKU
+        ws_blank["J7"].value = 86400
         self.assertEqual(ki._detect_current_layout(ws_blank), 10)
         wb_blank.close()
 
@@ -923,7 +933,290 @@ class KHSXKiTests(unittest.TestCase):
         self.assertIn("KHSX_ki", err_msg)
         self.assertIn("J7:K7", err_msg)
 
+    # =========================================================================
+    # BỘ 8 REGRESSION TESTS: NHẬN DIỆN BỐ CỤC THEO DÒNG SKU VÀ BẢO TOÀN DỮ LIỆU
+    # =========================================================================
+
+    def test_regression_1_ambiguous_header_with_and_without_footer_notes(self):
+        """[Yêu cầu 1] Tiêu đề tổng mâu thuẫn (J6='Tổng cộng', K6='Tổng cộng'):
+        Kết quả nhận diện và định dạng không bị ảnh hưởng bởi ghi chú K35 dưới bảng."""
+        results = []
+        for note in (None, "Ghi chú cần giữ"):
+            wb = load_workbook(BytesIO(make_mock_khsx_ki_workbook()))
+            ws = wb["KHSX_ki"]
+            ws["J6"] = "Tổng cộng"
+            ws["K6"] = "Tổng cộng"
+            ws["K35"] = note
+            detected = ki._detect_current_layout(ws)
+            # Không có dữ liệu SKU ở cột K -> detector phải trả về 10
+            self.assertEqual(detected, 10, f"Detector phải trả về 10 khi note={note!r}")
+
+            buf = BytesIO()
+            wb.save(buf)
+            wb.close()
+
+            out, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+            ver = ki.verify_khsx_ki(out, plan_year=2026, plan_month=11)
+            self.assertTrue(ver["ok"], f"Verifier phải pass khi note={note!r}")
+
+            wb_out = load_workbook(BytesIO(out))
+            ws_out = wb_out["KHSX_ki"]
+            results.append({
+                "note": note,
+                "detected": detected,
+                "K7_bold": ws_out["K7"].font.bold,
+                "K7_num_fmt": ws_out["K7"].number_format,
+                "K_width": ws_out.column_dimensions["K"].width,
+                "K35_val": ws_out["K35"].value,
+            })
+            wb_out.close()
+
+        # Cả hai trường hợp (có/không có ghi chú K35) phải cho kết quả định dạng giống hệt nhau
+        r_none, r_note = results[0], results[1]
+        self.assertEqual(r_none["detected"], r_note["detected"])
+        self.assertTrue(r_none["K7_bold"])
+        self.assertTrue(r_note["K7_bold"])
+        self.assertEqual(r_none["K7_num_fmt"], "#,##0")
+        self.assertEqual(r_note["K7_num_fmt"], "#,##0")
+        self.assertEqual(r_none["K_width"], 17.0)
+        self.assertEqual(r_note["K_width"], 17.0)
+        self.assertEqual(r_note["K35_val"], "Ghi chú cần giữ")
+
+    def test_regression_2_corrupt_header_with_sum_formula_in_footer(self):
+        """[Yêu cầu 2] Tiêu đề tổng bị xóa, có công thức =SUM(...) ở phần ghi chú dưới bảng.
+        Detector không được để =SUM ngoài bảng đánh lừa thành cột 11."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["J6"].value = None
+        ws["K6"].value = None
+
+        # Dòng SKU trong bảng (dòng 7): Cột 10 có công thức tổng SKU =SUM(E7:I7), Cột 11 trống
+        ws["J7"].value = "=SUM(E7:I7)"
+        ws["K7"].value = None
+
+        # Ghi chú dưới bảng (dòng 35): Cột 11 có công thức =SUM ngoài bảng
+        ws["K35"].value = "=SUM(K1:K10)"
+
+        # Detector chỉ dùng SKU rows, bỏ qua K35 -> nhận diện đúng cột 10
+        self.assertEqual(ki._detect_current_layout(ws), 10)
+
+        # Nếu trong bảng không có công thức SUM và không có dữ liệu SKU ở cả 10 và 11:
+        # K35 có =SUM cũng KHÔNG được làm detector đoán sai thành 11 -> phải từ chối rõ ràng
+        ws["J7"].value = None
+        with self.assertRaises(RuntimeError) as ctx:
+            ki._detect_current_layout(ws)
+        self.assertIn("KHSX_ki", str(ctx.exception))
+        wb.close()
+
+    def test_regression_3_variable_sku_count_small_and_large(self):
+        """[Yêu cầu 3] Số SKU ít (2 SKUs) và lớn hơn 30 (40 SKUs):
+        Dòng tổng và ghi chú thay đổi vị trí, detector vẫn nhận diện chính xác."""
+        # 1. Ít SKU (2 SKUs, dòng tổng = 9, ghi chú = 35)
+        raw_small = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb_small = load_workbook(BytesIO(raw_small))
+        ws_small = wb_small["KHSX_ki"]
+        ws_small["J6"] = "Tổng cộng"
+        ws_small["K6"] = "Tổng cộng"
+        ws_small["K35"] = "Note 35"
+        self.assertEqual(ki._detect_current_layout(ws_small), 10)
+        wb_small.close()
+
+        # 2. Lớn hơn 30 SKU: tạo fixture 40 SKUs (dòng SKU từ 7 đến 46, dòng tổng = 47, ghi chú = 55)
+        large_skus = [
+            {"code": 130100000 + i, "name": f"SP_{i:02d}", "uom": "Thùng", "p": 1000.0 * i, "daily": [1000.0 * i] + [0.0] * 29}
+            for i in range(1, 41)
+        ]
+        # Không dùng merge dòng 31 mặc định vì bảng 40 SKU kéo dài đến dòng 47; đặt merge ở dòng 55
+        raw_large = make_mock_khsx_ki_workbook(skus=large_skus, year=2026, month=9, with_merges=False)
+        wb_large = load_workbook(BytesIO(raw_large))
+        ws_large = wb_large["KHSX_ki"]
+        ws_large["J6"] = "Tổng cộng"
+        ws_large["K6"] = "Tổng cộng"
+        # Đặt dữ liệu ở dòng 46 (SKU thứ 40) cột 10
+        ws_large["J46"].value = 40000.0
+        ws_large["K46"].value = None
+        # Đặt ghi chú và merge ở dòng 55 (dưới dòng tổng 47, ngoài khoảng quét 30 dòng cũ)
+        ws_large["K55"] = "Ghi chú ngoài bảng dòng 55"
+        ws_large["I55"] = "TP.KẾ HOẠCH"
+        ws_large.merge_cells("I55:J55")
+
+        # Detector phải duyệt qua toàn bộ 40 SKU và bỏ qua dòng 55
+        self.assertEqual(ki._detect_current_layout(ws_large), 10)
+
+        # Patch sang tháng 11 (6 tuần) thành công với 40 SKUs
+        buf = BytesIO()
+        wb_large.save(buf)
+        wb_large.close()
+        out_large, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        ver_large = ki.verify_khsx_ki(out_large, plan_year=2026, plan_month=11)
+        self.assertTrue(ver_large["ok"])
+
+        # Kiểm tra ghi chú K55 và ô merge I55:J55 được bảo toàn
+        wb_res = load_workbook(BytesIO(out_large))
+        self.assertEqual(wb_res["KHSX_ki"]["K55"].value, "Ghi chú ngoài bảng dòng 55")
+        self.assertEqual(wb_res["KHSX_ki"]["I55"].value, "TP.KẾ HOẠCH")
+        wb_res.close()
+
+    def test_regression_4_zero_quantity_distinguished_from_empty(self):
+        """[Yêu cầu 4] Dữ liệu SKU bằng 0 (0 hoặc 0.0) phải được phân biệt với ô trống (None / '')."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        ws["J6"].value = None
+        ws["K6"].value = None
+
+        # Trường hợp 4a: Cột 10 có giá trị 0 (sản lượng = 0), Cột 11 hoàn toàn là None
+        ws["J7"].value = 0
+        ws["K7"].value = None
+        ws["J8"].value = 0.0
+        ws["K8"].value = ""
+        # 0 và 0.0 là dữ liệu thực sự -> Cột 10 có dữ liệu, Cột 11 không có -> nhận diện 10
+        self.assertEqual(ki._detect_current_layout(ws), 10)
+
+        # Trường hợp 4b: Cột 11 có giá trị 0, Cột 10 có giá trị 0 (bố cục 6 tuần)
+        ws["K7"].value = 0
+        self.assertEqual(ki._detect_current_layout(ws), 11)
+        wb.close()
+
+    def test_regression_5_identical_tables_differing_external_notes_have_identical_outcome(self):
+        """[Yêu cầu 5] Hai workbook có cùng nội dung trong bảng nhưng khác ghi chú ngoài bảng
+        phải có cùng kết quả nhận diện hoặc cùng lỗi mơ hồ."""
+        raw_base = make_mock_khsx_ki_workbook(year=2026, month=9)
+
+        # Kịch bản A: Tiêu đề mâu thuẫn (J6='Tổng cộng', K6='Tổng cộng')
+        wb1 = load_workbook(BytesIO(raw_base))
+        ws1 = wb1["KHSX_ki"]
+        ws1["J6"] = "Tổng cộng"
+        ws1["K6"] = "Tổng cộng"
+
+        wb2 = load_workbook(BytesIO(raw_base))
+        ws2 = wb2["KHSX_ki"]
+        ws2["J6"] = "Tổng cộng"
+        ws2["K6"] = "Tổng cộng"
+        # wb2 có rất nhiều ghi chú ngoài bảng
+        ws2["K35"] = "Ghi chú 1"
+        ws2["K36"] = 12345
+        ws2["K37"] = "=SUM(K1:K10)"
+        ws2["I38"] = "Ghi chú I"
+
+        self.assertEqual(ki._detect_current_layout(ws1), ki._detect_current_layout(ws2))
+        self.assertEqual(ki._detect_current_layout(ws1), 10)
+        wb1.close()
+        wb2.close()
+
+        # Kịch bản B: Tiêu đề bị xóa và thiếu bằng chứng nội bộ -> Cả hai đều phải raise RuntimeError
+        wb1_blank = load_workbook(BytesIO(raw_base))
+        ws1_b = wb1_blank["KHSX_ki"]
+        ws1_b["J6"] = None
+        ws1_b["K6"] = None
+
+        wb2_blank = load_workbook(BytesIO(raw_base))
+        ws2_b = wb2_blank["KHSX_ki"]
+        ws2_b["J6"] = None
+        ws2_b["K6"] = None
+        ws2_b["K35"] = "=SUM(K1:K10)"
+
+        with self.assertRaises(RuntimeError):
+            ki._detect_current_layout(ws1_b)
+        with self.assertRaises(RuntimeError):
+            ki._detect_current_layout(ws2_b)
+        wb1_blank.close()
+        wb2_blank.close()
+
+    def test_regression_6_insufficient_evidence_rejected_with_clear_error(self):
+        """[Yêu cầu 6] Trường hợp thiếu bằng chứng phải bị từ chối rõ ràng bằng RuntimeError
+        kèm tên sheet và vị trí ô tiêu đề."""
+        raw = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw))
+        ws = wb["KHSX_ki"]
+        ws["J6"] = "Ghi chú không rõ"
+        ws["K6"] = "Tùy ý"
+
+        with self.assertRaises(RuntimeError) as ctx:
+            ki._detect_current_layout(ws)
+
+        msg = str(ctx.exception)
+        self.assertIn("KHSX_ki", msg)
+        self.assertIn("J6", msg)
+        self.assertIn("K6", msg)
+        self.assertIn("không đủ bằng chứng", msg.lower())
+        wb.close()
+
+    def test_regression_7_valid_layouts_and_transitions_4_5_6_weeks(self):
+        """[Yêu cầu 7] Bố cục hợp lệ 4/5/6 tuần và các chuỗi chuyển đổi 5->6->6->5 và 4->6->4 vẫn đúng."""
+        # Chuỗi 1: Tháng 9/2026 (5 tuần) -> Tháng 11/2026 (6 tuần) -> Tháng 8/2026 (6 tuần) -> Tháng 9/2026 (5 tuần)
+        raw = make_mock_khsx_ki_workbook(year=2026, month=9)
+
+        # 5 -> 6 (Tháng 11/2026: 6 tuần)
+        out11, _ = ki.patch_khsx_ki_workbook(raw, plan_year=2026, plan_month=11)
+        ver11 = ki.verify_khsx_ki(out11, plan_year=2026, plan_month=11)
+        self.assertTrue(ver11["ok"])
+        self.assertEqual(ver11["num_weeks"], 6)
+
+        # 6 -> 6 (Tháng 8/2026: 6 tuần)
+        out08, _ = ki.patch_khsx_ki_workbook(out11, plan_year=2026, plan_month=8)
+        ver08 = ki.verify_khsx_ki(out08, plan_year=2026, plan_month=8)
+        self.assertTrue(ver08["ok"])
+        self.assertEqual(ver08["num_weeks"], 6)
+
+        # 6 -> 5 (Tháng 9/2026: 5 tuần)
+        out09, _ = ki.patch_khsx_ki_workbook(out08, plan_year=2026, plan_month=9)
+        ver09 = ki.verify_khsx_ki(out09, plan_year=2026, plan_month=9)
+        self.assertTrue(ver09["ok"])
+        self.assertEqual(ver09["num_weeks"], 5)
+
+        # Chuỗi 2: Tháng 2/2026 (4 tuần) -> Tháng 11/2026 (6 tuần) -> Tháng 2/2027 (4 tuần)
+        raw_feb = make_mock_khsx_ki_workbook(year=2026, month=2)
+        out_feb_to_nov, _ = ki.patch_khsx_ki_workbook(raw_feb, plan_year=2026, plan_month=11)
+        ver_f2n = ki.verify_khsx_ki(out_feb_to_nov, plan_year=2026, plan_month=11)
+        self.assertTrue(ver_f2n["ok"])
+        self.assertEqual(ver_f2n["num_weeks"], 6)
+
+        out_nov_to_feb, _ = ki.patch_khsx_ki_workbook(out_feb_to_nov, plan_year=2027, plan_month=2)
+        ver_n2f = ki.verify_khsx_ki(out_nov_to_feb, plan_year=2027, plan_month=2)
+        self.assertTrue(ver_n2f["ok"])
+        self.assertEqual(ver_n2f["num_weeks"], 4)
+
+    def test_regression_8_preserves_external_notes_formulas_and_quantities(self):
+        """[Yêu cầu 8] Kiểm tra cả sản lượng, định dạng cột tổng và bảo toàn ghi chú/công thức ngoài bảng."""
+        raw5 = make_mock_khsx_ki_workbook(year=2026, month=9)
+        wb = load_workbook(BytesIO(raw5))
+        ws = wb["KHSX_ki"]
+        # Thêm ghi chú, công thức và merge ngoài bảng
+        ws["K35"] = "Ghi chú của người lập kế hoạch"
+        ws["K36"] = "=SUM(E9:I9)*2"
+        ws["L35"] = "Phòng KH"
+        ws.cell(31, 9).value = "TP.KẾ HOẠCH"
+
+        buf = BytesIO()
+        wb.save(buf)
+        wb.close()
+
+        # Patch sang tháng 11/2026 (6 tuần)
+        out, _ = ki.patch_khsx_ki_workbook(buf.getvalue(), plan_year=2026, plan_month=11)
+        ver = ki.verify_khsx_ki(out, plan_year=2026, plan_month=11)
+        self.assertTrue(ver["ok"])
+
+        # Kiểm tra workbook đầu ra
+        wb_res = load_workbook(BytesIO(out))
+        ws_res = wb_res["KHSX_ki"]
+
+        # 1. Sản lượng tuần và tổng sản lượng:
+        # SKU 1: Đảnh Thạnh chanh (130100011) có tổng = 86400
+        self.assertEqual(ws_res["K7"].value, 86400.0)
+        self.assertTrue(ws_res["K7"].font.bold)
+        self.assertEqual(ws_res["K7"].number_format, "#,##0")
+        self.assertEqual(ws_res.column_dimensions["K"].width, 17.0)
+
+        # 2. Bảo toàn tuyệt đối nội dung ngoài bảng:
+        self.assertEqual(ws_res["K35"].value, "Ghi chú của người lập kế hoạch")
+        self.assertEqual(ws_res["K36"].value, "=SUM(E9:I9)*2")
+        self.assertEqual(ws_res["L35"].value, "Phòng KH")
+        self.assertEqual(ws_res.cell(31, 9).value, "TP.KẾ HOẠCH")
+
+        wb_res.close()
+
 
 if __name__ == "__main__":
     unittest.main()
-
