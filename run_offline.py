@@ -23,8 +23,8 @@ import hashlib
 import json
 from pathlib import Path
 
-import sync_planning_metrics as metrics
-from planning_pipeline import SOURCE_KEYS, prepare_pipeline_output
+from planning import metrics
+from planning.pipeline import SOURCE_KEYS, prepare_pipeline_output
 from planning_schedule_report import print_operational_report, save_schedule_report
 
 

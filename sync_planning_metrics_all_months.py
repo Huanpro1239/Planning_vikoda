@@ -1,7 +1,7 @@
 import calendar
 from datetime import datetime, timedelta
 
-import sync_planning_metrics as metrics
+from planning import metrics
 import sync_planning_metrics_compat as compat
 import sync_planning_metrics_direct  # noqa: F401 - installs No kho / Leadtime runtime hooks
 

@@ -4,7 +4,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-import sync_planning_metrics as metrics
+from planning import metrics
 import sync_planning_metrics_compat as compat
 
 

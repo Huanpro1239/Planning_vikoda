@@ -8,9 +8,9 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from graph_retry import install_retry_after_support, retry_delay_seconds as retry_wait_seconds
-from planning_pipeline import prepare_pipeline_output
+from planning.pipeline import prepare_pipeline_output
 from planning_schedule_report import print_operational_report, save_schedule_report
-import sync_planning_metrics as metrics
+from planning import metrics
 import sync_stock
 from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
 
