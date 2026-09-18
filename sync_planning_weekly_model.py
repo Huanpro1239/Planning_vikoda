@@ -570,9 +570,9 @@ def verify_weekly_workbook(workbook_bytes: bytes, *, schedule_report: dict[str, 
         )
 
     khsx_ki_verify = None
-    import sync_planning_khsx_ki
-    if sync_planning_khsx_ki.has_khsx_ki_sheet(workbook_bytes):
-        khsx_ki_verify = sync_planning_khsx_ki.verify_khsx_ki(
+    from planning import khsx_ki
+    if khsx_ki.has_khsx_ki_sheet(workbook_bytes):
+        khsx_ki_verify = khsx_ki.verify_khsx_ki(
             workbook_bytes,
             plan_year=plan_year,
             plan_month=plan_month,

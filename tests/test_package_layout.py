@@ -52,6 +52,7 @@ class PackageLayoutTests(unittest.TestCase):
             {"SOURCE_KEYS", "prepare_pipeline_output"},
         )
         self.assertTrue(callable(pipeline.prepare_pipeline_output))
+        self.assertTrue(hasattr(pipeline, "_planning_snapshot"))
 
 
 if __name__ == "__main__":

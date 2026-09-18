@@ -7,7 +7,7 @@ import unittest
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
-import sync_planning_khsx_ki as ki
+from planning import khsx_ki as ki
 from sync_planning_weekly_model import ENGINE_VERSION, compute_planning_inputs_hash
 
 AUDIT_SNAPSHOT = Path("temp_audit/survey_run_34190029619/planning_proposal.xlsx")
@@ -247,7 +247,7 @@ class KHSXKiTests(unittest.TestCase):
 
     def test_pipeline_integration_with_khsx_ki(self):
         """Kiểm tra toàn bộ luồng prepare_pipeline_output khi workbook có sheet KHSX_ki."""
-        from planning_pipeline import prepare_pipeline_output
+        from planning.pipeline import prepare_pipeline_output
         from tests.test_run_offline import (
             _actual_source,
             _single_value_source,

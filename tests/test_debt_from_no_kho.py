@@ -4,7 +4,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-import sync_planning_metrics as metrics
+from planning import metrics
 from sync_planning_metrics_direct import (
     calculate_metrics_from_no_kho,
     read_debt_from_no_kho,

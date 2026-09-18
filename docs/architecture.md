@@ -74,3 +74,17 @@ sync_stock.py -----------^  (compatibility re-export only)
 
 `scripts/auth_runner.py` is now a pure module runner. It must not monkey-patch auth
 providers or inject an `MS_CLIENT_SECRET` sentinel.
+
+
+## Canonical Planning dependency
+
+Planning implementations now live under the `planning/` package:
+
+- `planning/metrics.py`: planning metrics/state/read-patch implementation.
+- `planning/khsx_ki.py`: KHSX_ki weekly aggregation and verification.
+- `planning/pipeline.py`: pure proposal-building pipeline.
+
+Root files `sync_planning_metrics.py`, `sync_planning_khsx_ki.py` and
+`planning_pipeline.py` are compatibility shims only. Runtime modules and tests
+must use `planning.*` directly so mutable runtime hooks (leadtime/debt/all-month
+overrides) operate on a single module instance.
