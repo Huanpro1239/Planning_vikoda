@@ -9,8 +9,10 @@ from typing import Any
 import zipfile
 
 from lxml import etree
+from openpyxl import load_workbook
 from openpyxl.utils.cell import get_column_letter, range_boundaries
 
+from excel.openpyxl_io import safe_close_workbook
 from excel.workbook_xml import column_number, find_sheet_xml_path, set_numeric_cell
 from nvl.models import NVLConfig, NVLReconcileResult
 from nvl.values import EPS, _cells_match
@@ -433,7 +435,7 @@ def verify_nvl_patched_workbook(
                     f"Ô giữ nguyên (mã thiếu nguồn) tại dòng {row} bị thay đổi: cũ {expected!r}, mới {actual!r}."
                 )
     finally:
-        _safe_close_workbook(wb)
+        safe_close_workbook(wb)
 
     return {
         "ok": True,
