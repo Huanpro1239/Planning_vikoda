@@ -108,11 +108,8 @@ class RepoHygieneTests(unittest.TestCase):
                 offenders.append("from sync_stock")
         self.assertEqual(offenders, [], "sharepoint.client không được phụ thuộc legacy sync_stock")
 
-    def test_auth_runner_has_no_auth_monkey_patch_or_secret_sentinel(self):
-        text = (ROOT / "scripts" / "auth_runner.py").read_text(encoding="utf-8")
-        self.assertNotIn("sync_stock.get_access_token =", text)
-        self.assertNotIn("__OIDC_AUTH_PROVIDER_ACTIVE__", text)
-        self.assertNotIn('MS_CLIENT_SECRET"] =', text)
+    def test_auth_runner_is_removed(self):
+        self.assertFalse((ROOT / "scripts" / "auth_runner.py").exists())
 
 
     def test_planning_runtime_uses_canonical_modules(self):
@@ -121,11 +118,7 @@ class RepoHygieneTests(unittest.TestCase):
             "sync_planning_khsx_ki",
             "planning_pipeline",
         }
-        shim_paths = {
-            ROOT / "sync_planning_metrics.py",
-            ROOT / "sync_planning_khsx_ki.py",
-            ROOT / "planning_pipeline.py",
-        }
+        shim_paths = set()
         offenders = []
         for path in sorted(ROOT.rglob("*.py")):
             if path in shim_paths:
@@ -148,18 +141,14 @@ class RepoHygieneTests(unittest.TestCase):
             "Planning runtime/test phải dùng planning.* canonical: " + "; ".join(offenders),
         )
 
-    def test_legacy_planning_root_modules_are_thin(self):
-        limits = {
-            "sync_planning_metrics.py": 40,
-            "sync_planning_khsx_ki.py": 40,
-            "planning_pipeline.py": 40,
-        }
-        oversized = []
-        for name, limit in limits.items():
-            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
-            if count >= limit:
-                oversized.append(f"{name}={count} dòng")
-        self.assertEqual(oversized, [], "Planning compatibility shim bị phình lại: " + "; ".join(oversized))
+    def test_legacy_planning_root_modules_are_removed(self):
+        legacy = [
+            ROOT / "sync_planning_metrics.py",
+            ROOT / "sync_planning_khsx_ki.py",
+            ROOT / "planning_pipeline.py",
+        ]
+        leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
+        self.assertEqual(leftovers, [], "Planning shim cũ vẫn còn: " + ", ".join(leftovers))
 
 
 if __name__ == "__main__":

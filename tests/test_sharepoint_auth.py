@@ -1,10 +1,8 @@
 import os
-import types
 import unittest
 from unittest.mock import patch
 
 import sharepoint.auth as auth
-from scripts.auth_runner import run_module
 
 
 class FakeResponse:
@@ -85,35 +83,6 @@ class SharePointAuthTests(unittest.TestCase):
         import sync_stock
         self.assertIs(sync_stock.get_access_token, auth.get_access_token)
 
-    def test_auth_runner_does_not_patch_provider_or_inject_secret(self):
-        fake_target = types.ModuleType("fake_target_auth_test")
-        observed = {}
-        import sync_stock
-
-        def fake_import(name):
-            if name == "fake_target_auth_test":
-                observed["provider"] = sync_stock.get_access_token
-                observed["secret_during_import"] = os.environ.get("MS_CLIENT_SECRET")
-
-                def target_main():
-                    observed["secret_during_main"] = os.environ.get("MS_CLIENT_SECRET")
-                    return 0
-
-                fake_target.main = target_main
-                return fake_target
-            return __import__(name)
-
-        with (
-            patch.dict(os.environ, {"MS_AUTH_MODE": "oidc"}, clear=True),
-            patch("scripts.auth_runner.importlib.import_module", side_effect=fake_import),
-        ):
-            result = run_module("fake_target_auth_test", [])
-
-        self.assertEqual(result, 0)
-        self.assertIs(observed["provider"], auth.get_access_token)
-        self.assertIsNone(observed["secret_during_import"])
-        self.assertIsNone(observed["secret_during_main"])
-        self.assertNotIn("MS_CLIENT_SECRET", os.environ)
 
 
 if __name__ == "__main__":

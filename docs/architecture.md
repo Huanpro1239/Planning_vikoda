@@ -1,6 +1,6 @@
 # Kiến trúc mục tiêu
 
-Repo đang được refactor theo hướng tách nghiệp vụ khỏi hạ tầng nhưng vẫn giữ backward compatibility cho workflow production.
+Repo đã hoàn tất các bước refactor chính theo hướng tách nghiệp vụ khỏi hạ tầng; workflow production dùng trực tiếp các entrypoint hiện hành.
 
 ```text
 planning/     # planning engine, scheduling, proposal/publish orchestration
@@ -16,10 +16,10 @@ docs/         # architecture, review history, runbooks
 ## Quy tắc migrate
 
 1. Không đổi nghiệp vụ trong PR cấu trúc.
-2. Entry-point cũ ở root được giữ trong giai đoạn chuyển tiếp để GitHub Actions và công cụ nội bộ không gãy.
+2. Compatibility shim chỉ được giữ khi còn consumer thực tế; shim không còn consumer phải được xóa.
 3. Code mới ưu tiên import qua package canonical (`sharepoint.client`, `nvl.*`, `planning.*`).
 4. Mỗi bước migrate phải qua toàn bộ test suite trước khi merge.
-5. Sau khi toàn bộ caller đã chuyển sang package mới, root module mới được thu gọn thành compatibility shim hoặc xóa ở một major cleanup riêng.
+5. Sau khi toàn bộ caller đã chuyển sang package mới, compatibility shim phải được xóa và CI chặn tái xuất hiện.
 
 ## Thứ tự refactor
 
@@ -72,8 +72,7 @@ planning/ nvl/ scripts/ -> sharepoint.client -> sharepoint.auth
 sync_stock.py -----------^  (compatibility re-export only)
 ```
 
-`scripts/auth_runner.py` is now a pure module runner. It must not monkey-patch auth
-providers or inject an `MS_CLIENT_SECRET` sentinel.
+Production workflows call their entrypoints directly. `scripts/auth_runner.py` has been removed; authentication is resolved by `sharepoint.auth` through canonical imports.
 
 
 ## Canonical Planning dependency
@@ -84,7 +83,4 @@ Planning implementations now live under the `planning/` package:
 - `planning/khsx_ki.py`: KHSX_ki weekly aggregation and verification.
 - `planning/pipeline.py`: pure proposal-building pipeline.
 
-Root files `sync_planning_metrics.py`, `sync_planning_khsx_ki.py` and
-`planning_pipeline.py` are compatibility shims only. Runtime modules and tests
-must use `planning.*` directly so mutable runtime hooks (leadtime/debt/all-month
-overrides) operate on a single module instance.
+Legacy root files `sync_planning_metrics.py`, `sync_planning_khsx_ki.py` and `planning_pipeline.py` have been removed. Runtime modules and tests use `planning.*` directly so mutable runtime hooks (leadtime/debt/all-month overrides) operate on a single module instance.

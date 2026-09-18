@@ -10,17 +10,19 @@ class OIDCWorkflowContractTests(unittest.TestCase):
         text = self._read("sync-stock.yml")
         self.assertIn("id-token: write", text)
         self.assertIn("MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}", text)
-        self.assertIn("scripts/auth_runner.py sync_planning_pipeline", text)
+        self.assertIn("python -X utf8 sync_planning_pipeline.py", text)
+        self.assertNotIn("auth_runner.py", text)
         self.assertNotIn("MS_CLIENT_SECRET", text)
 
     def test_nvl_workflow_is_oidc_only(self):
         text = self._read("sync-nvl-stock.yml")
         self.assertIn("id-token: write", text)
         self.assertIn("MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}", text)
-        self.assertIn("scripts/auth_runner.py sync_nvl_stock", text)
-        self.assertIn("scripts/auth_runner.py sync_nvl_open_po_safe", text)
-        self.assertIn("scripts/auth_runner.py scripts.survey_nvl_sharepoint", text)
-        self.assertIn("scripts/auth_runner.py scripts.ensure_staging_copy", text)
+        self.assertIn("python -X utf8 sync_nvl_stock.py", text)
+        self.assertIn("python -X utf8 sync_nvl_open_po_safe.py", text)
+        self.assertIn("python -X utf8 scripts/survey_nvl_sharepoint.py", text)
+        self.assertIn("python -X utf8 scripts/ensure_staging_copy.py", text)
+        self.assertNotIn("auth_runner.py", text)
         self.assertNotIn("MS_CLIENT_SECRET", text)
 
     def test_workflows_use_node24_actions(self):
