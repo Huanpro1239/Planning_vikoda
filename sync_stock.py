@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import msal
 import requests
+from excel.openpyxl_io import safe_close_workbook
 from lxml import etree
 from openpyxl import load_workbook
 
@@ -405,7 +406,7 @@ def read_actual_stock(source_bytes):
         )
         return result
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def read_single_value_source(
@@ -483,7 +484,7 @@ def read_single_value_source(
 
         return result
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def read_conversion_factors(dest_bytes):
@@ -567,7 +568,7 @@ def read_conversion_factors(dest_bytes):
 
         return factors, conversion_hash
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def load_shared_strings(archive):

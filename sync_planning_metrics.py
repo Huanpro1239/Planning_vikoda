@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
+from excel.openpyxl_io import safe_close_workbook
 from lxml import etree
 from openpyxl import load_workbook
 
@@ -192,7 +193,7 @@ def read_actual_inputs(source_bytes):
 
         return report_date, receipts, consignments
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def read_system_receipts(source_bytes, conversion_factors, planning_codes):
@@ -240,7 +241,7 @@ def read_system_receipts(source_bytes, conversion_factors, planning_codes):
 
         return receipts
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def _parse_plan_month(selector):
@@ -353,7 +354,7 @@ def read_planning_rows(dest_bytes):
 
         return selector, plan_month, rows
     finally:
-        workbook.close()
+        safe_close_workbook(workbook)
 
 
 def excel_roundup_integer(value):

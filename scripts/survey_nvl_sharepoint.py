@@ -26,15 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openpyxl import load_workbook
 
-from sync_nvl_stock import (
-    NVLConfig,
-    _safe_close_workbook,
-    load_nvl_config,
-    read_nvl_source_stock,
-    reconcile_nvl_target,
-    run_nvl_sync,
-)
-from sync_stock import GraphClient, GraphRequestError, get_access_token
+from excel.openpyxl_io import safe_close_workbook as _safe_close_workbook
+from nvl.config import load_nvl_config
+from nvl.models import NVLConfig
+from nvl.reconcile import read_nvl_source_stock, reconcile_nvl_target
+from nvl.service import run_nvl_sync
+from sharepoint.client import GraphClient, GraphRequestError, get_access_token
 
 
 EQUIVALENT_UNIT_ALIASES: dict[str, str] = {

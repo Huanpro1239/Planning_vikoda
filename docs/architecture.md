@@ -37,3 +37,21 @@ docs/         # architecture, review history, runbooks
 - `docs/archive/` chứa kế hoạch/review lịch sử; không để tài liệu tạm ở repository root.
 - Package canonical không dùng `import *`; chỉ export API ổn định qua `__all__`.
 - CI compile toàn bộ repository trước khi chạy unit tests.
+
+
+## NVL module boundaries
+
+`sync_nvl_stock.py` is a compatibility CLI only. Canonical responsibilities:
+
+- `nvl/models.py`: immutable data contracts/state containers.
+- `nvl/config.py`: JSON configuration loading.
+- `nvl/values.py`: pure code/quantity normalization.
+- `nvl/reconcile.py`: source reading and target reconciliation.
+- `nvl/workbook.py`: OpenXML patching and integrity verification.
+- `nvl/reporting.py`: audit/error report serialization.
+- `nvl/service.py`: SharePoint orchestration, retries and publish boundary.
+- `excel/workbook_xml.py`: reusable low-level OpenXML helpers.
+- `excel/openpyxl_io.py`: deterministic workbook/ZipFile lifecycle cleanup.
+
+NVL runtime modules must not import `sync_stock.py` directly. SharePoint access goes
+through `sharepoint.client`, while workbook XML utilities go through `excel/`.

@@ -31,14 +31,10 @@ import zipfile
 from lxml import etree
 from openpyxl import load_workbook
 
-from sync_nvl_stock import normalize_nvl_code, parse_nvl_quantity
-from sync_stock import (
-    GRAPH,
-    GraphClient,
-    find_sheet_xml_path,
-    get_access_token,
-    set_numeric_cell,
-)
+from nvl.values import normalize_nvl_code, parse_nvl_quantity
+from excel.openpyxl_io import safe_close_workbook
+from excel.workbook_xml import find_sheet_xml_path, set_numeric_cell
+from sharepoint.client import GraphClient, get_access_token
 
 DEFAULT_SOURCE_CONFIG = "nvl_open_po_config.json"
 DEFAULT_TARGET_CONFIG = "nvl_stock_config.json"
@@ -182,7 +178,7 @@ def read_open_po(source_bytes: bytes, config: OpenPOConfig) -> tuple[dict[str, f
             "total_open_po": sum(totals.values()),
         }
     finally:
-        wb.close()
+        safe_close_workbook(wb)
 
 
 def _numeric_equal(current, target: float) -> bool:
@@ -267,7 +263,7 @@ def reconcile_target(
 
         return changes, expected
     finally:
-        wb.close()
+        safe_close_workbook(wb)
 
 
 def patch_target_workbook(
@@ -350,7 +346,7 @@ def verify_target(
                 f"Verify chỉ thấy {checked}/{len(expected)} mã trong {config.target_sheet}."
             )
     finally:
-        wb.close()
+        safe_close_workbook(wb)
 
 
 def _item_metadata(graph: GraphClient, drive_id: str, item_id: str) -> dict:
