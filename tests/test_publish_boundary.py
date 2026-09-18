@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import sync_planning_pipeline as pipeline_runner
 import sync_stock
-from sync_stock import GraphRequestError
+from sharepoint.client import GraphRequestError
 
 
 class PublishBoundaryTests(unittest.TestCase):

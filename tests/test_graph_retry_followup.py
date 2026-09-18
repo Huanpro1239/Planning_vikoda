@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from graph_retry import parse_retry_after, retry_delay_seconds
-from sync_stock import GraphRequestError
+from sharepoint.client import GraphRequestError
 
 
 class GraphRetryFollowupTests(unittest.TestCase):

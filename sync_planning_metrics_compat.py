@@ -4,7 +4,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 import sync_planning_metrics as metrics
-from sync_stock import is_retryable_graph_error
+from sharepoint.client import is_retryable_graph_error
 from sync_stock import MASTER_SHEET
 from sync_stock_compat import read_conversion_factors_robust
 

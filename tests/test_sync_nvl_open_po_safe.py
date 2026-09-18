@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from sync_nvl_open_po import OpenPOConfig
 from sync_nvl_open_po_safe import _graph_share_id, resolve_source_item_exact_url
-from sync_stock import GraphRequestError
+from sharepoint.client import GraphRequestError
 
 
 SOURCE_GUID = "1836226D-FB9D-4F8A-B6D5-3508A975936C"
