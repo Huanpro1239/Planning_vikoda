@@ -500,7 +500,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-v0", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-v0", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             with self.assertRaises(RuntimeError) as ctx:
                 run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=2)
             self.assertIn("nguồn đã thay đổi", str(ctx.exception).lower())
@@ -534,7 +534,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-base", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-base", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             with self.assertRaises(RuntimeError) as ctx:
                 run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=2)
             self.assertIn("nguồn đã bị thay đổi trước khi upload", str(ctx.exception).lower())
@@ -602,7 +602,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             with self.assertRaises(RuntimeError) as ctx:
                 run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
             self.assertIn("xác minh sau đó thất bại", str(ctx.exception).lower())
@@ -649,7 +649,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             with self.assertRaises(RuntimeError) as ctx:
                 run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
             self.assertIn("xác minh sau đó thất bại", str(ctx.exception).lower())
@@ -684,7 +684,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             report = run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
             self.assertEqual(report["status"], "published")
             self.assertEqual(fake_graph.upload_attempts, 1)
@@ -706,7 +706,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
         fake_graph.set_file(self.cfg.source_path, self.source_bytes, etag="src-1", item_id="src-1")
         fake_graph.set_file(self.cfg.target_path, self.target_bytes, etag="tgt-1", item_id="tgt-1")
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch("sync_nvl_stock.time.sleep"):
+        with tempfile.TemporaryDirectory() as tmpdir, patch("nvl.service.time.sleep"):
             with self.assertRaises(RuntimeError) as ctx:
                 run_nvl_sync(self.cfg, out_dir=tmpdir, publish=True, graph=fake_graph, max_publish_attempts=3)
             self.assertIn("không thể tải lại file để xác minh", str(ctx.exception).lower())
