@@ -2,7 +2,7 @@
 
 Mục tiêu: GitHub Actions lấy Microsoft Graph access token bằng workload identity federation, không cần lưu `MS_CLIENT_SECRET` dài hạn.
 
-> Trạng thái migration: code hỗ trợ OIDC nhưng production vẫn mặc định `MS_AUTH_MODE=secret` cho tới khi Federated Credential bên Entra được tạo và dry-run OIDC đạt.
+> Trạng thái hiện tại: production workflows dùng OIDC mặc định (`MS_AUTH_MODE=oidc`); không còn phụ thuộc `MS_CLIENT_SECRET` trong workflow.
 
 ## 1. Identity của repository
 
@@ -60,7 +60,7 @@ az ad app federated-credential create \
   --parameters credential.json
 ```
 
-## 3. Bật OIDC trên GitHub nhưng chưa xóa secret
+## 3. Cấu hình OIDC trên GitHub
 
 Hai production workflows đã có:
 
@@ -69,7 +69,7 @@ permissions:
   id-token: write
 ```
 
-và chạy qua `scripts/auth_runner.py`, nên không cần sửa các module nghiệp vụ lớn.
+và gọi trực tiếp các entrypoint production; các module lấy token qua `sharepoint.auth` / `sharepoint.client`.
 
 Trong GitHub repository:
 
@@ -80,7 +80,7 @@ Trong GitHub repository:
 MS_AUTH_MODE = oidc
 ```
 
-Không xóa `MS_CLIENT_SECRET` ở bước này. OIDC mode **không fallback âm thầm** sang secret; nếu federation sai, workflow phải đỏ để lỗi cấu hình hiện rõ.
+Production workflow không đọc `MS_CLIENT_SECRET`. OIDC mode **không fallback âm thầm** sang secret; nếu federation sai, workflow phải đỏ để lỗi cấu hình hiện rõ.
 
 ## 4. Nghiệm thu trước khi bỏ secret
 
@@ -95,16 +95,12 @@ Thực hiện theo thứ tự:
 
 Nếu lỗi Entra có dạng `AADSTS70021`, `AADSTS700213` hoặc tương tự về federated identity, kiểm tra trước tiên issuer, audience và subject có khớp tuyệt đối token GitHub hay không.
 
-## 5. Cutover cuối — bỏ Client Secret
+## 5. Trạng thái cutover production
 
-Chỉ sau khi OIDC production đã được xác minh:
-
-1. Xóa dòng `MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}` khỏi:
-   - `.github/workflows/sync-stock.yml`
-   - `.github/workflows/sync-nvl-stock.yml`
-2. Xóa GitHub Actions secret `MS_CLIENT_SECRET` khỏi repository.
-3. Có thể revoke/delete client secret tương ứng trong App Registration nếu không còn workload khác sử dụng nó.
-4. Giữ `MS_TENANT_ID`, `MS_CLIENT_ID` và `MS_AUTH_MODE=oidc`.
+Production workflows hiện đã hoàn tất cutover:
+1. Không khai báo hoặc sử dụng `MS_CLIENT_SECRET`.
+2. Giữ `MS_TENANT_ID`, `MS_CLIENT_ID` và `MS_AUTH_MODE=oidc`.
+3. Client secret cũ trong App Registration chỉ nên giữ nếu còn workload khác ngoài repository sử dụng.
 
 Không xóa client secret bên Entra nếu cùng secret/app đang được một hệ thống khác ngoài repository này sử dụng mà chưa migrate.
 

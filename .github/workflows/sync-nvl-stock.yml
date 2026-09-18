@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
-          python -X utf8 scripts/auth_runner.py scripts.ensure_staging_copy
+          python -X utf8 scripts/ensure_staging_copy.py
 
       - name: Generate NVL proposal or controlled publish
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) }}
@@ -92,11 +92,11 @@ jobs:
           echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
 
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
-            python -X utf8 scripts/auth_runner.py sync_nvl_stock --config "$CONFIG_FILE" --publish
-            python -X utf8 scripts/auth_runner.py sync_nvl_open_po_safe --target-config "$CONFIG_FILE" --publish
+            python -X utf8 sync_nvl_stock.py --config "$CONFIG_FILE" --publish
+            python -X utf8 sync_nvl_open_po_safe.py --target-config "$CONFIG_FILE" --publish
           else
-            python -X utf8 scripts/auth_runner.py scripts.survey_nvl_sharepoint --config "$CONFIG_FILE"
-            python -X utf8 scripts/auth_runner.py sync_nvl_open_po_safe --target-config "$CONFIG_FILE"
+            python -X utf8 scripts/survey_nvl_sharepoint.py --config "$CONFIG_FILE"
+            python -X utf8 sync_nvl_open_po_safe.py --target-config "$CONFIG_FILE"
           fi
 
       - name: Upload NVL proposal and report audit
