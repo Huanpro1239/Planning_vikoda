@@ -12,7 +12,7 @@ test:
 
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:
-	$(PYTHON) -m compileall -q *.py tests
+	$(PYTHON) -m compileall -q .
 
 clean:
 	rm -rf __pycache__ tests/__pycache__ .mypy_cache .pytest_cache
