@@ -9,7 +9,8 @@ import sync_planning_fc as fc
 from planning_schedule_report import load_schedule_report
 from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
-from sync_stock import DEST_PATH, GraphClient, get_access_token, normalize_code, to_number
+from sharepoint.client import GraphClient, get_access_token
+from sync_stock import DEST_PATH, normalize_code, to_number
 from weekly_planning_engine import is_sugar_classification
 
 

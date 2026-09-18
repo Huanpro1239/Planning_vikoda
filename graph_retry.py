@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from sync_stock import GraphClient, GraphRequestError
+from sharepoint.client import GraphClient, GraphRequestError
 
 
 _INSTALLED = False

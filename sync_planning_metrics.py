@@ -20,13 +20,12 @@ from sync_planning_fc import (
     _load_shared_strings,
     _read_cell_text,
 )
+from sharepoint.client import GraphClient, get_access_token
 from sync_stock import (
     DEST_PATH,
     SOURCE_ACTUAL_PATH,
     SOURCE_FACTORY_VIKODA_PATH,
-    GraphClient,
     clean_number,
-    get_access_token,
     normalize_code,
     read_conversion_factors,
     to_number,
