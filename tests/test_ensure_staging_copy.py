@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts.ensure_staging_copy import ensure_staging_copy, parse_sourcedoc_from_etag
-from sync_stock import GraphClient, GraphRequestError
+from sharepoint.client import GraphClient, GraphRequestError
 
 
 class EnsureStagingCopyTests(unittest.TestCase):

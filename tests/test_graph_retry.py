@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import requests
 
-from sync_stock import GraphClient, GraphRequestError, is_retryable_graph_error
+from sharepoint.client import GraphClient, GraphRequestError, is_retryable_graph_error
 
 
 class Response:

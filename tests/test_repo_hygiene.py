@@ -65,5 +65,55 @@ class RepoHygieneTests(unittest.TestCase):
         self.assertLess(line_count, 180, f"sync_nvl_stock.py vẫn quá lớn: {line_count} dòng")
 
 
+    def test_graph_api_is_not_imported_from_sync_stock(self):
+        forbidden = {
+            "GRAPH",
+            "HOSTNAME",
+            "SITE_PATH",
+            "GraphClient",
+            "GraphRequestError",
+            "get_access_token",
+            "is_retryable_graph_error",
+        }
+        offenders = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if path.name == "sync_stock.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "sync_stock":
+                    imported = {alias.name for alias in node.names}
+                    bad = sorted(imported & forbidden)
+                    if bad:
+                        offenders.append(
+                            f"{path.relative_to(ROOT)}: {', '.join(bad)}"
+                        )
+        self.assertEqual(
+            offenders,
+            [],
+            "Graph/auth API phải import từ sharepoint.client, không từ sync_stock: "
+            + "; ".join(offenders),
+        )
+
+    def test_sharepoint_client_does_not_depend_on_sync_stock(self):
+        path = ROOT / "sharepoint" / "client.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                offenders.extend(
+                    alias.name for alias in node.names if alias.name == "sync_stock"
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module == "sync_stock":
+                offenders.append("from sync_stock")
+        self.assertEqual(offenders, [], "sharepoint.client không được phụ thuộc legacy sync_stock")
+
+    def test_auth_runner_has_no_auth_monkey_patch_or_secret_sentinel(self):
+        text = (ROOT / "scripts" / "auth_runner.py").read_text(encoding="utf-8")
+        self.assertNotIn("sync_stock.get_access_token =", text)
+        self.assertNotIn("__OIDC_AUTH_PROVIDER_ACTIVE__", text)
+        self.assertNotIn('MS_CLIENT_SECRET"] =', text)
+
+
 if __name__ == "__main__":
     unittest.main()
