@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-import sync_planning_metrics as metrics
+from planning import metrics
 from sync_planning_metrics_compat import (
     MASTER_SHEET,
     read_conversion_factors_and_leadtime,

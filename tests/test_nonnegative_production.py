@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-import sync_planning_metrics as metrics
+from planning import metrics
 from sync_planning_metrics_direct import calculate_metrics_from_no_kho
 
 

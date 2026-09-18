@@ -25,7 +25,7 @@ import sync_stock
 from sync_stock_compat import read_conversion_factors_robust
 
 
-SOURCE_KEYS = (
+__all__ = ["SOURCE_KEYS", "prepare_pipeline_output"]\n\nSOURCE_KEYS = (
     "actual_stock",
     "factory_vikoda",
     "factory_vkd",

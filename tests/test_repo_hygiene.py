@@ -115,5 +115,52 @@ class RepoHygieneTests(unittest.TestCase):
         self.assertNotIn('MS_CLIENT_SECRET"] =', text)
 
 
+    def test_planning_runtime_uses_canonical_modules(self):
+        forbidden_modules = {
+            "sync_planning_metrics",
+            "sync_planning_khsx_ki",
+            "planning_pipeline",
+        }
+        shim_paths = {
+            ROOT / "sync_planning_metrics.py",
+            ROOT / "sync_planning_khsx_ki.py",
+            ROOT / "planning_pipeline.py",
+        }
+        offenders = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if path in shim_paths:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in forbidden_modules:
+                            offenders.append(
+                                f"{path.relative_to(ROOT)}: import {alias.name}"
+                            )
+                elif isinstance(node, ast.ImportFrom) and node.module in forbidden_modules:
+                    offenders.append(
+                        f"{path.relative_to(ROOT)}: from {node.module}"
+                    )
+        self.assertEqual(
+            offenders,
+            [],
+            "Planning runtime/test phải dùng planning.* canonical: " + "; ".join(offenders),
+        )
+
+    def test_legacy_planning_root_modules_are_thin(self):
+        limits = {
+            "sync_planning_metrics.py": 40,
+            "sync_planning_khsx_ki.py": 40,
+            "planning_pipeline.py": 40,
+        }
+        oversized = []
+        for name, limit in limits.items():
+            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(oversized, [], "Planning compatibility shim bị phình lại: " + "; ".join(oversized))
+
+
 if __name__ == "__main__":
     unittest.main()

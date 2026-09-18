@@ -419,7 +419,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
     def test_two_round_pipeline_output_does_not_falsely_detect_column_m_change(self):
         """P2: Column M is calculated by pipeline and excluded from input hash, preventing false changes on round 2."""
         from openpyxl import load_workbook
-        from planning_pipeline import prepare_pipeline_output
+        from planning.pipeline import prepare_pipeline_output
         from tests.test_run_offline import (
             _actual_source,
             _single_value_source,
