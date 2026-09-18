@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts.trigger_and_download_dryrun import (
+from scripts.dev.trigger_and_download_dryrun import (
     dispatch_workflow,
     download_run_artifacts,
     find_run_for_sha,
@@ -493,21 +493,21 @@ class TriggerAndDownloadDryrunTests(unittest.TestCase):
             self.assertIn('thiếu file backup raw', str(ctx.exception))
 
     def test_main_fails_when_conclusion_is_failure(self):
-        with patch('scripts.trigger_and_download_dryrun.get_token', return_value='fake-token'):
-            with patch('scripts.trigger_and_download_dryrun.dispatch_workflow'):
-                with patch('scripts.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 999, 'head_sha': 'sha_fail'}):
-                    with patch('scripts.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'failure', 'head_sha': 'sha_fail'}):
-                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
+        with patch('scripts.dev.trigger_and_download_dryrun.get_token', return_value='fake-token'):
+            with patch('scripts.dev.trigger_and_download_dryrun.dispatch_workflow'):
+                with patch('scripts.dev.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 999, 'head_sha': 'sha_fail'}):
+                    with patch('scripts.dev.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'failure', 'head_sha': 'sha_fail'}):
+                        with patch('scripts.dev.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
                             exit_code = main(['--sha', 'sha_fail', '--no-dispatch'])
                             self.assertEqual(exit_code, 1)
 
     def test_main_succeeds_when_conclusion_is_success(self):
-        with patch('scripts.trigger_and_download_dryrun.get_token', return_value='fake-token'):
-            with patch('scripts.trigger_and_download_dryrun.dispatch_workflow'):
-                with patch('scripts.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 888, 'head_sha': 'sha_ok'}):
-                    with patch('scripts.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'success', 'head_sha': 'sha_ok'}):
-                        with patch('scripts.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
-                            with patch('scripts.trigger_and_download_dryrun.verify_run_execution'):
+        with patch('scripts.dev.trigger_and_download_dryrun.get_token', return_value='fake-token'):
+            with patch('scripts.dev.trigger_and_download_dryrun.dispatch_workflow'):
+                with patch('scripts.dev.trigger_and_download_dryrun.find_run_for_sha', return_value={'id': 888, 'head_sha': 'sha_ok'}):
+                    with patch('scripts.dev.trigger_and_download_dryrun.wait_for_run_completion', return_value={'status': 'completed', 'conclusion': 'success', 'head_sha': 'sha_ok'}):
+                        with patch('scripts.dev.trigger_and_download_dryrun.download_run_artifacts', return_value=(Path('/tmp'), [])):
+                            with patch('scripts.dev.trigger_and_download_dryrun.verify_run_execution'):
                                 exit_code = main(['--sha', 'sha_ok', '--no-dispatch'])
                                 self.assertEqual(exit_code, 0)
 

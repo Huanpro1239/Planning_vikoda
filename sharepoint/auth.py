@@ -1,13 +1,14 @@
 """Microsoft Graph authentication for local runs and GitHub Actions.
 
 Modes:
-- ``secret``: legacy MS_CLIENT_SECRET flow (default for backward compatibility).
-- ``oidc``: GitHub Actions OIDC -> Microsoft Entra workload identity federation.
+- ``oidc``: GitHub Actions OIDC -> Microsoft Entra workload identity federation
+  (production default in repository workflows).
+- ``secret``: legacy MS_CLIENT_SECRET flow kept only for backward-compatible
+  local tooling or external workloads that have not migrated yet.
 - ``auto``: use OIDC when GitHub exposes its OIDC request variables, otherwise secret.
 
-Production workflows intentionally remain in ``secret`` mode until the Entra
-federated credential has been configured and verified. This prevents an auth
-migration from breaking the planning/NVL production jobs.
+OIDC never silently falls back to a client secret. A broken trust configuration
+must fail visibly instead of masking the problem with legacy credentials.
 """
 
 from __future__ import annotations
@@ -136,10 +137,10 @@ def _github_oidc_available() -> bool:
 def get_access_token(mode: str | None = None) -> str:
     """Return a Graph access token using the explicitly selected auth mode.
 
-    Default remains ``secret`` during migration. Set repository variable
-    ``MS_AUTH_MODE=oidc`` only after Entra federated credentials are configured.
-    OIDC mode intentionally does not silently fall back to a secret: a bad trust
-    configuration must fail visibly rather than masking the migration problem.
+    Repository production workflows explicitly default to ``oidc``. The function
+    keeps ``secret`` as its library-level default only for backward-compatible
+    local callers that do not set MS_AUTH_MODE. OIDC intentionally does not fall
+    back to a secret when federation fails.
     """
     selected = str(mode or os.environ.get("MS_AUTH_MODE", "secret")).strip().casefold()
     if selected not in VALID_AUTH_MODES:

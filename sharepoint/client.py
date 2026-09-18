@@ -13,13 +13,13 @@ import re
 import time
 from typing import Callable, TypeVar
 
+from sharepoint.auth import get_access_token
 from sync_stock import (
     GRAPH,
     HOSTNAME,
     SITE_PATH,
     GraphClient,
     GraphRequestError,
-    get_access_token,
     is_retryable_graph_error,
 )
 
