@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+@dataclass
 class NVLConfig:
     source_name: str
     source_path: str
@@ -35,6 +36,7 @@ class NVLConfig:
     number_convention: str = "strict"
 
 
+@dataclass
 @dataclass
 class NVLReconcileResult:
     changes: list[dict[str, Any]] = field(default_factory=list)
