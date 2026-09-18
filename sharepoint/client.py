@@ -1,9 +1,8 @@
-"""Canonical SharePoint / Microsoft Graph integration helpers.
+"""Canonical Microsoft Graph / SharePoint client.
 
-`sync_stock.py` hiện vẫn giữ implementation thấp tầng để không phá backward compatibility,
-nhưng toàn bộ code mới nên đi qua module này. `SharePointClient` và `GraphClient`
-trỏ tới cùng một class object; các helper ở đây gom resolve URL, identity validation,
-retry idempotent reads và ETag-aware metadata handling về một tầng dùng chung.
+This module owns Graph transport, structured errors, retry classification and
+SharePoint identity helpers. Legacy modules may re-export these names, but the
+dependency direction is always legacy -> sharepoint.client.
 """
 
 from __future__ import annotations
@@ -12,16 +11,189 @@ import base64
 import re
 import time
 from typing import Callable, TypeVar
+from urllib.parse import quote
+
+import requests
 
 from sharepoint.auth import get_access_token
-from sync_stock import (
-    GRAPH,
-    HOSTNAME,
-    SITE_PATH,
-    GraphClient,
-    GraphRequestError,
-    is_retryable_graph_error,
-)
+
+
+GRAPH = "https://graph.microsoft.com/v1.0"
+HOSTNAME = "vikodacomvn.sharepoint.com"
+SITE_PATH = "/sites/Planning"
+
+
+class GraphRequestError(RuntimeError):
+    """Structured Microsoft Graph failure used by retry policies."""
+
+    def __init__(self, message, *, status_code=None, error_code=None, detail=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.detail = detail
+
+
+def is_retryable_graph_error(exc):
+    """Return True only for transient/concurrency/network failures."""
+    if isinstance(exc, GraphRequestError):
+        if exc.status_code in {412, 423, 429, 500, 502, 503, 504}:
+            return True
+        if str(exc.error_code or "").casefold() in {
+            "resourcelocked",
+            "preconditionfailed",
+            "toomanyrequests",
+            "timeout",
+            "serviceunavailable",
+        }:
+            return True
+        return False
+
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+
+    # Backward compatibility for existing fakes/tests while callers migrate.
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return any(
+            marker in message
+            for marker in ("412", "423", "429", "resourceLocked", "500", "502", "503", "504")
+        )
+    return False
+
+
+class GraphClient:
+    def __init__(self, token):
+        self.session = requests.Session()
+        self.session.headers.update(
+            {"Authorization": f"Bearer {token}"}
+        )
+
+    @staticmethod
+    def _raise(response):
+        if response.ok:
+            return
+
+        try:
+            detail = response.json()
+        except Exception:
+            detail = getattr(response, "text", "")
+
+        error_code = None
+        if isinstance(detail, dict):
+            error = detail.get("error")
+            if isinstance(error, dict):
+                error_code = error.get("code")
+
+        raise GraphRequestError(
+            f"Microsoft Graph lỗi {response.status_code}: {detail}",
+            status_code=response.status_code,
+            error_code=error_code,
+            detail=detail,
+        )
+
+    def get_json(self, url, params=None):
+        response = self.session.get(
+            url,
+            params=params,
+            timeout=60,
+        )
+        self._raise(response)
+        return response.json()
+
+    def get_site_id(self):
+        url = f"{GRAPH}/sites/{HOSTNAME}:{SITE_PATH}"
+        return self.get_json(url, {"$select": "id"})["id"]
+
+    def get_default_drive_id(self, site_id):
+        url = f"{GRAPH}/sites/{site_id}/drive"
+        return self.get_json(url, {"$select": "id"})["id"]
+
+    def get_item_by_path(self, drive_id, file_path):
+        encoded = quote(file_path, safe="/")
+        url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}"
+        return self.get_json(
+            url,
+            {"$select": "id,name,eTag,size,lastModifiedDateTime"},
+        )
+
+    def list_folder_children(self, drive_id, folder_path=""):
+        """Liệt kê các file/folder con trong một thư mục SharePoint."""
+        if not folder_path or folder_path.strip() in ("", "/"):
+            url = f"{GRAPH}/drives/{drive_id}/root/children"
+        else:
+            encoded = quote(folder_path.strip().strip("/"), safe="/")
+            url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/children"
+        res = self.get_json(
+            url,
+            {"$select": "id,name,eTag,size,lastModifiedDateTime,folder,file"},
+        )
+        return res.get("value", [])
+
+    def download_file(self, drive_id, item_id):
+        url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
+        response = self.session.get(
+            url,
+            timeout=120,
+            allow_redirects=True,
+        )
+        self._raise(response)
+        return response.content
+
+    def upload_file(self, drive_id, item_id, content, expected_etag):
+        url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
+        headers = {
+            "Content-Type": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            "If-Match": expected_etag,
+        }
+
+        response = self.session.put(
+            url,
+            headers=headers,
+            data=content,
+            timeout=180,
+        )
+
+        if response.status_code == 412:
+            raise GraphRequestError(
+                "Microsoft Graph HTTP 412 preconditionFailed: file đích vừa thay đổi; "
+                "phải tải lại workbook, tính lại patch và dùng ETag mới.",
+                status_code=412,
+                error_code="preconditionFailed",
+            )
+
+        self._raise(response)
+        return response.json()
+
+    def create_file_by_path(
+        self,
+        drive_id,
+        file_path,
+        content,
+        conflict_behavior="fail",
+    ):
+        encoded = quote(file_path.strip().strip("/"), safe="/")
+        url = f"{GRAPH}/drives/{drive_id}/root:/{encoded}:/content"
+        params = {}
+        if conflict_behavior:
+            params["@microsoft.graph.conflictBehavior"] = conflict_behavior
+        headers = {
+            "Content-Type": (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+        }
+        response = self.session.put(
+            url,
+            headers=headers,
+            params=params,
+            data=content,
+            timeout=180,
+        )
+        self._raise(response)
+        return response.json()
 
 
 SharePointClient = GraphClient

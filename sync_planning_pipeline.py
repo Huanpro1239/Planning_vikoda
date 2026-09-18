@@ -12,7 +12,7 @@ from planning_pipeline import prepare_pipeline_output
 from planning_schedule_report import print_operational_report, save_schedule_report
 import sync_planning_metrics as metrics
 import sync_stock
-from sync_stock import GraphClient, get_access_token, is_retryable_graph_error
+from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
 
 
 AUDIT_REVISION_FILE = Path("planning_input_revision.json")

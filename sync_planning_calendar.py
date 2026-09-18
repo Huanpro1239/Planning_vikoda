@@ -14,7 +14,8 @@ from sync_planning_fc import (
     _load_shared_strings,
     _read_cell_text,
 )
-from sync_stock import DEST_PATH, GraphClient, get_access_token, is_retryable_graph_error
+from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
+from sync_stock import DEST_PATH
 
 FC_SHEET = "FC"
 FC_SELECTOR_CELL = "R1"

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from sync_nvl_stock import run_nvl_sync
-from sync_stock import GraphRequestError
+from sharepoint.client import GraphRequestError
 from tests.test_sync_nvl_stock import make_mock_config, make_mock_source_bytes, make_mock_target_bytes
 
 

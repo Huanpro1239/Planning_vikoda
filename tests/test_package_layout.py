@@ -2,13 +2,14 @@ import unittest
 
 
 class PackageLayoutTests(unittest.TestCase):
-    def test_sharepoint_facade_preserves_graph_api(self):
+    def test_sync_stock_reexports_canonical_graph_api(self):
         import sharepoint.auth as auth
         import sharepoint.client as packaged
         import sync_stock as legacy
 
         self.assertIs(packaged.GraphClient, legacy.GraphClient)
         self.assertIs(packaged.GraphRequestError, legacy.GraphRequestError)
+        self.assertIs(packaged.is_retryable_graph_error, legacy.is_retryable_graph_error)
         self.assertIs(packaged.get_access_token, auth.get_access_token)
 
     def test_nvl_facades_expose_legacy_business_api(self):

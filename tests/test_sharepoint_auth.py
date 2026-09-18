@@ -81,36 +81,22 @@ class SharePointAuthTests(unittest.TestCase):
             self.assertEqual(auth.get_access_token(), "legacy")
         legacy.assert_called_once()
 
-    def test_auth_runner_patches_before_target_import_and_restores_provider(self):
-        fake_target = types.ModuleType("fake_target_auth_test")
-        captured = {}
+    def test_sync_stock_reexports_canonical_auth_provider(self):
         import sync_stock
-        original = sync_stock.get_access_token
+        self.assertIs(sync_stock.get_access_token, auth.get_access_token)
+
+    def test_auth_runner_does_not_patch_provider_or_inject_secret(self):
+        fake_target = types.ModuleType("fake_target_auth_test")
+        observed = {}
+        import sync_stock
 
         def fake_import(name):
             if name == "fake_target_auth_test":
-                captured["provider"] = sync_stock.get_access_token
-                fake_target.main = lambda: 0
-                return fake_target
-            return __import__(name)
-
-        with patch("scripts.auth_runner.importlib.import_module", side_effect=fake_import):
-            result = run_module("fake_target_auth_test", [])
-
-        self.assertEqual(result, 0)
-        self.assertIs(captured["provider"], auth.get_access_token)
-        self.assertIs(sync_stock.get_access_token, original)
-
-    def test_auth_runner_bridges_legacy_secret_precheck_only_during_oidc_run(self):
-        fake_target = types.ModuleType("fake_target_secret_check")
-        observed = {}
-
-        def fake_import(name):
-            if name == "fake_target_secret_check":
-                observed["during_import"] = os.environ.get("MS_CLIENT_SECRET")
+                observed["provider"] = sync_stock.get_access_token
+                observed["secret_during_import"] = os.environ.get("MS_CLIENT_SECRET")
 
                 def target_main():
-                    observed["during_main"] = os.environ.get("MS_CLIENT_SECRET")
+                    observed["secret_during_main"] = os.environ.get("MS_CLIENT_SECRET")
                     return 0
 
                 fake_target.main = target_main
@@ -121,10 +107,13 @@ class SharePointAuthTests(unittest.TestCase):
             patch.dict(os.environ, {"MS_AUTH_MODE": "oidc"}, clear=True),
             patch("scripts.auth_runner.importlib.import_module", side_effect=fake_import),
         ):
-            self.assertEqual(run_module("fake_target_secret_check", []), 0)
-            self.assertEqual(observed["during_import"], "__OIDC_AUTH_PROVIDER_ACTIVE__")
-            self.assertEqual(observed["during_main"], "__OIDC_AUTH_PROVIDER_ACTIVE__")
-            self.assertNotIn("MS_CLIENT_SECRET", os.environ)
+            result = run_module("fake_target_auth_test", [])
+
+        self.assertEqual(result, 0)
+        self.assertIs(observed["provider"], auth.get_access_token)
+        self.assertIsNone(observed["secret_during_import"])
+        self.assertIsNone(observed["secret_during_main"])
+        self.assertNotIn("MS_CLIENT_SECRET", os.environ)
 
 
 if __name__ == "__main__":

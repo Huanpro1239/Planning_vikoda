@@ -20,7 +20,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from sync_stock import GraphClient, GraphRequestError, get_access_token
+from sharepoint.client import GraphClient, GraphRequestError, get_access_token
 
 
 def parse_sourcedoc_from_etag(etag: str) -> str:

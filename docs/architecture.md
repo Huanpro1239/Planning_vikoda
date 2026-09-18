@@ -55,3 +55,22 @@ docs/         # architecture, review history, runbooks
 
 NVL runtime modules must not import `sync_stock.py` directly. SharePoint access goes
 through `sharepoint.client`, while workbook XML utilities go through `excel/`.
+
+
+## Canonical SharePoint dependency
+
+`sharepoint/client.py` owns `GraphClient`, `GraphRequestError`, Graph constants,
+retry classification and SharePoint identity/read helpers. Authentication comes from
+`sharepoint/auth.py`.
+
+Legacy `sync_stock.py` may re-export the canonical Graph API for compatibility, but
+canonical/runtime callers must import Graph/auth symbols from `sharepoint.client`.
+The dependency direction is therefore:
+
+```text
+planning/ nvl/ scripts/ -> sharepoint.client -> sharepoint.auth
+sync_stock.py -----------^  (compatibility re-export only)
+```
+
+`scripts/auth_runner.py` is now a pure module runner. It must not monkey-patch auth
+providers or inject an `MS_CLIENT_SECRET` sentinel.
