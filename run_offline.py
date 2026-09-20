@@ -78,7 +78,7 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Chạy verify_planning_month trên proposal vừa tạo.",
+        help="Chạy planning.verification trên proposal vừa tạo.",
     )
     return parser.parse_args(argv)
 
@@ -124,10 +124,10 @@ def main(argv=None):
 
     if args.verify:
         # Import trễ để chế độ không verify không phải nạp thêm.
-        from verify_planning_month import verify_workbook
+        from planning.verification import verify_workbook
 
         verify_workbook(final_bytes, schedule_report=report)
-        print("[OFFLINE] verify_planning_month: PASS")
+        print("[OFFLINE] planning.verification: PASS")
 
     return {"report": report, "proposal_path": str(proposal_path)}
 

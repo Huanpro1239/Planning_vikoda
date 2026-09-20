@@ -5,7 +5,7 @@ from openpyxl import Workbook, load_workbook
 
 from sync_planning_calendar import build_date_headers
 from planning.weekly_model import prepare_weekly_schedule_update
-from verify_planning_month import verify_workbook
+from planning.verification import verify_workbook
 
 
 CODE_KHS = 130100011
