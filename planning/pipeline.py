@@ -14,7 +14,7 @@ import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direc
 import sync_planning_metrics_compat as metrics_compat
 from sync_planning_stock_inputs import prepare_stock_input_update
 import sync_planning_metrics_direct
-from sync_planning_weekly_model import (
+from planning.weekly_model import (
     ENGINE_VERSION,
     compute_planning_inputs_hash,
     prepare_weekly_schedule_update,
