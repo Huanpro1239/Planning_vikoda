@@ -13,7 +13,7 @@ from sync_planning_weekly_model import (
     prepare_weekly_schedule_update,
     verify_weekly_workbook,
 )
-from weekly_planning_engine import (
+from planning.weekly_engine import (
     PlannerPolicy,
     build_daily_plan,
     calculate_rows,
