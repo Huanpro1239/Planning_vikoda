@@ -6,7 +6,7 @@ from sync_planning_weekly_model import (
     WeeklyAnalysis,
     build_weekly_schedule_report,
 )
-from weekly_planning_engine import (
+from planning.weekly_engine import (
     DailyPlanRow,
     PlannerPolicy,
     WeeklyInputRow,

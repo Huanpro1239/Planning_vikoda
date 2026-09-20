@@ -11,7 +11,7 @@ from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
 from sharepoint.client import GraphClient, get_access_token
 from sync_stock import DEST_PATH, normalize_code, to_number
-from weekly_planning_engine import is_sugar_classification
+from planning.weekly_engine import is_sugar_classification
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
@@ -477,7 +477,7 @@ def verify_workbook(workbook_bytes, schedule_report=None, plan_year=None):
                         f"Mã {code} có P>0 nhưng E/I không hợp lệ: E={per_shift}, I={shifts_per_day}."
                     )
             else:
-                # O = p_need của weekly_planning_engine (nguồn sự thật ghi workbook):
+                # O = p_need của planning.weekly_engine (nguồn sự thật ghi workbook):
                 #   - Không nợ: O = FC - tồn_sổ(K) + tồn_cuối(M).
                 #   - Có nợ: theo Debt mode, KHÔNG cộng M:
                 #       SUBTRACT_BOOK_ON_DEBT: O = FC + nợ - tồn_sổ(K)
