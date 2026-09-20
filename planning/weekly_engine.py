@@ -106,7 +106,7 @@ def is_sugar_classification(classification: str) -> bool:
     """Nhận diện SKU 'Có đường' bất kể hoa/thường/khoảng trắng.
 
     Trước đây engine so khớp chính xác chuỗi ``"Có đường"`` trong khi
-    ``sync_planning_metrics`` và ``verify_planning_month`` dùng ``casefold()``.
+    ``sync_planning_metrics`` và ``planning.verification`` dùng ``casefold()``.
     Sự lệch pha này khiến một SKU khai báo ``"có đường"`` (viết thường) bị
     engine tính theo SL/ca còn verifier lại kỳ vọng SL/mẻ, dẫn tới verify sai.
     Chuẩn hóa về một cách so khớp duy nhất cho cả ba nơi.
