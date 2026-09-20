@@ -36,6 +36,11 @@ def verify_workbook(workbook_bytes, schedule_report=None, plan_year=None):
         expected_end = workbook_context["expected_end"]
 
         # 4) Hậu kiểm độc lập dữ liệu kế hoạch và lịch ngày.
+        validated_rows = validate_planning_rows(
+            planning,
+            headers,
+            schedule_report=schedule_report,
+        )
         checked_schedule_rows = validate_schedule_resources(
             validated_rows,
             headers,
