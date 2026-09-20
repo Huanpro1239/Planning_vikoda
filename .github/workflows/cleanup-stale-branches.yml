@@ -22,6 +22,7 @@ jobs:
 
           protected_branches=("main" "runtime-state")
           stale_branches=(
+            "chore/cleanup-stale-branches"
             "chore/node24-actions"
             "chore/oidc-cutover-node24"
             "chore/runtime-state-branch-protection"
