@@ -18,7 +18,7 @@ PLANNING_SHEET = "Ke_hoach_SX"
 STOCK_SHEET = "Ton_kho"
 START_COLUMN = 19  # S
 SHARED_RESOURCE = "KHS + PET 9000"
-# Tên resource máy chung mà sync_planning_weekly_model ghi vào report. Verifier
+# Tên resource máy chung mà planning.weekly_model ghi vào report. Verifier
 # chấp nhận cả hai tên để độc lập với thay đổi nhãn của report.
 SHARED_RESOURCE_ALIASES = (SHARED_RESOURCE, "KHS/PET 9000 shared machine")
 SHARED_LINES = {"KHS", "PET 9000"}
