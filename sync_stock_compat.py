@@ -4,7 +4,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-import sync_planning_weekly_model as weekly_model
+import planning.weekly_model as weekly_model
 import sync_stock
 
 

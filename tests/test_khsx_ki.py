@@ -8,7 +8,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 from planning import khsx_ki as ki
-from sync_planning_weekly_model import ENGINE_VERSION, compute_planning_inputs_hash
+from planning.weekly_model import ENGINE_VERSION, compute_planning_inputs_hash
 
 AUDIT_SNAPSHOT = Path("temp_audit/survey_run_34190029619/planning_proposal.xlsx")
 

@@ -2,7 +2,7 @@ import unittest
 from collections import defaultdict
 from datetime import date
 
-from sync_planning_weekly_model import (
+from planning.weekly_model import (
     WeeklyAnalysis,
     build_weekly_schedule_report,
 )

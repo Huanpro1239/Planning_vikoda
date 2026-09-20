@@ -8,7 +8,7 @@ import sync_planning_metrics_direct as direct_metrics
 import sync_planning_pipeline as pipeline_runner
 import sync_stock
 import sync_stock_compat
-from sync_planning_weekly_model import (
+from planning.weekly_model import (
     compute_planning_inputs_hash,
     prepare_weekly_schedule_update,
     verify_weekly_workbook,

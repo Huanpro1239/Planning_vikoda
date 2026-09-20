@@ -5,7 +5,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from sync_planning_weekly_model import (
+from planning.weekly_model import (
     analyze_weekly_workbook,
     build_weekly_schedule_report,
     patch_weekly_workbook,
@@ -63,7 +63,7 @@ class ServiceFirstSafetyStockTests(unittest.TestCase):
             period_month=9,
         )
         daily = build_daily_plan(calculated, policy=PlannerPolicy(setup_shifts=0.0))
-        from sync_planning_weekly_model import WeeklyAnalysis
+        from planning.weekly_model import WeeklyAnalysis
 
         return WeeklyAnalysis(
             calculated=calculated,
