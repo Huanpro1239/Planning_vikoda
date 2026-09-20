@@ -11,7 +11,7 @@ from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
 from sharepoint.client import GraphClient, get_access_token
 from sync_stock import DEST_PATH, normalize_code, to_number
-from weekly_planning_engine import is_sugar_classification
+from planning.weekly_engine import is_sugar_classification
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
