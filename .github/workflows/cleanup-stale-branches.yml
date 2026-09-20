@@ -22,6 +22,8 @@ jobs:
 
           protected_branches=("main" "runtime-state")
           stale_branches=(
+            "chore/cleanup-pr54-branch"
+            "refactor/planning-verification-resources"
             "chore/cleanup-pr52-branch"
             "refactor/planning-verification-row-mass-balance"
             "chore/cleanup-pr50-branch"
