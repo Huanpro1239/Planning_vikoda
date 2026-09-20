@@ -22,6 +22,7 @@ jobs:
 
           protected_branches=("main" "runtime-state")
           stale_branches=(
+            "fix/cleanup-stale-branches-rest"
             "chore/cleanup-stale-branches"
             "chore/node24-actions"
             "chore/oidc-cutover-node24"
@@ -55,12 +56,10 @@ jobs:
             done
           done
 
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
           for branch in "${stale_branches[@]}"; do
-            if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" >/dev/null 2>&1; then
               echo "Deleting $branch"
-              git push "$remote" --delete "$branch"
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
             else
               echo "Already absent: $branch"
             fi
