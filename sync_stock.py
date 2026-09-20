@@ -10,7 +10,7 @@ from excel.openpyxl_io import safe_close_workbook
 from lxml import etree
 from openpyxl import load_workbook
 
-import sync_planning_weekly_model as weekly_model
+import planning.weekly_model as weekly_model
 
 from sharepoint.client import (
     GRAPH,
