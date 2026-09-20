@@ -1,0 +1,69 @@
+name: Cleanup stale branches
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: ${{ contains(github.event.head_commit.message, '[branch-cleanup]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete verified stale branches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          protected_branches=("main" "runtime-state")
+          stale_branches=(
+            "chore/cleanup-stale-branches"
+            "chore/node24-actions"
+            "chore/oidc-cutover-node24"
+            "chore/runtime-state-branch-protection"
+            "feat/entra-oidc"
+            "feat/nvl-auto-sync"
+            "feat/nvl-open-po-column-e"
+            "feat/sync-nvl-stock"
+            "fix/khsx-ki-layout-and-engine-v4"
+            "fix/khsx-ki-layout-detect"
+            "fix/khsx-ki-layout-sku-scoping"
+            "fix/nvl-open-po-graph-500"
+            "fix/nvl-source-identity"
+            "fix/nvl-source-share-url"
+            "refactor/nvl-modularize-and-resource-cleanup"
+            "refactor/package-layout"
+            "refactor/planning-modularization"
+            "refactor/remove-legacy-shims"
+            "refactor/repo-hygiene-cleanup"
+            "refactor/sharepoint-canonical-client"
+            "refactor/sharepoint-client"
+            "tmp-noop"
+          )
+
+          for branch in "${stale_branches[@]}"; do
+            for protected in "${protected_branches[@]}"; do
+              if [[ "$branch" == "$protected" ]]; then
+                echo "Refusing to delete protected branch: $branch"
+                exit 1
+              fi
+            done
+          done
+
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          for branch in "${stale_branches[@]}"; do
+            if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+              echo "Deleting $branch"
+              git push "$remote" --delete "$branch"
+            else
+              echo "Already absent: $branch"
+            fi
+          done
+
+          echo "Verified stale branch cleanup completed."
