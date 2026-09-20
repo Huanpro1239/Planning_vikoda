@@ -1,6 +1,6 @@
 import unittest
 
-from weekly_planning_engine import (
+from planning.weekly_engine import (
     WeeklyInputRow,
     calculate_row,
     is_sugar_classification,
