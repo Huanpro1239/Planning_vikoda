@@ -477,7 +477,7 @@ def verify_workbook(workbook_bytes, schedule_report=None, plan_year=None):
                         f"Mã {code} có P>0 nhưng E/I không hợp lệ: E={per_shift}, I={shifts_per_day}."
                     )
             else:
-                # O = p_need của weekly_planning_engine (nguồn sự thật ghi workbook):
+                # O = p_need của planning.weekly_engine (nguồn sự thật ghi workbook):
                 #   - Không nợ: O = FC - tồn_sổ(K) + tồn_cuối(M).
                 #   - Có nợ: theo Debt mode, KHÔNG cộng M:
                 #       SUBTRACT_BOOK_ON_DEBT: O = FC + nợ - tồn_sổ(K)
