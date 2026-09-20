@@ -10,7 +10,7 @@ from sync_planning_weekly_model import (
     build_weekly_schedule_report,
     patch_weekly_workbook,
 )
-from weekly_planning_engine import (
+from planning.weekly_engine import (
     PlannerPolicy,
     WeeklyInputRow,
     build_daily_plan,
