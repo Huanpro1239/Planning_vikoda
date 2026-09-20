@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from verify_planning_month import verify_workbook
+from planning.verification import verify_workbook
 from sync_planning_calendar import build_date_headers
 
 
