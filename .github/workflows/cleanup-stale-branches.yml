@@ -22,6 +22,8 @@ jobs:
 
           protected_branches=("main" "runtime-state")
           stale_branches=(
+            "chore/cleanup-pr42-branch"
+            "refactor/planning-weekly-engine"
             "fix/cleanup-stale-branches-rest"
             "chore/cleanup-stale-branches"
             "chore/node24-actions"
