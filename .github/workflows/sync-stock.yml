@@ -46,6 +46,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Checkout runtime state
+        uses: actions/checkout@v5
+        with:
+          ref: runtime-state
+          path: .runtime-state
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -61,6 +67,15 @@ jobs:
       - name: Run test suite gate
         run: |
           python -X utf8 -m unittest discover -s tests -v
+
+      - name: Restore production runtime state
+        shell: bash
+        run: |
+          test -f .runtime-state/state.json
+          test -f .runtime-state/planning_runtime.json
+          cp .runtime-state/state.json state.json
+          cp .runtime-state/planning_runtime.json planning_runtime.json
+          echo "[STATE] Runtime state restored from runtime-state branch."
 
       - name: Generate proposal or controlled publish
         shell: bash
@@ -103,18 +118,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sync states after authorized publish
+      - name: Save runtime state to runtime-state branch
         if: ${{ success() && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
+          cp state.json .runtime-state/state.json
+          cp planning_runtime.json .runtime-state/planning_runtime.json
+
+          cd .runtime-state
+
           if git diff --quiet -- state.json planning_runtime.json; then
-            echo "Các file state không thay đổi."
+            echo "[STATE] Không có thay đổi runtime state."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add state.json planning_runtime.json
-          git commit -m "chore: update SharePoint sync states"
-          git pull --rebase origin main
-          git push
+          git commit -m "chore: update planning runtime state"
+          git pull --rebase origin runtime-state
+          git push origin HEAD:runtime-state
