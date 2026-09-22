@@ -10,10 +10,7 @@ from sync_planning_calendar_all_months import prepare_calendar_update_all_months
 import sync_planning_fc_compat  # noqa: F401 - installs dimension-tolerant FC reader
 from sync_planning_fc import prepare_planning_fc_update
 from planning import metrics
-import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direct hooks
-import sync_planning_metrics_compat as metrics_compat
 from sync_planning_stock_inputs import prepare_stock_input_update
-import sync_planning_metrics_direct
 from planning.weekly_model import (
     ENGINE_VERSION,
     compute_planning_inputs_hash,
