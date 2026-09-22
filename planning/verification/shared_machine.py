@@ -1,6 +1,6 @@
 import math
 
-from sync_stock import normalize_code
+from stock import normalize_code
 
 SHARED_RESOURCE = "KHS + PET 9000"
 # Tên resource máy chung mà planning.weekly_model ghi vào report. Verifier
