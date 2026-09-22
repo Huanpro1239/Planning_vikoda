@@ -26,6 +26,7 @@ class RepoHygieneTests(unittest.TestCase):
         paths = (
             ROOT / "planning" / "pipeline.py",
             ROOT / "planning" / "khsx_ki" / "__init__.py",
+            ROOT / "planning" / "publish" / "__init__.py",
             ROOT / "nvl" / "stock.py",
             ROOT / "nvl" / "open_po.py",
         )
@@ -409,6 +410,83 @@ class RepoHygieneTests(unittest.TestCase):
             offenders,
             [],
             "Planning compatibility monkey-patch quay trở lại: " + "; ".join(offenders),
+        )
+
+
+    def test_publish_is_package_and_monolith_is_removed(self):
+        self.assertFalse((ROOT / "planning" / "publish.py").exists())
+        required = {
+            "__init__.py",
+            "constants.py",
+            "snapshot.py",
+            "proposal.py",
+            "policy.py",
+            "state.py",
+            "service.py",
+            "runner.py",
+        }
+        actual = {
+            path.name
+            for path in (ROOT / "planning" / "publish").glob("*.py")
+        }
+        self.assertTrue(
+            required <= actual,
+            f"Thiếu Planning publish modules: {required - actual}",
+        )
+
+    def test_publish_dependency_direction(self):
+        allowed = {
+            "constants.py": set(),
+            "snapshot.py": {"constants"},
+            "proposal.py": {"constants"},
+            "policy.py": {"constants"},
+            "state.py": {"constants"},
+            "service.py": {"policy", "proposal", "snapshot", "state"},
+            "runner.py": {"service"},
+        }
+        offenders = []
+        root = ROOT / "planning" / "publish"
+        for filename, allowed_local in allowed.items():
+            path = root / filename
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                module = node.module or ""
+                if node.level != 1:
+                    continue
+                local = module.split(".")[0]
+                if local and local not in allowed_local:
+                    offenders.append(
+                        f"{filename}: .{module} not in {sorted(allowed_local)}"
+                    )
+        self.assertEqual(
+            offenders,
+            [],
+            "Planning publish dependency boundary bị đảo: " + "; ".join(offenders),
+        )
+
+    def test_publish_modules_stay_bounded(self):
+        limits = {
+            "constants.py": 80,
+            "snapshot.py": 100,
+            "proposal.py": 140,
+            "policy.py": 160,
+            "state.py": 200,
+            "service.py": 320,
+            "runner.py": 130,
+            "__init__.py": 100,
+        }
+        oversized = []
+        root = ROOT / "planning" / "publish"
+        for name, limit in limits.items():
+            count = len((root / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(
+            oversized,
+            [],
+            "Planning publish module bị phình lại: " + "; ".join(oversized),
         )
 
 
