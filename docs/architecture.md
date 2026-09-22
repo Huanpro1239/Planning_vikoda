@@ -281,3 +281,13 @@ The former direct dependency
 `weekly_model.verification -> khsx_ki` was removed. `planning.pipeline`
 now invokes the weekly-model verifier and KHSX_ki verifier separately and
 combines their results at the orchestration boundary.
+
+
+## Business invariant contracts
+
+System-level business invariants are executable in
+`tests/contracts/test_planning_business_invariants.py` and documented in
+`docs/business_contracts.md`. Architecture refactors are not complete unless
+this contract suite remains green. These tests intentionally cross
+`weekly_engine -> weekly_model -> verification -> publish policy` boundaries
+to protect business behavior rather than module shape.
