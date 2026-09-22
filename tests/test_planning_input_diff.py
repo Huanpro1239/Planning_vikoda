@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 import sync_planning_pipeline as pipeline_runner
-import sync_stock
+import stock
+from stock import state as stock_state
 
 
 class PlanningInputDiffTests(unittest.TestCase):
@@ -68,12 +69,12 @@ class PlanningInputDiffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             test_state_file = Path(tmpdir) / "state.json"
             with patch.object(sync_stock, "STATE_FILE", test_state_file):
-                sync_stock.save_state(
+                stock.save_state(
                     {"actual_stock": "etag1"},
                     "conv123",
                     fc_hash="fchash456",
                 )
-                loaded = sync_stock.load_state()
+                loaded = stock.load_state()
                 self.assertEqual(loaded.get("fc_hash"), "fchash456")
                 self.assertEqual(loaded.get("conversion_hash"), "conv123")
                 self.assertEqual(loaded.get("sources", {}).get("actual_stock"), "etag1")
