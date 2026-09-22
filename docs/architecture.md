@@ -161,3 +161,31 @@ The dimension-tolerant FC reader is the canonical implementation in
 `planning.fc`. The all-month calendar behavior is explicit through
 `planning.calendar.prepare_calendar_update_all_months`; no module rebinds
 another module's function at import time.
+
+
+## Planning publish boundaries
+
+The former `planning/publish.py` orchestration monolith is split into:
+
+- `planning/publish/snapshot.py`: SharePoint snapshot acquisition and provenance.
+- `planning/publish/proposal.py`: stable XLSX proposal identity and review artifacts.
+- `planning/publish/policy.py`: publish/review authorization only.
+- `planning/publish/state.py`: input-diff detection and state persistence.
+- `planning/publish/service.py`: retry/recompute/upload orchestration.
+- `planning/publish/runner.py`: CLI parsing, authentication and Graph bootstrap.
+- `planning/publish/__init__.py`: stable compatibility facade.
+
+The dependency direction is intentionally one-way:
+
+```text
+snapshot   proposal   policy   state
+    \        |         |       /
+             service
+                |
+              runner
+```
+
+Policy remains independent of Graph, workbook mutation and artifact persistence.
+Snapshot acquisition does not decide publish eligibility. Proposal identity does
+not save runtime state. Service owns orchestration but not the individual policy
+or hashing rules.
