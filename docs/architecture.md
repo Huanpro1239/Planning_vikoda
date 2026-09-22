@@ -85,7 +85,28 @@ Planning implementations now live under the `planning/` package:
   - `calculation.py`: explicit all-month M:R calculations.
   - `workbook.py`: M:R OpenXML patch/diff.
   - `service.py`: standalone SharePoint orchestration.
-- `planning/khsx_ki.py`: KHSX_ki weekly aggregation and verification.
+- `planning/khsx_ki/`: KHSX_ki package:
+  - `calendar.py`: Monday-Sunday month partitioning.
+  - `layout.py`: week/total column layout, styles and safe merge handling.
+  - `workbook.py`: SKU reconciliation and workbook patching.
+  - `verification.py`: independent read-only integrity verification.
 - `planning/pipeline.py`: pure proposal-building pipeline.
 
 Legacy metrics patchers `sync_planning_metrics_compat.py`, `sync_planning_metrics_direct.py` and `sync_planning_metrics_all_months.py` are removed. No module may rebind `planning.metrics` functions or policy state at import/runtime. No kho debt, Danh_muc leadtime and all-month calculations are wired explicitly through function arguments.
+
+
+### KHSX_ki dependency boundary
+
+```text
+calendar
+   ↓
+ layout
+   ↓
+workbook
+   ↓
+verification
+```
+
+`planning.khsx_ki.__init__` is a stable facade only. The former
+`planning/khsx_ki.py` monolith is removed. Verification stays read-only and
+must not become a workbook writer.
