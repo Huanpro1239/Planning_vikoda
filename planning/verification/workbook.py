@@ -2,9 +2,8 @@ import re
 
 from openpyxl.utils import get_column_letter
 
-import sync_planning_fc as fc
-from sync_planning_calendar import build_date_headers, parse_plan_month
-from sync_planning_calendar_all_months import resolve_plan_year
+from planning import fc
+from planning.calendar import build_date_headers, parse_plan_month, resolve_plan_year
 from stock import normalize_code, to_number
 
 
