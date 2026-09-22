@@ -242,5 +242,47 @@ class PlanningPackageArchitectureTests(unittest.TestCase):
         )
 
 
+    def test_actual_domain_graph_is_acyclic(self):
+        graph = {
+            domain: set()
+            for domain in ALLOWED_DOMAIN_EDGES
+        }
+
+        for path in sorted(PLANNING.rglob("*.py")):
+            source = domain_for_module(module_name(path))
+            if source is None:
+                continue
+            for imported_module in planning_imports(path):
+                target = domain_for_module(imported_module)
+                if target is not None and target != source:
+                    graph[source].add(target)
+
+        visiting = set()
+        visited = set()
+        stack = []
+
+        def visit(node):
+            if node in visited:
+                return
+            if node in visiting:
+                start = stack.index(node)
+                cycle = stack[start:] + [node]
+                self.fail(
+                    "Planning dependency cycle: "
+                    + " -> ".join(cycle)
+                )
+
+            visiting.add(node)
+            stack.append(node)
+            for target in sorted(graph[node]):
+                visit(target)
+            stack.pop()
+            visiting.remove(node)
+            visited.add(node)
+
+        for domain in sorted(graph):
+            visit(domain)
+
+
 if __name__ == "__main__":
     unittest.main()
