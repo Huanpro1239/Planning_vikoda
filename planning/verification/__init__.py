@@ -3,7 +3,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from planning_schedule_report import load_schedule_report
 from sharepoint.client import GraphClient, get_access_token
-from sync_stock import DEST_PATH
+from stock import DEST_PATH
 
 from .workbook import (
     PLANNING_SHEET,
