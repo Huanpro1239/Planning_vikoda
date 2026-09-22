@@ -27,6 +27,7 @@ class RepoHygieneTests(unittest.TestCase):
             ROOT / "planning" / "pipeline.py",
             ROOT / "planning" / "khsx_ki" / "__init__.py",
             ROOT / "planning" / "publish" / "__init__.py",
+            ROOT / "planning" / "weekly_model" / "__init__.py",
             ROOT / "nvl" / "stock.py",
             ROOT / "nvl" / "open_po.py",
         )
@@ -487,6 +488,105 @@ class RepoHygieneTests(unittest.TestCase):
             oversized,
             [],
             "Planning publish module bị phình lại: " + "; ".join(oversized),
+        )
+
+
+    def test_weekly_model_is_package_and_monolith_is_removed(self):
+        self.assertFalse((ROOT / "planning" / "weekly_model.py").exists())
+        required = {
+            "__init__.py",
+            "policy.py",
+            "inputs.py",
+            "schedule.py",
+            "workbook.py",
+            "report.py",
+            "verification.py",
+            "service.py",
+        }
+        actual = {
+            path.name
+            for path in (ROOT / "planning" / "weekly_model").glob("*.py")
+        }
+        self.assertTrue(
+            required <= actual,
+            f"Thiếu weekly_model modules: {required - actual}",
+        )
+
+    def test_weekly_model_dependency_direction(self):
+        allowed = {
+            "policy.py": set(),
+            "inputs.py": {"policy"},
+            "schedule.py": {"inputs"},
+            "workbook.py": {"inputs", "schedule"},
+            "report.py": {"inputs", "schedule"},
+            "verification.py": {"report", "schedule"},
+            "service.py": {"report", "schedule", "workbook"},
+        }
+        offenders = []
+        root = ROOT / "planning" / "weekly_model"
+        for filename, allowed_local in allowed.items():
+            path = root / filename
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                module = node.module or ""
+                if node.level != 1:
+                    continue
+                local = module.split(".")[0]
+                if local and local not in allowed_local:
+                    offenders.append(
+                        f"{filename}: .{module} not in {sorted(allowed_local)}"
+                    )
+        self.assertEqual(
+            offenders,
+            [],
+            "weekly_model dependency boundary bị đảo: " + "; ".join(offenders),
+        )
+
+    def test_weekly_model_modules_stay_bounded(self):
+        limits = {
+            "policy.py": 150,
+            "inputs.py": 320,
+            "schedule.py": 300,
+            "workbook.py": 160,
+            "report.py": 400,
+            "verification.py": 240,
+            "service.py": 80,
+            "__init__.py": 100,
+        }
+        oversized = []
+        root = ROOT / "planning" / "weekly_model"
+        for name, limit in limits.items():
+            count = len((root / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(
+            oversized,
+            [],
+            "weekly_model module bị phình lại: " + "; ".join(oversized),
+        )
+
+    def test_weekly_engine_does_not_depend_on_weekly_model(self):
+        path = ROOT / "planning" / "weekly_engine.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders = []
+        for node in ast.walk(tree):
+            modules = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            for module in modules:
+                if module == "planning.weekly_model" or module.startswith(
+                    "planning.weekly_model."
+                ):
+                    offenders.append(module)
+        self.assertEqual(
+            offenders,
+            [],
+            "weekly_engine phải giữ thuần, không phụ thuộc weekly_model: "
+            + "; ".join(offenders),
         )
 
 
