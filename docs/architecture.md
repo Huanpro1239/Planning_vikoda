@@ -225,3 +225,59 @@ weekly_engine  <-- imported by adapter modules only
 
 `planning/weekly_engine.py` must never import `planning.weekly_model`; this
 keeps the domain scheduling engine independent from Excel/workbook/report concerns.
+
+
+## Planning package dependency boundary
+
+Package-level architecture is enforced by
+`tests/test_planning_package_architecture.py`. The test resolves absolute and
+relative Python imports with AST, maps them to Planning domains, validates the
+allowed direction and rejects cycles.
+
+```text
+                 weekly_engine
+                       ^
+                       |
+          +------------+------------+
+          |            |            |
+       metrics    weekly_model    khsx_ki
+          \            |            /
+           \           |           /
+                    pipeline
+                   /        \
+              publish     verification
+```
+
+Workbook-support modules are intentionally below orchestration:
+
+```text
+fc
+^ \
+|  \
+layout  stock_inputs
+^
+|
+calendar
+```
+
+The package rules are:
+
+- `weekly_engine` is the bottom domain engine and imports no other Planning layer.
+- `metrics`, `weekly_model` and `khsx_ki` are sibling domains and must not
+  import one another.
+- `weekly_model` may depend on `weekly_engine`; cross-domain verification is
+  coordinated by `pipeline`, not by a sibling domain.
+- `pipeline` may orchestrate support modules plus
+  `metrics/weekly_model/khsx_ki`, but may not import `publish` or
+  `verification`.
+- `publish` is an outer online orchestration shell and may call `pipeline`
+  and metrics runtime-state APIs.
+- `verification` is an outer independent read-only verifier and may use only
+  workbook support plus `weekly_engine` calculations.
+- lower layers may never import `pipeline`, `publish` or `verification`.
+- the actual domain graph must remain acyclic.
+
+The former direct dependency
+`weekly_model.verification -> khsx_ki` was removed. `planning.pipeline`
+now invokes the weekly-model verifier and KHSX_ki verifier separately and
+combines their results at the orchestration boundary.

@@ -235,6 +235,14 @@ def prepare_pipeline_output(
         plan_year=plan_year,
         plan_month=plan_month,
     )
+    if khsx_ki.has_khsx_ki_sheet(final_bytes):
+        verify_info["khsx_ki"] = khsx_ki.verify_khsx_ki(
+            final_bytes,
+            plan_year=plan_year,
+            plan_month=plan_month,
+        )
+    else:
+        verify_info["khsx_ki"] = None
     steps.append("verify")
 
     after_snapshot = _planning_snapshot(final_bytes)

@@ -153,18 +153,6 @@ def verify_weekly_workbook(
             f"{schedule_report.get('publish_status')}."
         )
 
-    khsx_ki_verify = None
-    from planning import khsx_ki
-
-    if khsx_ki.has_khsx_ki_sheet(
-        workbook_bytes
-    ):
-        khsx_ki_verify = khsx_ki.verify_khsx_ki(
-            workbook_bytes,
-            plan_year=plan_year,
-            plan_month=plan_month,
-        )
-
     return {
         "validated": True,
         "algorithm": ENGINE_VERSION,
@@ -179,5 +167,4 @@ def verify_weekly_workbook(
         "publish_status": schedule_report.get(
             "publish_status"
         ),
-        "khsx_ki": khsx_ki_verify,
     }
