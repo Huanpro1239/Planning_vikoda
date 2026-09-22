@@ -68,7 +68,7 @@ class PlanningInputDiffTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_state_file = Path(tmpdir) / "state.json"
-            with patch.object(sync_stock, "STATE_FILE", test_state_file):
+            with patch.object(stock_state, "STATE_FILE", test_state_file):
                 stock.save_state(
                     {"actual_stock": "etag1"},
                     "conv123",
@@ -111,7 +111,7 @@ class PlanningInputDiffTests(unittest.TestCase):
 
         with (
             patch.object(pipeline_runner, "prepare_pipeline_output", return_value=(b"final_data", mock_report, {})),
-            patch.object(sync_stock, "load_state", return_value=old_state),
+            patch.object(pipeline_runner.stock, "load_state", return_value=old_state),
             patch.object(pipeline_runner.metrics, "load_runtime_state", return_value={}),
             patch.object(pipeline_runner, "_save_proposal_artifacts"),
             patch.object(pipeline_runner, "_save_publish_decision"),
@@ -174,7 +174,7 @@ class PlanningInputDiffTests(unittest.TestCase):
 
         with (
             patch.object(pipeline_runner, "prepare_pipeline_output", return_value=(b"new_data", mock_report, {})),
-            patch.object(sync_stock, "load_state", return_value=old_state),
+            patch.object(pipeline_runner.stock, "load_state", return_value=old_state),
             patch.object(pipeline_runner.metrics, "load_runtime_state", return_value={}),
             patch.object(pipeline_runner, "_save_proposal_artifacts"),
             patch.object(pipeline_runner, "_save_publish_decision"),
