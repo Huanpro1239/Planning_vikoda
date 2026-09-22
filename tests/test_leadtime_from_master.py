@@ -3,8 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-from planning import metrics
-from sync_planning_metrics_compat import (
+from planning.metrics import (
     MASTER_SHEET,
     read_conversion_factors_and_leadtime,
     read_leadtime_from_master,
@@ -46,10 +45,13 @@ class LeadtimeFromMasterTests(unittest.TestCase):
         )
         output = BytesIO()
         workbook.save(output)
+        workbook.close()
         return output.getvalue()
 
     def test_reads_leadtime_from_column_j(self):
-        leadtimes = read_leadtime_from_master(self.make_workbook(leadtime=4))
+        leadtimes = read_leadtime_from_master(
+            self.make_workbook(leadtime=4)
+        )
         self.assertEqual(leadtimes["130200026"], 4)
 
     def test_conversion_and_leadtime_are_returned_explicitly(self):
