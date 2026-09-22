@@ -4,7 +4,7 @@ from io import BytesIO
 
 from lxml import etree
 
-from sync_planning_fc import _find_sheet_xml_path, _load_shared_strings, _read_cell_text
+from planning.fc import _find_sheet_xml_path, _load_shared_strings, _read_cell_text
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
