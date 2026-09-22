@@ -7,7 +7,7 @@ from io import BytesIO
 
 from lxml import etree
 
-from sync_planning_fc import (
+from planning.fc import (
     _find_sheet_xml_path,
     _get_or_create_cell,
     _load_shared_strings,

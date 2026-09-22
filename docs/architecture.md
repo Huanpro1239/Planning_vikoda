@@ -135,3 +135,29 @@ single canonical implementation in `stock.readers`.
 
 The `stock/` package may depend on `excel/` and `sharepoint/`, but must not
 depend on `planning/` or the legacy root `sync_stock.py`.
+
+
+## Canonical Planning entrypoints
+
+The remaining root `sync_planning_*.py` implementation modules were migrated
+into the `planning/` package:
+
+- `planning/fc.py`: FC selection, robust target reader, hash and workbook patch.
+- `planning/layout.py`: canonical daily schedule column layout.
+- `planning/calendar.py`: date headers, cross-year resolution and all-month calendar update.
+- `planning/stock_inputs.py`: Ton_kho -> Ke_hoach_SX J/K synchronization.
+- `planning/publish.py`: proposal/publish policy, artifacts, retries and CLI behavior.
+
+Root files `sync_planning_fc.py`, `sync_planning_calendar.py`,
+`sync_planning_stock_inputs.py` and `sync_planning_pipeline.py` are CLI
+entrypoints only. Production/runtime/tests must import `planning.*` directly.
+
+Obsolete side-effect modules are removed:
+- `sync_planning_fc_compat.py`
+- `sync_planning_calendar_all_months.py`
+- `sync_planning_layout.py`
+
+The dimension-tolerant FC reader is the canonical implementation in
+`planning.fc`. The all-month calendar behavior is explicit through
+`planning.calendar.prepare_calendar_update_all_months`; no module rebinds
+another module's function at import time.

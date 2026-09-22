@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-import sync_planning_pipeline as pipeline_runner
+from planning import publish as pipeline_runner
 import stock
 from stock import state as stock_state
 

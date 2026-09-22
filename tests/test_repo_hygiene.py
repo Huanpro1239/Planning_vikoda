@@ -121,6 +121,13 @@ class RepoHygieneTests(unittest.TestCase):
             "sync_planning_metrics_all_months",
             "sync_planning_khsx_ki",
             "planning_pipeline",
+            "sync_planning_fc",
+            "sync_planning_fc_compat",
+            "sync_planning_calendar",
+            "sync_planning_calendar_all_months",
+            "sync_planning_layout",
+            "sync_planning_stock_inputs",
+            "sync_planning_pipeline",
         }
         shim_paths = set()
         offenders = []
@@ -153,6 +160,9 @@ class RepoHygieneTests(unittest.TestCase):
             ROOT / "sync_planning_metrics_all_months.py",
             ROOT / "sync_planning_khsx_ki.py",
             ROOT / "planning_pipeline.py",
+            ROOT / "sync_planning_fc_compat.py",
+            ROOT / "sync_planning_calendar_all_months.py",
+            ROOT / "sync_planning_layout.py",
         ]
         leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
         self.assertEqual(leftovers, [], "Planning shim cũ vẫn còn: " + ", ".join(leftovers))
@@ -328,6 +338,77 @@ class RepoHygieneTests(unittest.TestCase):
             offenders,
             [],
             "stock package dependency bị đảo: " + "; ".join(offenders),
+        )
+
+
+    def test_planning_root_entrypoints_are_thin(self):
+        limits = {
+            "sync_planning_fc.py": 30,
+            "sync_planning_calendar.py": 30,
+            "sync_planning_stock_inputs.py": 30,
+            "sync_planning_pipeline.py": 30,
+        }
+        oversized = []
+        for name, limit in limits.items():
+            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(
+            oversized,
+            [],
+            "Planning root entrypoint bị phình lại: " + "; ".join(oversized),
+        )
+
+    def test_canonical_planning_does_not_import_root_sync_modules(self):
+        offenders = []
+        for path in sorted((ROOT / "planning").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                modules = []
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    modules = [node.module]
+                for module in modules:
+                    if module.startswith("sync_planning_"):
+                        offenders.append(
+                            f"{path.relative_to(ROOT)}: {module}"
+                        )
+        self.assertEqual(
+            offenders,
+            [],
+            "Canonical planning còn import root sync module: " + "; ".join(offenders),
+        )
+
+    def test_planning_has_no_import_time_compat_monkey_patches(self):
+        forbidden_assignments = {
+            ("fc", "read_planning_fc_targets"),
+            ("calendar_sync", "prepare_calendar_update"),
+        }
+        offenders = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if "tests" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                    targets = [node.target]
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and (target.value.id, target.attr) in forbidden_assignments
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', '?')}"
+                        )
+        self.assertEqual(
+            offenders,
+            [],
+            "Planning compatibility monkey-patch quay trở lại: " + "; ".join(offenders),
         )
 
 

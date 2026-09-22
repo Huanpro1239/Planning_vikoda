@@ -4,7 +4,7 @@ from io import BytesIO
 from openpyxl import Workbook, load_workbook
 
 from planning.verification import verify_workbook
-from sync_planning_calendar import build_date_headers
+from planning.calendar import build_date_headers
 
 
 class VerifyPlanningMonthTests(unittest.TestCase):

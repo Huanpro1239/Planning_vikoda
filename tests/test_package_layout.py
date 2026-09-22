@@ -33,6 +33,26 @@ class PackageLayoutTests(unittest.TestCase):
             stock.patch_destination_workbook,
         )
 
+    def test_planning_root_entrypoints_point_to_canonical_modules(self):
+        import planning.calendar as calendar
+        import planning.fc as fc
+        import planning.publish as publish
+        import planning.stock_inputs as stock_inputs
+
+        self.assertEqual(fc.prepare_planning_fc_update.__module__, "planning.fc")
+        self.assertEqual(
+            calendar.prepare_calendar_update_all_months.__module__,
+            "planning.calendar",
+        )
+        self.assertEqual(
+            stock_inputs.prepare_stock_input_update.__module__,
+            "planning.stock_inputs",
+        )
+        self.assertEqual(
+            publish.run_pipeline_with_retry.__module__,
+            "planning.publish",
+        )
+
     def test_nvl_facades_expose_legacy_business_api(self):
         import nvl.stock as stock
         import nvl.open_po as open_po

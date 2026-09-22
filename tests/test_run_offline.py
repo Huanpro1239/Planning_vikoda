@@ -8,7 +8,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 import run_offline
-from sync_planning_calendar import build_date_headers
+from planning.calendar import build_date_headers
 
 
 CODE = 130100011          # Vikoda code (starts with 1)
