@@ -52,13 +52,12 @@ class LeadtimeFromMasterTests(unittest.TestCase):
         leadtimes = read_leadtime_from_master(self.make_workbook(leadtime=4))
         self.assertEqual(leadtimes["130200026"], 4)
 
-    def test_runtime_mapping_is_replaced_by_master_column_j(self):
-        metrics.LEADTIME_BY_CODE = {"130200026": 1}
-        factors, _ = read_conversion_factors_and_leadtime(
+    def test_conversion_and_leadtime_are_returned_explicitly(self):
+        factors, _, leadtimes = read_conversion_factors_and_leadtime(
             self.make_workbook(leadtime=4)
         )
         self.assertEqual(factors["130200026"], 24)
-        self.assertEqual(metrics.LEADTIME_BY_CODE["130200026"], 4)
+        self.assertEqual(leadtimes["130200026"], 4)
 
     def test_rejects_wrong_header(self):
         with self.assertRaisesRegex(RuntimeError, "J1 phải là 'Leadtime'"):

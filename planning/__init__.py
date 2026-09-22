@@ -1,5 +1,5 @@
-"""Planning domain package.
+"""Canonical Planning domain package.
 
-Các module nghiệp vụ sẽ được migrate dần từ root vào package này.
-Entry-point cũ ở root được giữ lại trong giai đoạn chuyển đổi để không phá workflow production.
+Planning calculation, scheduling, verification and workbook orchestration live
+under this package. Production code must not rely on import-time monkey-patching.
 """
