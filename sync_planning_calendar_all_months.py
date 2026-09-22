@@ -7,7 +7,7 @@ from graph_retry import install_retry_after_support, retry_delay_seconds as retr
 import sync_planning_calendar as calendar_sync
 from sync_planning_layout import canonicalize_planning_layout, needs_schedule_reset
 from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
-from sync_stock import DEST_PATH
+from stock import DEST_PATH
 
 
 def resolve_plan_year(plan_month, now=None):
