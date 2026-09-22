@@ -25,6 +25,7 @@ class RepoHygieneTests(unittest.TestCase):
     def test_package_facades_do_not_use_wildcard_imports(self):
         paths = (
             ROOT / "planning" / "pipeline.py",
+            ROOT / "planning" / "khsx_ki" / "__init__.py",
             ROOT / "nvl" / "stock.py",
             ROOT / "nvl" / "open_po.py",
         )
@@ -200,6 +201,74 @@ class RepoHygieneTests(unittest.TestCase):
             offenders,
             [],
             "Không được rebind planning metrics lúc runtime: " + "; ".join(offenders),
+        )
+
+
+    def test_khsx_ki_is_package_and_monolith_is_removed(self):
+        self.assertFalse((ROOT / "planning" / "khsx_ki.py").exists())
+        required = {
+            "__init__.py",
+            "calendar.py",
+            "layout.py",
+            "workbook.py",
+            "verification.py",
+        }
+        actual = {
+            path.name
+            for path in (ROOT / "planning" / "khsx_ki").glob("*.py")
+        }
+        self.assertTrue(
+            required <= actual,
+            f"Thiếu KHSX_ki modules: {required - actual}",
+        )
+
+    def test_khsx_ki_dependency_direction(self):
+        allowed = {
+            "calendar.py": set(),
+            "layout.py": {"calendar"},
+            "workbook.py": {"calendar", "layout"},
+            "verification.py": {"calendar", "layout", "workbook"},
+        }
+        offenders = []
+        root = ROOT / "planning" / "khsx_ki"
+        for filename, allowed_local in allowed.items():
+            path = root / filename
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                module = node.module or ""
+                if node.level != 1:
+                    continue
+                local = module.split(".")[0]
+                if local and local not in allowed_local:
+                    offenders.append(
+                        f"{filename}: .{module} not in {sorted(allowed_local)}"
+                    )
+        self.assertEqual(
+            offenders,
+            [],
+            "KHSX_ki dependency boundary bị đảo: " + "; ".join(offenders),
+        )
+
+    def test_khsx_ki_modules_stay_bounded(self):
+        limits = {
+            "calendar.py": 150,
+            "layout.py": 350,
+            "workbook.py": 500,
+            "verification.py": 300,
+            "__init__.py": 80,
+        }
+        oversized = []
+        root = ROOT / "planning" / "khsx_ki"
+        for name, limit in limits.items():
+            count = len((root / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(
+            oversized,
+            [],
+            "KHSX_ki module bị phình lại: " + "; ".join(oversized),
         )
 
 
