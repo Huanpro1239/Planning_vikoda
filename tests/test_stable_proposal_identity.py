@@ -2,7 +2,7 @@ import io
 import unittest
 import zipfile
 
-from planning import publish as pipeline_runner
+from planning.publish import proposal as pipeline_runner
 
 
 class StableProposalIdentityTests(unittest.TestCase):
@@ -42,8 +42,8 @@ class StableProposalIdentityTests(unittest.TestCase):
             timestamp=(2026, 9, 7, 3, 0, 40),
         )
 
-        first_report = pipeline_runner._with_proposal_identity(self._report(), first)
-        second_report = pipeline_runner._with_proposal_identity(self._report(), second)
+        first_report = pipeline_runner.with_proposal_identity(self._report(), first)
+        second_report = pipeline_runner.with_proposal_identity(self._report(), second)
 
         self.assertNotEqual(first_report["output_sha256"], second_report["output_sha256"])
         self.assertEqual(
@@ -64,8 +64,8 @@ class StableProposalIdentityTests(unittest.TestCase):
             timestamp=(2026, 9, 7, 3, 0, 40),
         )
 
-        first_report = pipeline_runner._with_proposal_identity(self._report(), first)
-        second_report = pipeline_runner._with_proposal_identity(self._report(), second)
+        first_report = pipeline_runner.with_proposal_identity(self._report(), first)
+        second_report = pipeline_runner.with_proposal_identity(self._report(), second)
 
         self.assertNotEqual(
             first_report["proposal_output_sha256"],
@@ -74,7 +74,7 @@ class StableProposalIdentityTests(unittest.TestCase):
         self.assertNotEqual(first_report["proposal_id"], second_report["proposal_id"])
 
     def test_non_xlsx_payload_keeps_raw_hash_behavior(self):
-        report = pipeline_runner._with_proposal_identity(self._report(), b"plain-bytes")
+        report = pipeline_runner.with_proposal_identity(self._report(), b"plain-bytes")
         self.assertEqual(report["output_sha256"], report["proposal_output_sha256"])
 
 

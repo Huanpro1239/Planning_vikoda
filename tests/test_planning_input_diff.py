@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from planning import publish as pipeline_runner
+from planning.publish import service as pipeline_runner
+from planning.publish import state as publish_state
+from planning.publish.constants import SOURCES
 import stock
 from stock import state as stock_state
 
@@ -23,21 +25,21 @@ class PlanningInputDiffTests(unittest.TestCase):
         source_items = {k: {"eTag": v} for k, v in old_state["sources"].items()}
         pipeline_info = {"conversion_hash": "conv_hash_1", "fc_hash": "fc_hash_1"}
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, pipeline_info),
+            publish_state.detect_input_changes(old_state, source_items, pipeline_info),
             [],
         )
 
         # FC changed
         pipeline_info_fc = {"conversion_hash": "conv_hash_1", "fc_hash": "fc_hash_2"}
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, pipeline_info_fc),
+            publish_state.detect_input_changes(old_state, source_items, pipeline_info_fc),
             ["sheet:FC"],
         )
 
         # Danh_muc changed
         pipeline_info_conv = {"conversion_hash": "conv_hash_2", "fc_hash": "fc_hash_1"}
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, pipeline_info_conv),
+            publish_state.detect_input_changes(old_state, source_items, pipeline_info_conv),
             ["sheet:Danh_muc"],
         )
 
@@ -45,7 +47,7 @@ class PlanningInputDiffTests(unittest.TestCase):
         source_items_changed = dict(source_items)
         source_items_changed["actual_stock"] = {"eTag": "etag_act_2"}
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items_changed, pipeline_info),
+            publish_state.detect_input_changes(old_state, source_items_changed, pipeline_info),
             ["source:actual_stock"],
         )
 
@@ -58,7 +60,7 @@ class PlanningInputDiffTests(unittest.TestCase):
         old_state_engine = dict(old_state)
         old_state_engine["engine_version"] = "v_old"
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state_engine, source_items, pipeline_info_engine),
+            publish_state.detect_input_changes(old_state_engine, source_items, pipeline_info_engine),
             ["engine_version"],
         )
 
@@ -89,7 +91,7 @@ class PlanningInputDiffTests(unittest.TestCase):
         fake_graph.download_file.return_value = b"workbook_data"
 
         old_state = {
-            "sources": {k: "etag_same" for k in pipeline_runner.SOURCES},
+            "sources": {k: "etag_same" for k in SOURCES},
             "conversion_hash": "conv_same",
             "fc_hash": "fc_same",
         }
@@ -113,9 +115,9 @@ class PlanningInputDiffTests(unittest.TestCase):
             patch.object(pipeline_runner, "prepare_pipeline_output", return_value=(b"final_data", mock_report, {})),
             patch.object(pipeline_runner.stock, "load_state", return_value=old_state),
             patch.object(pipeline_runner.metrics, "load_runtime_state", return_value={}),
-            patch.object(pipeline_runner, "_save_proposal_artifacts"),
-            patch.object(pipeline_runner, "_save_publish_decision"),
-            patch.object(pipeline_runner, "_save_states_after_success"),
+            patch.object(pipeline_runner, "save_proposal_artifacts"),
+            patch.object(pipeline_runner, "save_publish_decision"),
+            patch.object(pipeline_runner, "save_states_after_success"),
             patch.object(pipeline_runner, "print_operational_report"),
         ):
             result = pipeline_runner.run_pipeline_with_retry(
@@ -150,7 +152,7 @@ class PlanningInputDiffTests(unittest.TestCase):
         fake_graph.download_file.return_value = b"workbook_data"
 
         old_state = {
-            "sources": {k: "etag_same" for k in pipeline_runner.SOURCES},
+            "sources": {k: "etag_same" for k in SOURCES},
             "conversion_hash": "conv_same",
             "fc_hash": "fc_same",
             "engine_version": "old_engine_v3",
@@ -176,9 +178,9 @@ class PlanningInputDiffTests(unittest.TestCase):
             patch.object(pipeline_runner, "prepare_pipeline_output", return_value=(b"new_data", mock_report, {})),
             patch.object(pipeline_runner.stock, "load_state", return_value=old_state),
             patch.object(pipeline_runner.metrics, "load_runtime_state", return_value={}),
-            patch.object(pipeline_runner, "_save_proposal_artifacts"),
-            patch.object(pipeline_runner, "_save_publish_decision"),
-            patch.object(pipeline_runner, "_save_states_after_success"),
+            patch.object(pipeline_runner, "save_proposal_artifacts"),
+            patch.object(pipeline_runner, "save_publish_decision"),
+            patch.object(pipeline_runner, "save_states_after_success"),
             patch.object(pipeline_runner, "print_operational_report"),
         ):
             result = pipeline_runner.run_pipeline_with_retry(

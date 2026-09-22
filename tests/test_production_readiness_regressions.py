@@ -5,7 +5,9 @@ from io import BytesIO
 from openpyxl import Workbook
 
 from planning import metrics as direct_metrics
-from planning import publish as pipeline_runner
+from planning.publish import policy as publish_policy
+from planning.publish import state as publish_state
+from planning.publish.constants import SOURCES
 import stock
 from planning.weekly_model import (
     compute_planning_inputs_hash,
@@ -165,14 +167,14 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         self.assertEqual(report["status"]["service"]["capacity_balanced_skus"], ["130100011"])
 
         # Auto-publish without approval MUST be blocked
-        authorized, decision = pipeline_runner._publish_decision(report, None, "scheduler")
+        authorized, decision = publish_policy.publish_decision(report, None, "scheduler")
         self.assertFalse(authorized)
         self.assertEqual(decision["state"], "blocked")
 
         # Explicit approval with reason for the exact proposal MUST be accepted
         proposal_id = report.get("proposal_id", "test_prop")
         report["proposal_id"] = proposal_id
-        authorized_approved, decision_approved = pipeline_runner._publish_decision(
+        authorized_approved, decision_approved = publish_policy.publish_decision(
             report,
             {"proposal_id": proposal_id, "reason": "Chấp nhận thiếu 2000 thùng vì hết công suất"},
             "planner_lead",
@@ -219,14 +221,14 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         base_planning_hash = compute_planning_inputs_hash(base_bytes)
 
         old_state = {
-            "sources": {k: "etag_1" for k in pipeline_runner.SOURCES},
+            "sources": {k: "etag_1" for k in SOURCES},
             "conversion_hash": base_conv_hash,
             "fc_hash": "fc_hash_1",
             "no_kho_hash": base_no_kho_hash,
             "planning_inputs_hash": base_planning_hash,
             "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
         }
-        source_items = {k: {"eTag": "etag_1"} for k in pipeline_runner.SOURCES}
+        source_items = {k: {"eTag": "etag_1"} for k in SOURCES}
 
         # 1. Same inputs -> No changes
         info_same = {
@@ -237,7 +239,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
             "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
         }
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, info_same),
+            publish_state.detect_input_changes(old_state, source_items, info_same),
             [],
         )
 
@@ -248,7 +250,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         self.assertNotEqual(base_conv_hash, conv_leadtime_hash)
         info_leadtime = dict(info_same, conversion_hash=conv_leadtime_hash)
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, info_leadtime),
+            publish_state.detect_input_changes(old_state, source_items, info_leadtime),
             ["sheet:Danh_muc"],
         )
 
@@ -258,7 +260,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         self.assertNotEqual(base_no_kho_hash, debt_hash)
         info_debt = dict(info_same, no_kho_hash=debt_hash)
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, info_debt),
+            publish_state.detect_input_changes(old_state, source_items, info_debt),
             ["sheet:No_kho"],
         )
 
@@ -269,7 +271,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         self.assertNotEqual(base_planning_hash, planning_shifts_hash)
         info_shifts = dict(info_same, planning_inputs_hash=planning_shifts_hash)
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, info_shifts),
+            publish_state.detect_input_changes(old_state, source_items, info_shifts),
             ["sheet:Ke_hoach_SX"],
         )
 
@@ -285,11 +287,11 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
 
         # 6. Legacy old_state without new hashes triggers recalculation safely
         legacy_state = {
-            "sources": {k: "etag_1" for k in pipeline_runner.SOURCES},
+            "sources": {k: "etag_1" for k in SOURCES},
             "conversion_hash": base_conv_hash,
             "fc_hash": "fc_hash_1",
         }
-        detected_legacy = pipeline_runner.detect_input_changes(legacy_state, source_items, info_same)
+        detected_legacy = publish_state.detect_input_changes(legacy_state, source_items, info_same)
         self.assertIn("sheet:No_kho", detected_legacy)
         self.assertIn("sheet:Ke_hoach_SX", detected_legacy)
 
@@ -387,17 +389,17 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         self.assertNotEqual(h1_sync, h2_sync, "conversion_hash must change when 'Cách tính nợ' changes (sync_stock)")
 
         old_state = {
-            "sources": {k: "etag_1" for k in pipeline_runner.SOURCES},
+            "sources": {k: "etag_1" for k in SOURCES},
             "conversion_hash": h1_compat,
             "fc_hash": "fc_1",
             "no_kho_hash": "debt_1",
             "planning_inputs_hash": "plan_1",
             "engine_version": "ke_hoach_sx_tuan_v2_service_first_20260908",
         }
-        source_items = {k: {"eTag": "etag_1"} for k in pipeline_runner.SOURCES}
+        source_items = {k: {"eTag": "etag_1"} for k in SOURCES}
         info_changed = dict(old_state, conversion_hash=h2_compat)
         self.assertEqual(
-            pipeline_runner.detect_input_changes(old_state, source_items, info_changed),
+            publish_state.detect_input_changes(old_state, source_items, info_changed),
             ["sheet:Danh_muc"],
         )
 
@@ -467,10 +469,10 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
             key: report1["pipeline"][key]
             for key in ("conversion_hash", "fc_hash", "no_kho_hash", "planning_inputs_hash", "engine_version")
         }
-        state["sources"] = {key: "same-etag" for key in pipeline_runner.SOURCES}
-        source_items = {key: {"eTag": "same-etag"} for key in pipeline_runner.SOURCES}
+        state["sources"] = {key: "same-etag" for key in SOURCES}
+        source_items = {key: {"eTag": "same-etag"} for key in SOURCES}
 
-        changes = pipeline_runner.detect_input_changes(state, source_items, report2["pipeline"])
+        changes = publish_state.detect_input_changes(state, source_items, report2["pipeline"])
         self.assertEqual(changes, [], f"Round 2 detected spurious changes: {changes}")
         self.assertEqual(
             report1["pipeline"]["planning_inputs_hash"],

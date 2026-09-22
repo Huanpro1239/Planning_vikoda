@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from planning import publish as pipeline_runner
+from planning.publish import proposal as publish_proposal
+from planning.publish import runner as publish_runner_cli
+from planning.publish import service as pipeline_runner
+from planning.publish import snapshot as publish_snapshot
+from planning.publish.constants import SOURCES
 import stock
 from sharepoint.client import GraphRequestError
 
@@ -22,7 +26,7 @@ class PublishBoundaryTests(unittest.TestCase):
                     "lastModifiedDateTime": f"target-time-r{self.attempt}",
                 }
             key = next(
-                key for key, value in pipeline_runner.SOURCES.items() if value == path
+                key for key, value in SOURCES.items() if value == path
             )
             return {
                 "id": f"{key}-r{self.attempt}",
@@ -79,12 +83,12 @@ class PublishBoundaryTests(unittest.TestCase):
 
     def _expected_proposal_id(self, status="review_required"):
         preview_graph = self.FakeGraph()
-        _, target_bytes, _, _, revision = pipeline_runner._read_snapshot(
+        _, target_bytes, _, _, revision = publish_snapshot.read_snapshot(
             preview_graph,
             "drive",
         )
         report = self._report(revision, status)
-        return pipeline_runner._with_proposal_identity(
+        return publish_proposal.with_proposal_identity(
             report,
             b"final:" + target_bytes,
         )["proposal_id"]
@@ -139,17 +143,17 @@ class PublishBoundaryTests(unittest.TestCase):
             ),
             patch.object(
                 pipeline_runner,
-                "_save_states_after_success",
+                "save_states_after_success",
                 lambda *args: saved_states.append(args),
             ),
             patch.object(
                 pipeline_runner,
-                "_save_publish_decision",
+                "save_publish_decision",
                 lambda decision: saved_decisions.append(dict(decision)),
             ),
             patch.object(
                 pipeline_runner,
-                "_save_proposal_artifacts",
+                "save_proposal_artifacts",
                 lambda data, report: proposals.append((data, dict(report))),
             ),
             patch.object(pipeline_runner, "print_operational_report", lambda report: None),
@@ -163,7 +167,7 @@ class PublishBoundaryTests(unittest.TestCase):
         return result, graph, saved_states, saved_decisions, proposals, sleeps
 
     def test_cli_defaults_to_proposal_mode(self):
-        args = pipeline_runner._parse_args([])
+        args = publish_runner_cli.parse_args([])
         self.assertFalse(args.publish)
 
     def test_runner_default_current_schema_is_proposal_only(self):

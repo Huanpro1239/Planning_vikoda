@@ -50,7 +50,7 @@ class PackageLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             publish.run_pipeline_with_retry.__module__,
-            "planning.publish",
+            "planning.publish.service",
         )
 
     def test_nvl_facades_expose_legacy_business_api(self):

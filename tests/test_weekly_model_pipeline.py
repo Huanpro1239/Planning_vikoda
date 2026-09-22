@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from planning import publish as publish_runner
+from planning.publish import policy as publish_runner
 from planning.weekly_model import (
     prepare_weekly_schedule_update,
     verify_weekly_workbook,
@@ -135,7 +135,7 @@ class WeeklyModelPipelineTests(unittest.TestCase):
                 "service": {"ok": False, "state": "policy_metadata_missing"},
             },
         }
-        authorized, decision = publish_runner._publish_decision(
+        authorized, decision = publish_runner.publish_decision(
             report,
             {
                 "proposal_id": "proposal-policy",
