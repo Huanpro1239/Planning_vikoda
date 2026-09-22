@@ -5,7 +5,7 @@ from openpyxl.utils import get_column_letter
 import sync_planning_fc as fc
 from sync_planning_calendar import build_date_headers, parse_plan_month
 from sync_planning_calendar_all_months import resolve_plan_year
-from sync_stock import normalize_code, to_number
+from stock import normalize_code, to_number
 
 
 PLANNING_SHEET = "Ke_hoach_SX"
