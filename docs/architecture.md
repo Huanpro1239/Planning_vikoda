@@ -79,8 +79,13 @@ Production workflows call their entrypoints directly. `scripts/auth_runner.py` h
 
 Planning implementations now live under the `planning/` package:
 
-- `planning/metrics.py`: planning metrics/state/read-patch implementation.
+- `planning/metrics/`: static metrics package:
+  - `state.py`: runtime-state serialization and period helpers.
+  - `readers.py`: actual stock, system receipts, No kho and Danh_muc readers.
+  - `calculation.py`: explicit all-month M:R calculations.
+  - `workbook.py`: M:R OpenXML patch/diff.
+  - `service.py`: standalone SharePoint orchestration.
 - `planning/khsx_ki.py`: KHSX_ki weekly aggregation and verification.
 - `planning/pipeline.py`: pure proposal-building pipeline.
 
-Legacy root files `sync_planning_metrics.py`, `sync_planning_khsx_ki.py` and `planning_pipeline.py` have been removed. Runtime modules and tests use `planning.*` directly so mutable runtime hooks (leadtime/debt/all-month overrides) operate on a single module instance.
+Legacy metrics patchers `sync_planning_metrics_compat.py`, `sync_planning_metrics_direct.py` and `sync_planning_metrics_all_months.py` are removed. No module may rebind `planning.metrics` functions or policy state at import/runtime. No kho debt, Danh_muc leadtime and all-month calculations are wired explicitly through function arguments.
