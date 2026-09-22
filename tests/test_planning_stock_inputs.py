@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from sync_planning_stock_inputs import prepare_stock_input_update
+from planning.stock_inputs import prepare_stock_input_update
 
 
 class PlanningStockInputsTests(unittest.TestCase):

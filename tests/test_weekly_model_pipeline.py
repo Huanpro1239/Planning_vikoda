@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-import sync_planning_pipeline as publish_runner
+from planning import publish as publish_runner
 from planning.weekly_model import (
     prepare_weekly_schedule_update,
     verify_weekly_workbook,

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-import sync_planning_pipeline as pipeline_runner
+from planning import publish as pipeline_runner
 import stock
 from sharepoint.client import GraphRequestError
 

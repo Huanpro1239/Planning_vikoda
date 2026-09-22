@@ -2,7 +2,7 @@ import io
 import unittest
 import zipfile
 
-import sync_planning_pipeline as pipeline_runner
+from planning import publish as pipeline_runner
 
 
 class StableProposalIdentityTests(unittest.TestCase):

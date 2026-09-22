@@ -5,7 +5,7 @@ from io import BytesIO
 from openpyxl import Workbook
 
 from planning import metrics as direct_metrics
-import sync_planning_pipeline as pipeline_runner
+from planning import publish as pipeline_runner
 import stock
 from planning.weekly_model import (
     compute_planning_inputs_hash,
