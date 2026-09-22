@@ -13,7 +13,7 @@ from sync_planning_fc import (
     _read_cell_text,
 )
 from sharepoint.client import GraphClient, get_access_token
-from sync_stock import (
+from stock import (
     DEST_PATH,
     clean_number,
     normalize_code,

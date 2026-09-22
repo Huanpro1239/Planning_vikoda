@@ -6,8 +6,7 @@ from openpyxl import Workbook
 
 from planning import metrics as direct_metrics
 import sync_planning_pipeline as pipeline_runner
-import sync_stock
-import sync_stock_compat
+import stock
 from planning.weekly_model import (
     compute_planning_inputs_hash,
     prepare_weekly_schedule_update,
@@ -215,7 +214,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         }]
 
         base_bytes = make_workbook_bytes(skus=base_skus, debts={130100011: 0})
-        _, base_conv_hash = sync_stock_compat.read_conversion_factors_robust(base_bytes)
+        _, base_conv_hash = stock.read_conversion_factors(base_bytes)
         _, base_no_kho_hash = direct_metrics.hash_debt_sheet(base_bytes)
         base_planning_hash = compute_planning_inputs_hash(base_bytes)
 
@@ -245,7 +244,7 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         # 2. Leadtime changed in Danh_muc -> sheet:Danh_muc detected
         skus_leadtime = [dict(base_skus[0], leadtime=7)]
         bytes_leadtime = make_workbook_bytes(skus=skus_leadtime, debts={130100011: 0})
-        _, conv_leadtime_hash = sync_stock_compat.read_conversion_factors_robust(bytes_leadtime)
+        _, conv_leadtime_hash = stock.read_conversion_factors(bytes_leadtime)
         self.assertNotEqual(base_conv_hash, conv_leadtime_hash)
         info_leadtime = dict(info_same, conversion_hash=conv_leadtime_hash)
         self.assertEqual(
@@ -379,12 +378,12 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         wb2["Danh_muc"]["K2"] = "IGNORE_BOOK_ON_DEBT"
         after_bytes = _encode(wb2)
 
-        _, h1_compat = sync_stock_compat.read_conversion_factors_robust(before_bytes)
-        _, h2_compat = sync_stock_compat.read_conversion_factors_robust(after_bytes)
+        _, h1_compat = stock.read_conversion_factors(before_bytes)
+        _, h2_compat = stock.read_conversion_factors(after_bytes)
         self.assertNotEqual(h1_compat, h2_compat, "conversion_hash must change when 'Cách tính nợ' changes (compat)")
 
-        _, h1_sync = sync_stock.read_conversion_factors(before_bytes)
-        _, h2_sync = sync_stock.read_conversion_factors(after_bytes)
+        _, h1_sync = stock.read_conversion_factors(before_bytes)
+        _, h2_sync = stock.read_conversion_factors(after_bytes)
         self.assertNotEqual(h1_sync, h2_sync, "conversion_hash must change when 'Cách tính nợ' changes (sync_stock)")
 
         old_state = {
@@ -412,8 +411,8 @@ class ProductionReadinessRegressionTests(unittest.TestCase):
         wb4["Danh_muc"]["L2"] = ""
         prof_after = _encode(wb4)
 
-        _, hp1 = sync_stock_compat.read_conversion_factors_robust(prof_before)
-        _, hp2 = sync_stock_compat.read_conversion_factors_robust(prof_after)
+        _, hp1 = stock.read_conversion_factors(prof_before)
+        _, hp2 = stock.read_conversion_factors(prof_after)
         self.assertNotEqual(hp1, hp2, "conversion_hash must change when 'Profile lịch' changes")
 
     def test_two_round_pipeline_output_does_not_falsely_detect_column_m_change(self):

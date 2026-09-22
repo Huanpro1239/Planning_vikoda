@@ -7,7 +7,7 @@ from sharepoint.client import (
     get_access_token,
     is_retryable_graph_error,
 )
-from sync_stock import (
+from stock import (
     DEST_PATH,
     SOURCE_ACTUAL_PATH,
     SOURCE_FACTORY_VIKODA_PATH,

@@ -18,8 +18,7 @@ from planning.weekly_model import (
     verify_weekly_workbook,
 )
 from planning import khsx_ki
-import sync_stock
-from sync_stock_compat import read_conversion_factors_robust
+import stock
 
 
 __all__ = ["SOURCE_KEYS", "prepare_pipeline_output"]
@@ -40,7 +39,7 @@ def _planning_snapshot(workbook_bytes):
         result = {}
         for row in range(2, sheet.max_row + 1):
             raw_code = sheet.cell(row=row, column=1).value
-            code = sync_stock.normalize_code(raw_code)
+            code = stock.normalize_code(raw_code)
             if not code:
                 continue
             result[code] = {
@@ -99,11 +98,11 @@ def prepare_pipeline_output(
     steps = []
 
     # 1) Recompute Ton_kho from the same raw SharePoint snapshots used by production.
-    conversion_factors, conversion_hash = read_conversion_factors_robust(work)
+    conversion_factors, conversion_hash = stock.read_conversion_factors(work)
     _, no_kho_hash = metrics.hash_debt_sheet(work)
     planning_inputs_hash = compute_planning_inputs_hash(work)
-    actual_stock = sync_stock.read_actual_stock(source_bytes["actual_stock"])
-    factory_vikoda = sync_stock.read_single_value_source(
+    actual_stock = stock.read_actual_stock(source_bytes["actual_stock"])
+    factory_vikoda = stock.read_single_value_source(
         source_bytes["factory_vikoda"],
         label="Tồn nhà máy Vikoda",
         source_name="NXT_Vikoda.xlsm",
@@ -112,7 +111,7 @@ def prepare_pipeline_output(
         value_column=12,
         value_column_letter="L",
     )
-    factory_vkd = sync_stock.read_single_value_source(
+    factory_vkd = stock.read_single_value_source(
         source_bytes["factory_vkd"],
         label="Tồn nhà máy VKD",
         source_name="NXT_VKD.xlsm",
@@ -122,7 +121,7 @@ def prepare_pipeline_output(
         value_column_letter="L",
         vkd_to_vikoda=True,
     )
-    accounting_vikoda = sync_stock.read_single_value_source(
+    accounting_vikoda = stock.read_single_value_source(
         source_bytes["accounting_vikoda"],
         label="Tồn kế toán Vikoda",
         source_name="XNT_ketoan_Vikoda.xlsm",
@@ -131,7 +130,7 @@ def prepare_pipeline_output(
         value_column=13,
         value_column_letter="M",
     )
-    accounting_vkd = sync_stock.read_single_value_source(
+    accounting_vkd = stock.read_single_value_source(
         source_bytes["accounting_vkd"],
         label="Tồn kế toán VKD",
         source_name="XNT_ketoan_VKD.xlsm",
@@ -141,7 +140,7 @@ def prepare_pipeline_output(
         value_column_letter="M",
         vkd_to_vikoda=True,
     )
-    work = sync_stock.patch_destination_workbook(
+    work = stock.patch_destination_workbook(
         work,
         actual_stock=actual_stock,
         factory_vikoda=factory_vikoda,

@@ -10,7 +10,7 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.styles import Font
 
-import sync_stock
+from stock import normalize_code
 
 from .calendar import compute_standard_calendar_weeks
 from .layout import (
@@ -61,7 +61,7 @@ def _read_planning_sheet_data(
         if "tổng cộng" in raw_a or "tong cong" in raw_a:
             break
         raw_code = ws_kh.cell(r, 1).value
-        code_str = sync_stock.normalize_code(raw_code)
+        code_str = normalize_code(raw_code)
         if not code_str:
             continue
         code = int(code_str)
@@ -99,7 +99,7 @@ def _read_khsx_ki_skus(
             total_row = r
             break
         raw_code = ws_ki.cell(r, 2).value
-        code_str = sync_stock.normalize_code(raw_code)
+        code_str = normalize_code(raw_code)
         if not code_str:
             continue
         code = int(code_str)

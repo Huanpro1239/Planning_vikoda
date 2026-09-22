@@ -12,6 +12,27 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertIs(packaged.is_retryable_graph_error, legacy.is_retryable_graph_error)
         self.assertIs(packaged.get_access_token, auth.get_access_token)
 
+    def test_sync_stock_reexports_canonical_business_api(self):
+        import stock
+        import sync_stock as legacy
+
+        self.assertIs(legacy.normalize_code, stock.normalize_code)
+        self.assertIs(legacy.to_number, stock.to_number)
+        self.assertIs(legacy.clean_number, stock.clean_number)
+        self.assertIs(legacy.read_actual_stock, stock.read_actual_stock)
+        self.assertIs(
+            legacy.read_single_value_source,
+            stock.read_single_value_source,
+        )
+        self.assertIs(
+            legacy.read_conversion_factors,
+            stock.read_conversion_factors,
+        )
+        self.assertIs(
+            legacy.patch_destination_workbook,
+            stock.patch_destination_workbook,
+        )
+
     def test_nvl_facades_expose_legacy_business_api(self):
         import nvl.stock as stock
         import nvl.open_po as open_po

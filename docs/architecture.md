@@ -63,13 +63,17 @@ through `sharepoint.client`, while workbook XML utilities go through `excel/`.
 retry classification and SharePoint identity/read helpers. Authentication comes from
 `sharepoint/auth.py`.
 
-Legacy `sync_stock.py` may re-export the canonical Graph API for compatibility, but
-canonical/runtime callers must import Graph/auth symbols from `sharepoint.client`.
+Legacy `sync_stock.py` re-exports the canonical Graph API for compatibility, but
+canonical/runtime callers import Graph/auth symbols from `sharepoint.client` and
+finished-goods stock business logic from `stock/`.
 The dependency direction is therefore:
 
 ```text
-planning/ nvl/ scripts/ -> sharepoint.client -> sharepoint.auth
-sync_stock.py -----------^  (compatibility re-export only)
+planning/ scripts/ -> stock/ -> excel/
+       |              |
+       +------------> sharepoint.client -> sharepoint.auth
+
+sync_stock.py -> stock/ + sharepoint.client  (legacy CLI/facade only)
 ```
 
 Production workflows call their entrypoints directly. `scripts/auth_runner.py` has been removed; authentication is resolved by `sharepoint.auth` through canonical imports.
@@ -110,3 +114,24 @@ verification
 `planning.khsx_ki.__init__` is a stable facade only. The former
 `planning/khsx_ki.py` monolith is removed. Verification stays read-only and
 must not become a workbook writer.
+
+
+## Finished-goods stock boundaries
+
+Finished-goods stock synchronization is canonical under `stock/`:
+
+- `stock/constants.py`: SharePoint paths and workbook sheet names.
+- `stock/values.py`: product-code and numeric normalization.
+- `stock/state.py`: `state.json` fingerprint persistence.
+- `stock/readers.py`: actual/factory/accounting/master-data readers and master fingerprint.
+- `stock/workbook.py`: `Ton_kho` OpenXML patching.
+- `stock/service.py`: standalone Graph orchestration.
+- `stock/__init__.py`: stable business facade.
+
+Root `sync_stock.py` is a thin compatibility CLI/facade only. Production runtime
+must not import business logic from it. The obsolete `sync_stock_compat.py`
+import-time patcher is removed; the dimension-tolerant Danh_muc reader is now the
+single canonical implementation in `stock.readers`.
+
+The `stock/` package may depend on `excel/` and `sharepoint/`, but must not
+depend on `planning/` or the legacy root `sync_stock.py`.

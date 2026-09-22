@@ -13,7 +13,7 @@ from sync_planning_fc import (
     _load_shared_strings,
     _read_cell_text,
 )
-from sync_stock import clean_number, normalize_code
+from stock import clean_number, normalize_code
 
 from .constants import OUTPUT_COLUMNS, PLANNING_SHEET
 

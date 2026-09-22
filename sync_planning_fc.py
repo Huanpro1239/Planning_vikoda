@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from sharepoint.client import GraphClient, get_access_token
-from sync_stock import DEST_PATH, normalize_code
+from stock import DEST_PATH, normalize_code
 
 
 FC_SHEET = "FC"
