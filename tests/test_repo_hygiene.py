@@ -272,5 +272,64 @@ class RepoHygieneTests(unittest.TestCase):
         )
 
 
+    def test_finished_goods_runtime_has_no_direct_sync_stock_import(self):
+        offenders = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if path == ROOT / "sync_stock.py":
+                continue
+            if "tests" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    if any(alias.name == "sync_stock" for alias in node.names):
+                        offenders.append(str(path.relative_to(ROOT)))
+                elif isinstance(node, ast.ImportFrom) and node.module == "sync_stock":
+                    offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(
+            offenders,
+            [],
+            "Runtime còn phụ thuộc root sync_stock: " + ", ".join(offenders),
+        )
+
+    def test_legacy_sync_stock_cli_is_thin(self):
+        line_count = len(
+            (ROOT / "sync_stock.py").read_text(encoding="utf-8").splitlines()
+        )
+        self.assertLess(
+            line_count,
+            150,
+            f"sync_stock.py vẫn quá lớn: {line_count} dòng",
+        )
+
+    def test_sync_stock_compat_is_removed(self):
+        self.assertFalse((ROOT / "sync_stock_compat.py").exists())
+
+    def test_stock_package_does_not_depend_on_planning_or_sync_stock(self):
+        offenders = []
+        for path in sorted((ROOT / "stock").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                modules = []
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    modules = [node.module]
+                for module in modules:
+                    if (
+                        module == "sync_stock"
+                        or module == "planning"
+                        or module.startswith("planning.")
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(ROOT)}: {module}"
+                        )
+        self.assertEqual(
+            offenders,
+            [],
+            "stock package dependency bị đảo: " + "; ".join(offenders),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
