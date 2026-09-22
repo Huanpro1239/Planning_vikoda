@@ -8,7 +8,7 @@ import calendar
 import math
 from datetime import datetime, timedelta
 
-from sync_stock import clean_number
+from stock import clean_number
 
 from .state import is_month_end, month_key, next_month
 
