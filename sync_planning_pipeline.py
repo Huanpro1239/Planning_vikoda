@@ -11,7 +11,7 @@ from graph_retry import install_retry_after_support, retry_delay_seconds as retr
 from planning.pipeline import prepare_pipeline_output
 from planning_schedule_report import print_operational_report, save_schedule_report
 from planning import metrics
-import sync_stock
+import stock
 from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
 
 
@@ -22,16 +22,16 @@ READY_PUBLISH_STATUSES = {"ready_for_publish", "feasible"}  # feasible = legacy 
 REVIEW_REQUIRED_STATUS = "review_required"
 VOLATILE_XLSX_PARTS = {"docProps/core.xml"}
 SOURCES = {
-    "actual_stock": sync_stock.SOURCE_ACTUAL_PATH,
-    "factory_vikoda": sync_stock.SOURCE_FACTORY_VIKODA_PATH,
-    "factory_vkd": sync_stock.SOURCE_FACTORY_VKD_PATH,
-    "accounting_vikoda": sync_stock.SOURCE_ACCOUNTING_VIKODA_PATH,
-    "accounting_vkd": sync_stock.SOURCE_ACCOUNTING_VKD_PATH,
+    "actual_stock": stock.SOURCE_ACTUAL_PATH,
+    "factory_vikoda": stock.SOURCE_FACTORY_VIKODA_PATH,
+    "factory_vkd": stock.SOURCE_FACTORY_VKD_PATH,
+    "accounting_vikoda": stock.SOURCE_ACCOUNTING_VIKODA_PATH,
+    "accounting_vkd": stock.SOURCE_ACCOUNTING_VKD_PATH,
 }
 
 
 def _read_snapshot(graph, drive_id):
-    target_item = graph.get_item_by_path(drive_id, sync_stock.DEST_PATH)
+    target_item = graph.get_item_by_path(drive_id, stock.DEST_PATH)
     target_bytes = graph.download_file(drive_id, target_item["id"])
 
     source_bytes = {}
@@ -44,7 +44,7 @@ def _read_snapshot(graph, drive_id):
 
     revision = {
         "target": {
-            "path": sync_stock.DEST_PATH,
+            "path": stock.DEST_PATH,
             "item_id": target_item.get("id"),
             "etag": target_item.get("eTag"),
             "last_modified": target_item.get("lastModifiedDateTime"),
@@ -159,7 +159,7 @@ def _save_states_after_success(source_items, report, proposed_runtime_state):
     planning_inputs_hash = pipeline_info.get("planning_inputs_hash")
     engine_version = pipeline_info.get("engine_version") or pipeline_info.get("engine")
 
-    sync_stock.save_state(
+    stock.save_state(
         source_etags,
         conversion_hash,
         fc_hash=fc_hash,
@@ -403,7 +403,7 @@ def run_pipeline_with_retry(
                     "input_revision": revision,
                 }
 
-            old_state = sync_stock.load_state()
+            old_state = stock.load_state()
             pipeline_info = report.get("pipeline", {})
             changed_inputs = detect_input_changes(old_state, source_items, pipeline_info)
 
