@@ -6,11 +6,10 @@ from openpyxl import load_workbook
 
 from planning_cleanup import remove_sheet_formulas
 from planning_schedule_report import attach_output_hash, json_safe
-from sync_planning_calendar_all_months import prepare_calendar_update_all_months
-import sync_planning_fc_compat  # noqa: F401 - installs dimension-tolerant FC reader
-from sync_planning_fc import prepare_planning_fc_update
+from planning.calendar import prepare_calendar_update_all_months
+from planning.fc import prepare_planning_fc_update
 from planning import metrics
-from sync_planning_stock_inputs import prepare_stock_input_update
+from planning.stock_inputs import prepare_stock_input_update
 from planning.weekly_model import (
     ENGINE_VERSION,
     compute_planning_inputs_hash,
