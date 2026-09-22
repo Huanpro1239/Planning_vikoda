@@ -189,3 +189,39 @@ Policy remains independent of Graph, workbook mutation and artifact persistence.
 Snapshot acquisition does not decide publish eligibility. Proposal identity does
 not save runtime state. Service owns orchestration but not the individual policy
 or hashing rules.
+
+
+## Weekly model boundaries
+
+The pure scheduling/calculation engine remains `planning/weekly_engine.py`.
+The workbook adapter formerly in `planning/weekly_model.py` is split into:
+
+- `planning/weekly_model/policy.py`: Debt mode and Schedule profile normalization.
+- `planning/weekly_model/inputs.py`: Danh_muc/Ke_hoach_SX input extraction and planning-input fingerprint.
+- `planning/weekly_model/schedule.py`: adapter-level analysis around the pure weekly engine.
+- `planning/weekly_model/workbook.py`: O:R and daily schedule workbook patching.
+- `planning/weekly_model/report.py`: mass balance, shared-machine validation and report construction.
+- `planning/weekly_model/verification.py`: independent report/workbook verification.
+- `planning/weekly_model/service.py`: thin analyze → patch → report orchestration.
+- `planning/weekly_model/__init__.py`: stable facade.
+
+Dependency direction:
+
+```text
+policy
+  |
+inputs
+  |
+schedule
+ /     \
+workbook report
+   \     |
+     service
+       |
+ verification (reads schedule + report)
+
+weekly_engine  <-- imported by adapter modules only
+```
+
+`planning/weekly_engine.py` must never import `planning.weekly_model`; this
+keeps the domain scheduling engine independent from Excel/workbook/report concerns.
