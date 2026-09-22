@@ -332,8 +332,6 @@ def run_calendar_with_retry(
     raise RuntimeError("Không thể hoàn tất calendar sau các lần thử.")
 
 
-_ORIGINAL_PREPARE = calendar_sync.prepare_calendar_update
-calendar_sync.prepare_calendar_update = prepare_calendar_update_all_months
 
 def main():
     install_retry_after_support()
