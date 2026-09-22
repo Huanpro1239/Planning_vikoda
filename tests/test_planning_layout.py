@@ -3,8 +3,8 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from sync_planning_calendar_all_months import prepare_calendar_update_all_months
-from sync_planning_layout import canonicalize_planning_layout, needs_schedule_reset
+from planning.calendar import prepare_calendar_update_all_months
+from planning.layout import canonicalize_planning_layout, needs_schedule_reset
 
 
 class PlanningLayoutTests(unittest.TestCase):

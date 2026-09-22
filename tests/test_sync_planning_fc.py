@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from sync_planning_fc import prepare_planning_fc_update
+from planning.fc import prepare_planning_fc_update
 
 
 class SyncPlanningFcTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class SyncPlanningFcTests(unittest.TestCase):
 
 
     def test_compute_fc_hash_deterministic_and_sensitive_to_fc_only(self):
-        from sync_planning_fc import compute_fc_hash
+        from planning.fc import compute_fc_hash
 
         wb_bytes1 = self.make_workbook(selector="Tháng 9")
         wb_bytes2 = self.make_workbook(selector="Tháng 9")
