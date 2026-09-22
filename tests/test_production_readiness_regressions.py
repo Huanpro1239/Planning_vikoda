@@ -4,7 +4,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-import sync_planning_metrics_direct as direct_metrics
+from planning import metrics as direct_metrics
 import sync_planning_pipeline as pipeline_runner
 import sync_stock
 import sync_stock_compat

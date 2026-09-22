@@ -10,10 +10,7 @@ from sync_planning_calendar_all_months import prepare_calendar_update_all_months
 import sync_planning_fc_compat  # noqa: F401 - installs dimension-tolerant FC reader
 from sync_planning_fc import prepare_planning_fc_update
 from planning import metrics
-import sync_planning_metrics_all_months  # noqa: F401 - installs all-month/direct hooks
-import sync_planning_metrics_compat as metrics_compat
 from sync_planning_stock_inputs import prepare_stock_input_update
-import sync_planning_metrics_direct
 from planning.weekly_model import (
     ENGINE_VERSION,
     compute_planning_inputs_hash,
@@ -103,7 +100,7 @@ def prepare_pipeline_output(
 
     # 1) Recompute Ton_kho from the same raw SharePoint snapshots used by production.
     conversion_factors, conversion_hash = read_conversion_factors_robust(work)
-    _, no_kho_hash = sync_planning_metrics_direct.hash_debt_sheet(work)
+    _, no_kho_hash = metrics.hash_debt_sheet(work)
     planning_inputs_hash = compute_planning_inputs_hash(work)
     actual_stock = sync_stock.read_actual_stock(source_bytes["actual_stock"])
     factory_vikoda = sync_stock.read_single_value_source(
@@ -165,7 +162,7 @@ def prepare_pipeline_output(
         source_bytes["actual_stock"]
     )
     selector, plan_month, planning_rows = metrics.read_planning_rows(work)
-    plan_year = metrics._resolve_plan_year(report_date, plan_month)
+    plan_year = metrics.resolve_plan_year(report_date, plan_month)
 
     # 4) Calendar must match the same resolved period.
     work, calendar_info = prepare_calendar_update_all_months(
@@ -174,10 +171,12 @@ def prepare_pipeline_output(
     )
     steps.append("calendar")
 
-    # Re-read after layout/calendar migration. This also installs Leadtime from
-    # Danh_muc!J as the single source of truth for the M/N base calculation.
+    # Re-read after layout/calendar migration. Leadtime is passed explicitly
+    # from Danh_muc!J; no import-time mutation or global policy state.
     selector, plan_month, planning_rows = metrics.read_planning_rows(work)
-    conversion_factors, _ = metrics_compat.read_conversion_factors_and_leadtime(work)
+    conversion_factors, _, leadtimes = (
+        metrics.read_conversion_factors_and_leadtime(work)
+    )
     system_receipts = metrics.read_system_receipts(
         source_bytes["factory_vikoda"],
         conversion_factors,
@@ -195,6 +194,7 @@ def prepare_pipeline_output(
         system_receipts=system_receipts,
         current_consignments=consignments,
         state=next_state,
+        leadtimes=leadtimes,
     )
     metric_changes = metrics.count_changes(planning_rows, metric_values)
     if metric_changes:

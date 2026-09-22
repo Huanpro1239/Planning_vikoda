@@ -115,6 +115,9 @@ class RepoHygieneTests(unittest.TestCase):
     def test_planning_runtime_uses_canonical_modules(self):
         forbidden_modules = {
             "sync_planning_metrics",
+            "sync_planning_metrics_compat",
+            "sync_planning_metrics_direct",
+            "sync_planning_metrics_all_months",
             "sync_planning_khsx_ki",
             "planning_pipeline",
         }
@@ -144,11 +147,60 @@ class RepoHygieneTests(unittest.TestCase):
     def test_legacy_planning_root_modules_are_removed(self):
         legacy = [
             ROOT / "sync_planning_metrics.py",
+            ROOT / "sync_planning_metrics_compat.py",
+            ROOT / "sync_planning_metrics_direct.py",
+            ROOT / "sync_planning_metrics_all_months.py",
             ROOT / "sync_planning_khsx_ki.py",
             ROOT / "planning_pipeline.py",
         ]
         leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
         self.assertEqual(leftovers, [], "Planning shim cũ vẫn còn: " + ", ".join(leftovers))
+
+
+    def test_planning_metrics_is_package_and_monolith_is_removed(self):
+        self.assertFalse((ROOT / "planning" / "metrics.py").exists())
+        required = {
+            "constants.py",
+            "state.py",
+            "readers.py",
+            "calculation.py",
+            "workbook.py",
+            "service.py",
+            "__init__.py",
+        }
+        actual = {
+            path.name
+            for path in (ROOT / "planning" / "metrics").glob("*.py")
+        }
+        self.assertTrue(required <= actual, f"Thiếu metrics modules: {required - actual}")
+
+    def test_planning_metrics_has_no_runtime_monkey_patching(self):
+        offenders = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if path == ROOT / "tests" / "test_repo_hygiene.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                    targets = [node.target]
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "metrics"
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', '?')} "
+                            f"metrics.{target.attr}"
+                        )
+        self.assertEqual(
+            offenders,
+            [],
+            "Không được rebind planning metrics lúc runtime: " + "; ".join(offenders),
+        )
 
 
 if __name__ == "__main__":
