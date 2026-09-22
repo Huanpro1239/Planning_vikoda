@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import sync_planning_pipeline as pipeline_runner
-import sync_stock
+import stock
 from sharepoint.client import GraphRequestError
 
 
@@ -14,7 +14,7 @@ class PublishBoundaryTests(unittest.TestCase):
             self.first_upload_412 = first_upload_412
 
         def get_item_by_path(self, drive_id, path):
-            if path == sync_stock.DEST_PATH:
+            if path == stock.DEST_PATH:
                 self.attempt += 1
                 return {
                     "id": f"target-r{self.attempt}",
