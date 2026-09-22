@@ -9,8 +9,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from excel.openpyxl_io import safe_close_workbook
-from sync_stock import clean_number, normalize_code, to_number
-from sync_stock_compat import read_conversion_factors_robust
+from stock import clean_number, normalize_code, read_conversion_factors, to_number
 
 from .constants import (
     ACTUAL_CODE_COL,
@@ -399,7 +398,7 @@ def read_leadtime_from_master(dest_bytes):
 
 
 def read_conversion_factors_and_leadtime(dest_bytes):
-    conversion_factors, conversion_hash = read_conversion_factors_robust(
+    conversion_factors, conversion_hash = read_conversion_factors(
         dest_bytes
     )
     leadtimes = read_leadtime_from_master(dest_bytes)
