@@ -2,7 +2,7 @@ import math
 
 from openpyxl.utils import get_column_letter
 
-from sync_stock import normalize_code
+from stock import normalize_code
 from planning.weekly_engine import is_sugar_classification
 
 from .shared_machine import _finite_number, _header_day
