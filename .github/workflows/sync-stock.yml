@@ -115,6 +115,8 @@ jobs:
             planning_input_revision.json
             planning_publish_decision.json
             production_readiness_report.json
+            planning_release_manifest.json
+            release_manifests/*.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -125,17 +127,22 @@ jobs:
           cp state.json .runtime-state/state.json
           cp planning_runtime.json .runtime-state/planning_runtime.json
 
+          mkdir -p .runtime-state/releases
+          if compgen -G "release_manifests/*.json" > /dev/null; then
+            cp release_manifests/*.json .runtime-state/releases/
+          fi
+
           cd .runtime-state
 
-          if git diff --quiet -- state.json planning_runtime.json; then
-            echo "[STATE] Không có thay đổi runtime state."
+          if git diff --quiet -- state.json planning_runtime.json releases; then
+            echo "[STATE] Không có thay đổi runtime state/release history."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add state.json planning_runtime.json
+          git add state.json planning_runtime.json releases
           git commit -m "chore: update planning runtime state"
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state
