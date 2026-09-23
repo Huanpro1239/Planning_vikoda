@@ -115,3 +115,15 @@ The verifier supports both manifest v1 and v2. A v2 release additionally checks
 canonical audit hashes. Commit verification uses the local Git object database
 and checks that the release commit is an ancestor of current HEAD. For a shallow
 clone, fetch repository history before using `--strict`.
+
+
+### Exit code semantics
+
+- exit code `0`: no mismatches were detected. The summary is `verified` when
+  all requested evidence is present, or `partial` when optional evidence was
+  unavailable in non-strict mode.
+- exit code `1`: at least one manifest/evidence/commit/hash consistency check
+  failed.
+
+Use `--strict` for release certification, because missing evidence becomes a
+failure instead of a skipped check.
