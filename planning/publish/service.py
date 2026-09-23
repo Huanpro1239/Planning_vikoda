@@ -15,6 +15,10 @@ from .proposal import (
     save_proposal_artifacts,
     with_proposal_identity,
 )
+from .release import (
+    build_release_manifest,
+    save_release_manifest,
+)
 from .snapshot import read_snapshot
 from .state import (
     detect_input_changes,
@@ -192,8 +196,9 @@ def run_pipeline_with_retry(
                     "input_revision": revision,
                 }
 
+            upload_result = None
             if changed:
-                graph.upload_file(
+                upload_result = graph.upload_file(
                     drive_id,
                     target_item["id"],
                     final_bytes,
@@ -219,6 +224,22 @@ def run_pipeline_with_retry(
             report["publish_decision"] = decision
 
             save_proposal_artifacts(final_bytes, report)
+            release_manifest = build_release_manifest(
+                report,
+                decision,
+                final_bytes,
+                uploaded=changed,
+                target_before=target_item,
+                upload_result=upload_result,
+            )
+            release_manifest_path = save_release_manifest(
+                release_manifest
+            )
+            print(
+                "[PIPELINE] Release manifest:",
+                release_manifest["release_id"],
+            )
+
             save_states_after_success(
                 source_items,
                 report,
@@ -232,6 +253,8 @@ def run_pipeline_with_retry(
                 "publish_mode": "publish",
                 "report": report,
                 "input_revision": revision,
+                "release_manifest": release_manifest,
+                "release_manifest_path": str(release_manifest_path),
             }
 
         except Exception as exc:
