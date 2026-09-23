@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -137,6 +138,11 @@ def verify_release(
     schema = str(manifest.get("schema") or "")
     schema_version = manifest.get("schema_version")
     expected_version = SUPPORTED_RELEASE_SCHEMAS.get(schema)
+    effective_version = (
+        schema_version
+        if isinstance(schema_version, int)
+        else 0
+    )
     record(
         "manifest_schema",
         expected_version is not None and schema_version == expected_version,
@@ -269,7 +275,7 @@ def verify_release(
     readiness_file = evidence["readiness"]
     if readiness_file and readiness_file.is_file():
         actual = _load_json(readiness_file)
-        actual_raw_hash = __import__("hashlib").sha256(readiness_file.read_bytes()).hexdigest()
+        actual_raw_hash = hashlib.sha256(readiness_file.read_bytes()).hexdigest()
         record(
             "readiness_report_hash",
             actual_raw_hash == readiness.get("report_sha256"),
@@ -301,7 +307,7 @@ def verify_release(
             and (actual.get("publish_decision") or {}) == decision
         )
         record("schedule_report_consistency", report_ok, "schedule report khớp manifest")
-        if schema_version >= 2:
+        if effective_version >= 2:
             record(
                 "schedule_report_hash",
                 canonical_json_sha256(actual) == audit_hashes.get("schedule_report_sha256"),
@@ -318,7 +324,7 @@ def verify_release(
             actual == (manifest.get("input_revision") or {}),
             "input revision khớp manifest",
         )
-        if schema_version >= 2:
+        if effective_version >= 2:
             record(
                 "input_revision_hash",
                 canonical_json_sha256(actual) == audit_hashes.get("input_revision_sha256"),
@@ -335,7 +341,7 @@ def verify_release(
             actual == decision,
             "publish decision khớp manifest",
         )
-        if schema_version >= 2:
+        if effective_version >= 2:
             record(
                 "publish_decision_hash",
                 canonical_json_sha256(actual) == audit_hashes.get("publish_decision_sha256"),
