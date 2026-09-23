@@ -53,5 +53,31 @@ class ReleaseGateWiringTests(unittest.TestCase):
         self.assertIn('PLANNING_REQUIRE_READINESS: "1"', workflow)
 
 
+    def test_release_history_step_has_no_unindented_python_heredoc(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("<<'PY'", workflow)
+        self.assertIn(
+            'RELEASE_ID="$(python -c ',
+            workflow,
+        )
+
+    def test_release_history_detects_untracked_manifest_files(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "git status --porcelain -- state.json planning_runtime.json "
+            "latest_release.json releases",
+            workflow,
+        )
+        self.assertNotIn(
+            "git diff --quiet -- state.json planning_runtime.json "
+            "latest_release.json releases",
+            workflow,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
