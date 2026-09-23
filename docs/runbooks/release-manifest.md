@@ -91,6 +91,11 @@ python -X utf8 scripts/verify_release.py planning_release_manifest.json \
 
 Strict mode recomputes and verifies:
 
+When the evidence files use their standard names and sit beside the manifest,
+the verifier discovers them automatically; explicit `--proposal`,
+`--readiness`, `--report` and `--decision` paths are only needed when the
+files live elsewhere.
+
 - raw workbook SHA-256
 - stable workbook/proposal SHA-256
 - proposal ID from algorithm + plan month + input revision + stable hash
