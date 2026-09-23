@@ -16,12 +16,26 @@ from .proposal import proposal_output_sha256
 
 RELEASE_MANIFEST_FILE = Path("planning_release_manifest.json")
 READINESS_REPORT_FILE = Path("production_readiness_report.json")
-RELEASE_SCHEMA_VERSION = 1
-RELEASE_SCHEMA = "planning_release_manifest_v1"
+RELEASE_SCHEMA_VERSION = 2
+RELEASE_SCHEMA = "planning_release_manifest_v2"
+SUPPORTED_RELEASE_SCHEMAS = {
+    "planning_release_manifest_v1": 1,
+    "planning_release_manifest_v2": 2,
+}
 
 
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def canonical_json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        json_safe(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _sha256_bytes(payload)
 
 
 def _read_readiness_report(
@@ -153,6 +167,13 @@ def build_release_manifest(
         },
         "input_revision": report.get("input_revision") or {},
         "publish_decision": dict(decision),
+        "audit_evidence": {
+            "schedule_report_sha256": canonical_json_sha256(report),
+            "input_revision_sha256": canonical_json_sha256(
+                report.get("input_revision") or {}
+            ),
+            "publish_decision_sha256": canonical_json_sha256(decision),
+        },
         "pipeline_fingerprints": {
             key: pipeline.get(key)
             for key in (
