@@ -28,6 +28,11 @@ from .release import (
     write_release_manifest,
 )
 from .runner import main, parse_args
+from .verify_release import (
+    ReleaseVerificationError,
+    discover_evidence,
+    verify_release,
+)
 from .service import run_pipeline_with_retry
 from .snapshot import read_snapshot
 from .state import (
@@ -57,11 +62,13 @@ __all__ = [
     "RELEASE_SCHEMA",
     "RELEASE_SCHEMA_VERSION",
     "REVIEW_REQUIRED_STATUS",
+    "ReleaseVerificationError",
     "SOURCES",
     "VOLATILE_XLSX_PARTS",
     "blocked_decision",
     "build_release_manifest",
     "detect_input_changes",
+    "discover_evidence",
     "main",
     "parse_args",
     "proposal_id",
@@ -73,6 +80,7 @@ __all__ = [
     "save_release_manifest",
     "save_publish_decision",
     "save_states_after_success",
+    "verify_release",
     "with_proposal_identity",
     "write_release_manifest",
 ]
