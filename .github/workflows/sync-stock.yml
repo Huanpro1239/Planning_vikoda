@@ -124,7 +124,11 @@ jobs:
         if: ${{ success() && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
-          test -f planning_release_manifest.json
+          if [[ ! -f planning_release_manifest.json ]]; then
+            echo "[RELEASE] Không có publish release mới; bỏ qua lưu release/runtime history."
+            exit 0
+          fi
+
           RELEASE_ID="$(python - <<'PY'
 import json
 from pathlib import Path
