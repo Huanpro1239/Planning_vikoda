@@ -130,15 +130,15 @@ jobs:
           fi
 
           RELEASE_ID="$(python - <<'PY'
-import json
-from pathlib import Path
-manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
-release_id = str(manifest.get("release_id") or "").strip()
-if not release_id:
-    raise SystemExit("release_id missing")
-print(release_id)
-PY
-)"
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
+          release_id = str(manifest.get("release_id") or "").strip()
+          if not release_id:
+              raise SystemExit("release_id missing")
+          print(release_id)
+          PY
+          )"
           cp state.json .runtime-state/state.json
           cp planning_runtime.json .runtime-state/planning_runtime.json
           cp planning_release_manifest.json .runtime-state/latest_release.json
