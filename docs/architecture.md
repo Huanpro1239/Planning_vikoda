@@ -303,3 +303,17 @@ round-trip verification, deterministic proposal output, proposal-only dry-run
 safety and the full regression suite. Both pull-request CI and the production
 Planning workflow invoke this exact command. See
 `docs/runbooks/production-readiness.md`.
+
+
+## Release manifest and versioning
+
+Successful production publishes create
+`planning_release_manifest.json` using schema
+`planning_release_manifest_v1`. The manifest binds the published workbook to
+its commit SHA, readiness gate, proposal identity, input revision, artifact
+hashes and publish authorization. Production stores an immutable history under
+`runtime-state/releases/` plus `latest_release.json`.
+
+Manifest validation occurs before upload; persistence occurs only after the
+authorized publish/state/decision path succeeds. See
+`docs/runbooks/release-manifest.md`.
