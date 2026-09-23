@@ -43,5 +43,15 @@ class ReleaseGateWiringTests(unittest.TestCase):
         self.assertIn(GATE_COMMAND, gate_step)
 
 
+    def test_production_audit_persists_release_manifest_history(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("planning_release_manifest.json", workflow)
+        self.assertIn(".runtime-state/latest_release.json", workflow)
+        self.assertIn(".runtime-state/releases/", workflow)
+        self.assertIn('PLANNING_REQUIRE_READINESS: "1"', workflow)
+
+
 if __name__ == "__main__":
     unittest.main()
