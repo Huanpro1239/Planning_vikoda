@@ -317,3 +317,13 @@ hashes and publish authorization. Production stores an immutable history under
 Manifest validation occurs before upload; persistence occurs only after the
 authorized publish/state/decision path succeeds. See
 `docs/runbooks/release-manifest.md`.
+
+
+## Release verification
+
+`planning.publish.verify_release` provides reusable offline verification for
+historical release manifests, while `scripts/verify_release.py` is the CLI
+boundary. Verification recomputes proposal artifact hashes/identity when the
+workbook is available, checks readiness evidence and audit consistency, and can
+require the recorded commit to exist in local Git history. Tamper detection is
+part of the production-readiness release-safety suite.
