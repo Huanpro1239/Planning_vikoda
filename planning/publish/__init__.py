@@ -4,6 +4,9 @@ from .constants import (
     AUDIT_REVISION_FILE,
     PROPOSAL_WORKBOOK_FILE,
     PUBLISH_DECISION_FILE,
+    PRODUCTION_READINESS_REPORT_FILE,
+    RELEASE_MANIFEST_DIR,
+    RELEASE_MANIFEST_FILE,
     READY_PUBLISH_STATUSES,
     REVIEW_REQUIRED_STATUS,
     SOURCES,
@@ -18,6 +21,13 @@ from .proposal import (
     proposal_output_sha256,
     save_proposal_artifacts,
     with_proposal_identity,
+)
+from .release import (
+    RELEASE_MANIFEST_VERSION,
+    build_release_manifest,
+    load_readiness_evidence,
+    save_release_manifest,
+    validate_release_manifest,
 )
 from .runner import main, parse_args
 from .service import run_pipeline_with_retry
@@ -44,12 +54,18 @@ __all__ = [
     "AUDIT_REVISION_FILE",
     "PROPOSAL_WORKBOOK_FILE",
     "PUBLISH_DECISION_FILE",
+    "PRODUCTION_READINESS_REPORT_FILE",
+    "RELEASE_MANIFEST_DIR",
+    "RELEASE_MANIFEST_FILE",
+    "RELEASE_MANIFEST_VERSION",
     "READY_PUBLISH_STATUSES",
     "REVIEW_REQUIRED_STATUS",
     "SOURCES",
     "VOLATILE_XLSX_PARTS",
     "blocked_decision",
+    "build_release_manifest",
     "detect_input_changes",
+    "load_readiness_evidence",
     "main",
     "parse_args",
     "proposal_id",
@@ -59,6 +75,8 @@ __all__ = [
     "run_pipeline_with_retry",
     "save_proposal_artifacts",
     "save_publish_decision",
+    "save_release_manifest",
     "save_states_after_success",
+    "validate_release_manifest",
     "with_proposal_identity",
 ]
