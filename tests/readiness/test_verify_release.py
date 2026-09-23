@@ -131,10 +131,6 @@ class ReleaseVerifierTests(unittest.TestCase):
             fixture = self._fixture(Path(tmp))
             result = verify_release(
                 fixture["manifest"],
-                proposal_path=fixture["proposal"],
-                readiness_path=fixture["readiness"],
-                report_path=fixture["report"],
-                decision_path=fixture["decision"],
                 strict=True,
                 verify_commit=False,
             )
