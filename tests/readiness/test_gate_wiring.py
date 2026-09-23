@@ -50,6 +50,11 @@ class ReleaseGateWiringTests(unittest.TestCase):
         self.assertIn("planning_release_manifest.json", workflow)
         self.assertIn(".runtime-state/latest_release.json", workflow)
         self.assertIn(".runtime-state/releases/", workflow)
+        self.assertIn(".runtime-state/release_evidence/", workflow)
+        self.assertIn("production_readiness_report.json", workflow)
+        self.assertIn("planning_schedule_report.json", workflow)
+        self.assertIn("planning_input_revision.json", workflow)
+        self.assertIn("planning_publish_decision.json", workflow)
         self.assertIn('PLANNING_REQUIRE_READINESS: "1"', workflow)
 
 
