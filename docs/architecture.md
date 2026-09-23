@@ -291,3 +291,15 @@ System-level business invariants are executable in
 this contract suite remains green. These tests intentionally cross
 `weekly_engine -> weekly_model -> verification -> publish policy` boundaries
 to protect business behavior rather than module shape.
+
+
+## Production readiness gate
+
+Release quality is enforced by one executable command:
+`python -X utf8 scripts/production_readiness.py`.
+
+The gate composes package architecture tests, business contracts, workbook
+round-trip verification, deterministic proposal output, proposal-only dry-run
+safety and the full regression suite. Both pull-request CI and the production
+Planning workflow invoke this exact command. See
+`docs/runbooks/production-readiness.md`.
