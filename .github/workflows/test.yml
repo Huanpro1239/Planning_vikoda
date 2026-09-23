@@ -28,8 +28,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Compile all Python modules
-        run: python -m compileall -q .
+      - name: Production readiness gate
+        run: python -X utf8 scripts/production_readiness.py
 
-      - name: Run tests
-        run: python -m unittest discover -s tests -v
+      - name: Upload readiness report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: production-readiness-${{ github.run_id }}
+          path: production_readiness_report.json
+          if-no-files-found: error
+          retention-days: 14
