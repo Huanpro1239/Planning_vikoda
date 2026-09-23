@@ -168,6 +168,24 @@ def build_release_manifest(
     return json_safe(manifest)
 
 
+def write_release_manifest(
+    manifest: dict[str, Any],
+    *,
+    path: Path = RELEASE_MANIFEST_FILE,
+) -> dict[str, Any]:
+    path.write_text(
+        json.dumps(
+            json_safe(manifest),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def save_release_manifest(
     report: dict[str, Any],
     decision: dict[str, Any],
@@ -180,14 +198,4 @@ def save_release_manifest(
         decision,
         final_bytes,
     )
-    path.write_text(
-        json.dumps(
-            manifest,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return manifest
+    return write_release_manifest(manifest, path=path)
