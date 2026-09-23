@@ -421,6 +421,7 @@ class RepoHygieneTests(unittest.TestCase):
             "constants.py",
             "snapshot.py",
             "proposal.py",
+            "release.py",
             "policy.py",
             "state.py",
             "service.py",
@@ -440,9 +441,10 @@ class RepoHygieneTests(unittest.TestCase):
             "constants.py": set(),
             "snapshot.py": {"constants"},
             "proposal.py": {"constants"},
+            "release.py": {"proposal"},
             "policy.py": {"constants"},
             "state.py": {"constants"},
-            "service.py": {"policy", "proposal", "snapshot", "state"},
+            "service.py": {"policy", "proposal", "release", "snapshot", "state"},
             "runner.py": {"service"},
         }
         offenders = []
@@ -472,6 +474,7 @@ class RepoHygieneTests(unittest.TestCase):
             "constants.py": 80,
             "snapshot.py": 100,
             "proposal.py": 140,
+            "release.py": 260,
             "policy.py": 160,
             "state.py": 200,
             "service.py": 320,

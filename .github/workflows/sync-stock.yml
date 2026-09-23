@@ -84,6 +84,7 @@ jobs:
           APPROVAL_REASON: ${{ inputs.approval_reason }}
           APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'power-automate' || github.actor) }}
           EVENT_NAME: ${{ github.event_name }}
+          PLANNING_REQUIRE_READINESS: "1"
         run: |
           EXTRA_FLAGS=""
           if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
@@ -115,6 +116,7 @@ jobs:
             planning_input_revision.json
             planning_publish_decision.json
             production_readiness_report.json
+            planning_release_manifest.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -122,12 +124,26 @@ jobs:
         if: ${{ success() && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
+          test -f planning_release_manifest.json
+          RELEASE_ID="$(python - <<'PY'
+import json
+from pathlib import Path
+manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
+release_id = str(manifest.get("release_id") or "").strip()
+if not release_id:
+    raise SystemExit("release_id missing")
+print(release_id)
+PY
+)"
           cp state.json .runtime-state/state.json
           cp planning_runtime.json .runtime-state/planning_runtime.json
+          cp planning_release_manifest.json .runtime-state/latest_release.json
+          mkdir -p .runtime-state/releases
+          cp planning_release_manifest.json ".runtime-state/releases/${RELEASE_ID}.json"
 
           cd .runtime-state
 
-          if git diff --quiet -- state.json planning_runtime.json; then
+          if git diff --quiet -- state.json planning_runtime.json latest_release.json releases; then
             echo "[STATE] Không có thay đổi runtime state."
             exit 0
           fi
@@ -135,7 +151,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add state.json planning_runtime.json
-          git commit -m "chore: update planning runtime state"
+          git add state.json planning_runtime.json latest_release.json releases
+          git commit -m "chore: record planning release ${RELEASE_ID}"
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state

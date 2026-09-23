@@ -15,6 +15,10 @@ from .proposal import (
     save_proposal_artifacts,
     with_proposal_identity,
 )
+from .release import (
+    build_release_manifest,
+    write_release_manifest,
+)
 from .snapshot import read_snapshot
 from .state import (
     detect_input_changes,
@@ -218,6 +222,14 @@ def run_pipeline_with_retry(
             decision["target_etag"] = target_item.get("eTag")
             report["publish_decision"] = decision
 
+            # Validate traceability before any production upload is attempted.
+            # The manifest is persisted only after upload/state/decision succeed.
+            release_manifest = build_release_manifest(
+                report,
+                decision,
+                final_bytes,
+            )
+
             save_proposal_artifacts(final_bytes, report)
             save_states_after_success(
                 source_items,
@@ -225,6 +237,7 @@ def run_pipeline_with_retry(
                 proposed_runtime_state,
             )
             save_publish_decision(decision)
+            write_release_manifest(release_manifest)
             return {
                 "uploaded": changed,
                 "would_change": changed,
