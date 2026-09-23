@@ -8,6 +8,9 @@ import stock
 AUDIT_REVISION_FILE = Path("planning_input_revision.json")
 PROPOSAL_WORKBOOK_FILE = Path("planning_proposal.xlsx")
 PUBLISH_DECISION_FILE = Path("planning_publish_decision.json")
+PRODUCTION_READINESS_REPORT_FILE = Path("production_readiness_report.json")
+RELEASE_MANIFEST_FILE = Path("planning_release_manifest.json")
+RELEASE_MANIFEST_DIR = Path("release_manifests")
 
 READY_PUBLISH_STATUSES = {
     "ready_for_publish",
