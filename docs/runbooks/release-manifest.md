@@ -62,3 +62,57 @@ state.
 
 The same manifest is included in the per-run `planning-audit-<run_id>`
 GitHub Actions artifact.
+
+
+## Verify an old release
+
+Basic manifest verification:
+
+```bash
+python -X utf8 scripts/verify_release.py runtime-state/releases/<release_id>.json
+```
+
+This verifies the manifest schema, release/proposal identity, successful publish
+state, embedded readiness status, commit consistency and local Git history when
+the commit is available. If external evidence is not beside the manifest, the
+command reports warnings rather than pretending those hashes were rechecked.
+
+For complete evidence verification, download/copy the release audit files into
+one directory and run:
+
+```bash
+python -X utf8 scripts/verify_release.py planning_release_manifest.json \
+  --strict \
+  --proposal planning_proposal.xlsx \
+  --readiness production_readiness_report.json \
+  --report planning_schedule_report.json \
+  --decision planning_publish_decision.json
+```
+
+Strict mode recomputes and verifies:
+
+- raw workbook SHA-256
+- stable workbook/proposal SHA-256
+- proposal ID from algorithm + plan month + input revision + stable hash
+- readiness report SHA-256, status, gate version and Git SHA
+- planning report plan month, algorithm, input revision and proposal ID
+- publish decision exact equality
+- release commit existence in local Git history
+
+Machine-readable output:
+
+```bash
+python -X utf8 scripts/verify_release.py <manifest> --json
+```
+
+Local Make target:
+
+```bash
+make verify-release MANIFEST=runtime-state/releases/<release_id>.json
+make verify-release MANIFEST=planning_release_manifest.json STRICT=1
+```
+
+If a clone is shallow and does not contain an old commit, fetch the relevant Git
+history before strict verification. `--no-git` explicitly skips local commit
+history lookup; use it only when commit existence is being verified by another
+trusted mechanism.
