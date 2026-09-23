@@ -41,7 +41,6 @@ jobs:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
       MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
-      PLANNING_REQUIRE_READINESS: "1"
 
     steps:
       - name: Checkout repository
@@ -85,6 +84,7 @@ jobs:
           APPROVAL_REASON: ${{ inputs.approval_reason }}
           APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'power-automate' || github.actor) }}
           EVENT_NAME: ${{ github.event_name }}
+          PLANNING_REQUIRE_READINESS: "1"
         run: |
           EXTRA_FLAGS=""
           if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
