@@ -1,4 +1,4 @@
-.PHONY: install test readiness compile clean
+.PHONY: install test readiness verify-release compile clean
 
 PYTHON ?= python3
 
@@ -12,6 +12,10 @@ test:
 
 readiness:
 	$(PYTHON) -X utf8 scripts/production_readiness.py
+
+verify-release:
+	@test -n "$(MANIFEST)" || (echo "Usage: make verify-release MANIFEST=<manifest.json> [STRICT=1]" && exit 2)
+	$(PYTHON) -X utf8 scripts/verify_release.py "$(MANIFEST)" $(if $(STRICT),--strict,)
 
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:
