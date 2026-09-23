@@ -239,5 +239,33 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.assertEqual(result["release_schema"], "planning_release_manifest_v1")
 
 
+    def test_cli_verifies_release_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self._fixture(Path(tmp))
+            completed = subprocess.run(
+                [
+                    "python",
+                    str(ROOT / "scripts" / "verify_release.py"),
+                    str(fixture["manifest_path"]),
+                    "--proposal",
+                    str(fixture["proposal"]),
+                    "--repo-root",
+                    str(ROOT),
+                    "--strict",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + "\n" + completed.stderr,
+        )
+        self.assertIn("status=verified", completed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
