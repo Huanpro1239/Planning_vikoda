@@ -27,6 +27,7 @@ from .release import (
     save_release_manifest,
     write_release_manifest,
 )
+from .release_verify import verify_release
 from .runner import main, parse_args
 from .service import run_pipeline_with_retry
 from .snapshot import read_snapshot
@@ -74,5 +75,6 @@ __all__ = [
     "save_publish_decision",
     "save_states_after_success",
     "with_proposal_identity",
+    "verify_release",
     "write_release_manifest",
 ]

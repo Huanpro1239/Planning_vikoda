@@ -66,3 +66,17 @@ The release-specific tests guarantee:
 Do not weaken or skip a gate phase merely to make a release pass. If a business
 contract or release rule is intentionally changed, update the corresponding
 contract/readiness test and documentation in the same reviewed pull request.
+
+
+## Historical release verification
+
+After a release is published, its immutable manifest and JSON evidence can be
+re-checked independently with:
+
+```bash
+python scripts/verify_release.py runtime-state/releases/<release_id>.json
+```
+
+Add `--proposal <planning_proposal.xlsx>` to recompute the workbook raw/stable
+hash and proposal ID. Add `--strict` when every evidence source must be
+present. See `docs/runbooks/release-manifest.md` for the full procedure.

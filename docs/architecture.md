@@ -309,7 +309,7 @@ Planning workflow invoke this exact command. See
 
 Successful production publishes create
 `planning_release_manifest.json` using schema
-`planning_release_manifest_v1`. The manifest binds the published workbook to
+`planning_release_manifest_v2`. The manifest binds the published workbook to
 its commit SHA, readiness gate, proposal identity, input revision, artifact
 hashes and publish authorization. Production stores an immutable history under
 `runtime-state/releases/` plus `latest_release.json`.
@@ -317,3 +317,10 @@ hashes and publish authorization. Production stores an immutable history under
 Manifest validation occurs before upload; persistence occurs only after the
 authorized publish/state/decision path succeeds. See
 `docs/runbooks/release-manifest.md`.
+
+
+Historical verification lives in
+`planning/publish/release_verify.py` with the CLI
+`scripts/verify_release.py`. It accepts both v1 and v2 manifests, recomputes
+proposal identity/hashes when workbook bytes are supplied, checks readiness and
+audit evidence, and verifies the recorded commit against local Git history.

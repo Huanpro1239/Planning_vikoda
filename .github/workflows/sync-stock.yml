@@ -124,26 +124,38 @@ jobs:
         if: ${{ success() && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
-          test -f planning_release_manifest.json
+          if [[ ! -f planning_release_manifest.json ]]; then
+            echo "[RELEASE] Không có publish release mới; bỏ qua lưu release/runtime history."
+            exit 0
+          fi
+
           RELEASE_ID="$(python - <<'PY'
-import json
-from pathlib import Path
-manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
-release_id = str(manifest.get("release_id") or "").strip()
-if not release_id:
-    raise SystemExit("release_id missing")
-print(release_id)
-PY
-)"
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
+          release_id = str(manifest.get("release_id") or "").strip()
+          if not release_id:
+              raise SystemExit("release_id missing")
+          print(release_id)
+          PY
+          )"
           cp state.json .runtime-state/state.json
           cp planning_runtime.json .runtime-state/planning_runtime.json
           cp planning_release_manifest.json .runtime-state/latest_release.json
           mkdir -p .runtime-state/releases
           cp planning_release_manifest.json ".runtime-state/releases/${RELEASE_ID}.json"
 
+          EVIDENCE_DIR=".runtime-state/release_evidence/${RELEASE_ID}"
+          mkdir -p "$EVIDENCE_DIR"
+          cp planning_release_manifest.json "$EVIDENCE_DIR/manifest.json"
+          cp production_readiness_report.json "$EVIDENCE_DIR/production_readiness_report.json"
+          cp planning_schedule_report.json "$EVIDENCE_DIR/planning_schedule_report.json"
+          cp planning_input_revision.json "$EVIDENCE_DIR/planning_input_revision.json"
+          cp planning_publish_decision.json "$EVIDENCE_DIR/planning_publish_decision.json"
+
           cd .runtime-state
 
-          if git diff --quiet -- state.json planning_runtime.json latest_release.json releases; then
+          if git diff --quiet -- state.json planning_runtime.json latest_release.json releases release_evidence; then
             echo "[STATE] Không có thay đổi runtime state."
             exit 0
           fi
@@ -151,7 +163,7 @@ PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add state.json planning_runtime.json latest_release.json releases
+          git add state.json planning_runtime.json latest_release.json releases release_evidence
           git commit -m "chore: record planning release ${RELEASE_ID}"
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state
