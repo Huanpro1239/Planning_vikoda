@@ -10,6 +10,9 @@ install:
 test:
 	$(PYTHON) -m unittest discover -s tests -v
 
+readiness:
+	$(PYTHON) -X utf8 scripts/production_readiness.py
+
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:
 	$(PYTHON) -m compileall -q .
