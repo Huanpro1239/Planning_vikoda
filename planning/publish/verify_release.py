@@ -369,6 +369,37 @@ def verify_release(
             str(audit_report.get("proposal_id") or "") == proposal_id,
             detail="proposal_id report không khớp manifest",
         )
+
+        report_raw_hash = audit_report.get("output_sha256")
+        if report_raw_hash:
+            _check(
+                checks,
+                "audit.output_sha256",
+                report_raw_hash == proposal_info.get("output_sha256"),
+                detail="output_sha256 report không khớp manifest",
+            )
+
+        report_stable_hash = audit_report.get("proposal_output_sha256")
+        if report_stable_hash:
+            _check(
+                checks,
+                "audit.stable_output_sha256",
+                report_stable_hash == proposal_info.get("stable_output_sha256"),
+                detail="proposal_output_sha256 report không khớp manifest",
+            )
+
+        pipeline = audit_report.get("pipeline") or {}
+        manifest_fingerprints = manifest.get("pipeline_fingerprints") or {}
+        for key, expected in manifest_fingerprints.items():
+            actual = pipeline.get(key)
+            _check(
+                checks,
+                f"audit.pipeline_fingerprint.{key}",
+                actual == expected,
+                detail=(
+                    f"manifest={expected!r}; report={actual!r}"
+                ),
+            )
     else:
         _check(
             checks,
