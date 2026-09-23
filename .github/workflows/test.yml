@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+      - "feat/**"
+      - "refactor/**"
+      - "test/**"
     paths-ignore:
       - state.json
       - planning_runtime.json
