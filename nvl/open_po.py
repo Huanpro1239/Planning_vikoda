@@ -34,7 +34,7 @@ from openpyxl import load_workbook
 from nvl.values import normalize_nvl_code, parse_nvl_quantity
 from excel.openpyxl_io import safe_close_workbook
 from excel.workbook_xml import find_sheet_xml_path, set_numeric_cell
-from sharepoint.client import GraphClient, get_access_token
+from sharepoint.client import GRAPH, GraphClient, get_access_token
 
 DEFAULT_SOURCE_CONFIG = "nvl_open_po_config.json"
 DEFAULT_TARGET_CONFIG = "nvl_stock_config.json"
