@@ -158,9 +158,9 @@ Root files `sync_planning_fc.py`, `sync_planning_calendar.py`,
 `sync_planning_stock_inputs.py` and `sync_planning_pipeline.py` are CLI
 entrypoints only. Production/runtime/tests must import `planning.*` directly.
 
-`planning_cleanup.py` and `planning_schedule_report.py` are thin compatibility
-facades only; canonical Planning code imports `planning.cleanup` and
-`planning.schedule_report`.
+Legacy Planning support facades `planning_cleanup.py` and
+`planning_schedule_report.py` have been removed. Canonical callers import
+`planning.cleanup` and `planning.schedule_report` directly.
 
 Obsolete side-effect modules are removed:
 - `sync_planning_fc_compat.py`
