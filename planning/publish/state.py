@@ -4,7 +4,7 @@ import json
 
 import stock
 from planning import metrics
-from planning_schedule_report import save_schedule_report
+from planning.schedule_report import save_schedule_report
 
 from .constants import (
     AUDIT_REVISION_FILE,
