@@ -3,7 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from planning_cleanup import PLANNING_SHEET, remove_sheet_formulas
+from planning.cleanup import PLANNING_SHEET, remove_sheet_formulas
 
 
 class PlanningFormulaRemovalTests(unittest.TestCase):
