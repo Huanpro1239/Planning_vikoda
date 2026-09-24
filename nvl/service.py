@@ -14,7 +14,7 @@ import socket
 import time
 from typing import Any
 
-from graph_retry import install_retry_after_support, retry_delay_seconds
+from sharepoint.retry import install_retry_after_support, retry_delay_seconds
 from nvl.models import NVLConfig
 from nvl.reconcile import read_nvl_source_stock, reconcile_nvl_target
 from nvl.reporting import generate_nvl_error_report, generate_nvl_report

@@ -4,7 +4,7 @@ import hashlib
 import time
 
 import stock
-from graph_retry import retry_delay_seconds as retry_wait_seconds
+from sharepoint.retry import retry_delay_seconds as retry_wait_seconds
 from planning import metrics
 from planning.pipeline import prepare_pipeline_output
 from planning.schedule_report import print_operational_report

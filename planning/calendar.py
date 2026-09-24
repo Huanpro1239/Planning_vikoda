@@ -14,7 +14,7 @@ from planning.fc import (
     _load_shared_strings,
     _read_cell_text,
 )
-from graph_retry import install_retry_after_support, retry_delay_seconds as retry_wait_seconds
+from sharepoint.retry import install_retry_after_support, retry_delay_seconds as retry_wait_seconds
 from planning.layout import canonicalize_planning_layout, needs_schedule_reset
 from sharepoint.client import GraphClient, get_access_token, is_retryable_graph_error
 from stock import DEST_PATH

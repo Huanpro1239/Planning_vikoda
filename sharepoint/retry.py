@@ -1,3 +1,5 @@
+"""Microsoft Graph Retry-After handling shared by SharePoint clients."""
+
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
