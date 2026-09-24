@@ -50,11 +50,15 @@ docs/         # architecture, review history, runbooks
 - `nvl/workbook.py`: OpenXML patching and integrity verification.
 - `nvl/reporting.py`: audit/error report serialization.
 - `nvl/service.py`: SharePoint orchestration, retries and publish boundary.
+- `nvl/open_po.py`: canonical Open-PO reader, reconciliation, XML patch/verify and online orchestration for `Ton_NVL!E`.
 - `excel/workbook_xml.py`: reusable low-level OpenXML helpers.
 - `excel/openpyxl_io.py`: deterministic workbook/ZipFile lifecycle cleanup.
 
-NVL runtime modules must not import `sync_stock.py` directly. SharePoint access goes
-through `sharepoint.client`, while workbook XML utilities go through `excel/`.
+NVL runtime modules must not import `sync_stock.py` directly. `sync_nvl_open_po.py`
+is a thin compatibility CLI/facade only; canonical callers use `nvl.open_po`, and
+`sync_nvl_open_po_safe.py` patches that canonical module rather than the legacy root
+entrypoint. SharePoint access goes through `sharepoint.client`, while workbook XML
+utilities go through `excel/`.
 
 
 ## Canonical SharePoint dependency
