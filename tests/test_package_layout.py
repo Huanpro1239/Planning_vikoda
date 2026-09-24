@@ -99,10 +99,13 @@ class PackageLayoutTests(unittest.TestCase):
 
 
     def test_planning_support_root_facades_reexport_canonical_api(self):
+        import importlib
+
         import planning.cleanup as cleanup
         import planning.schedule_report as schedule_report
-        import planning_cleanup as legacy_cleanup
-        import planning_schedule_report as legacy_report
+
+        legacy_cleanup = importlib.import_module("planning_cleanup")
+        legacy_report = importlib.import_module("planning_schedule_report")
 
         self.assertIs(
             legacy_cleanup.remove_sheet_formulas,
