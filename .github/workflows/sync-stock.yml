@@ -125,16 +125,7 @@ jobs:
         shell: bash
         run: |
           test -f planning_release_manifest.json
-          RELEASE_ID="$(python - <<'PY'
-import json
-from pathlib import Path
-manifest = json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8"))
-release_id = str(manifest.get("release_id") or "").strip()
-if not release_id:
-    raise SystemExit("release_id missing")
-print(release_id)
-PY
-)"
+          RELEASE_ID="$(python -c 'import json; from pathlib import Path; manifest=json.loads(Path("planning_release_manifest.json").read_text(encoding="utf-8")); release_id=str(manifest.get("release_id") or "").strip(); assert release_id, "release_id missing"; print(release_id)')"
           cp state.json .runtime-state/state.json
           cp planning_runtime.json .runtime-state/planning_runtime.json
           cp planning_release_manifest.json .runtime-state/latest_release.json
@@ -143,7 +134,7 @@ PY
 
           cd .runtime-state
 
-          if git diff --quiet -- state.json planning_runtime.json latest_release.json releases; then
+          if [[ -z "$(git status --porcelain -- state.json planning_runtime.json latest_release.json releases)" ]]; then
             echo "[STATE] Không có thay đổi runtime state."
             exit 0
           fi
