@@ -5,7 +5,8 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 
-from sync_nvl_open_po import (
+import nvl.open_po as open_po_module
+from nvl.open_po import (
     OpenPOConfig,
     patch_target_workbook,
     read_open_po,
@@ -97,6 +98,24 @@ class OpenPOTests(unittest.TestCase):
         totals, _ = read_open_po(make_source_bytes(), make_config())
         with self.assertRaises(RuntimeError):
             reconcile_target(make_target_bytes(formula=True), totals, make_config())
+
+    def test_item_metadata_uses_canonical_graph_endpoint(self):
+        class FakeGraph:
+            url = None
+
+            def get_json(self, url):
+                self.url = url
+                return {"id": "item-1"}
+
+        graph = FakeGraph()
+        result = open_po_module._item_metadata(graph, "drive-1", "item-1")
+
+        self.assertEqual(result, {"id": "item-1"})
+        self.assertTrue(
+            graph.url.startswith(
+                "https://graph.microsoft.com/v1.0/drives/drive-1/items/item-1"
+            )
+        )
 
     def test_patch_only_e_and_verify(self):
         target = make_target_bytes()

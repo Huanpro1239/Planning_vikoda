@@ -85,6 +85,19 @@ class PackageLayoutTests(unittest.TestCase):
         )
         self.assertTrue(callable(open_po.read_open_po))
 
+    def test_sync_nvl_open_po_reexports_canonical_business_api(self):
+        import nvl.open_po as packaged
+        import sync_nvl_open_po as legacy
+
+        self.assertIs(legacy.OpenPOConfig, packaged.OpenPOConfig)
+        self.assertIs(legacy.load_open_po_config, packaged.load_open_po_config)
+        self.assertIs(legacy.read_open_po, packaged.read_open_po)
+        self.assertIs(legacy.reconcile_target, packaged.reconcile_target)
+        self.assertIs(legacy.patch_target_workbook, packaged.patch_target_workbook)
+        self.assertIs(legacy.verify_target, packaged.verify_target)
+        self.assertIs(legacy.run_online, packaged.run_online)
+
+
     def test_planning_facade_imports(self):
         import planning.pipeline as pipeline
 

@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from sync_nvl_open_po import OpenPOConfig
+from nvl.open_po import OpenPOConfig
 from sync_nvl_open_po_safe import _graph_share_id, resolve_source_item_exact_url
 from sharepoint.client import GraphRequestError
 

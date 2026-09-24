@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import sys
 
-import sync_nvl_open_po as base
+import nvl.open_po as base
 from sharepoint.client import (
     get_item_metadata,
     graph_share_id as _graph_share_id,
