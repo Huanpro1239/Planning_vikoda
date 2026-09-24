@@ -152,11 +152,18 @@ into the `planning/` package:
 - `planning/layout.py`: canonical daily schedule column layout.
 - `planning/calendar.py`: date headers, cross-year resolution and all-month calendar update.
 - `planning/stock_inputs.py`: Ton_kho -> Ke_hoach_SX J/K synchronization.
-- `planning/publish.py`: proposal/publish policy, artifacts, retries and CLI behavior.
+- `planning/publish/`: proposal/publish policy, artifacts, retries and CLI behavior.
 
-Root files `sync_planning_fc.py`, `sync_planning_calendar.py`,
-`sync_planning_stock_inputs.py` and `sync_planning_pipeline.py` are CLI
-entrypoints only. Production/runtime/tests must import `planning.*` directly.
+Legacy root CLIs `sync_planning_fc.py`, `sync_planning_calendar.py`,
+`sync_planning_stock_inputs.py` and `sync_planning_pipeline.py` have been
+removed. Use package-native entrypoints instead:
+
+- `python -m planning.fc`
+- `python -m planning.calendar`
+- `python -m planning.stock_inputs`
+- `python -m planning.publish`
+
+Production/runtime/tests import `planning.*` directly.
 
 Legacy Planning support facades `planning_cleanup.py` and
 `planning_schedule_report.py` have been removed. Canonical callers import
