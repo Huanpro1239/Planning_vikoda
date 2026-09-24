@@ -235,3 +235,5 @@ def main():
     )
     print("Upload thành công:", result.get("name", "Sắp kế hoạch.xlsx"))
 
+if __name__ == "__main__":
+    main()
