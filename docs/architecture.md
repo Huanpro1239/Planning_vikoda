@@ -98,6 +98,8 @@ Planning implementations now live under the `planning/` package:
   - `layout.py`: week/total column layout, styles and safe merge handling.
   - `workbook.py`: SKU reconciliation and workbook patching.
   - `verification.py`: independent read-only integrity verification.
+- `planning/cleanup.py`: Planning-specific workbook cleanup using shared OpenXML helpers.
+- `planning/schedule_report.py`: report serialization, hashing and console rendering.
 - `planning/pipeline.py`: pure proposal-building pipeline.
 
 Legacy metrics patchers `sync_planning_metrics_compat.py`, `sync_planning_metrics_direct.py` and `sync_planning_metrics_all_months.py` are removed. No module may rebind `planning.metrics` functions or policy state at import/runtime. No kho debt, Danh_muc leadtime and all-month calculations are wired explicitly through function arguments.
@@ -155,6 +157,10 @@ into the `planning/` package:
 Root files `sync_planning_fc.py`, `sync_planning_calendar.py`,
 `sync_planning_stock_inputs.py` and `sync_planning_pipeline.py` are CLI
 entrypoints only. Production/runtime/tests must import `planning.*` directly.
+
+`planning_cleanup.py` and `planning_schedule_report.py` are thin compatibility
+facades only; canonical Planning code imports `planning.cleanup` and
+`planning.schedule_report`.
 
 Obsolete side-effect modules are removed:
 - `sync_planning_fc_compat.py`
