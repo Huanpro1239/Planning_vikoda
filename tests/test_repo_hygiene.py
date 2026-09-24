@@ -384,23 +384,23 @@ class RepoHygieneTests(unittest.TestCase):
         )
 
 
-    def test_planning_root_entrypoints_are_thin(self):
-        limits = {
-            "sync_planning_fc.py": 30,
-            "sync_planning_calendar.py": 30,
-            "sync_planning_stock_inputs.py": 30,
-            "sync_planning_pipeline.py": 30,
-        }
-        oversized = []
-        for name, limit in limits.items():
-            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
-            if count >= limit:
-                oversized.append(f"{name}={count} dòng")
+    def test_planning_root_entrypoints_are_removed(self):
+        legacy = [
+            ROOT / "sync_planning_fc.py",
+            ROOT / "sync_planning_calendar.py",
+            ROOT / "sync_planning_stock_inputs.py",
+            ROOT / "sync_planning_pipeline.py",
+        ]
+        leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
         self.assertEqual(
-            oversized,
+            leftovers,
             [],
-            "Planning root entrypoint bị phình lại: " + "; ".join(oversized),
+            "Planning root entrypoint cũ vẫn còn: " + ", ".join(leftovers),
         )
+        self.assertTrue((ROOT / "planning" / "fc.py").is_file())
+        self.assertTrue((ROOT / "planning" / "calendar.py").is_file())
+        self.assertTrue((ROOT / "planning" / "stock_inputs.py").is_file())
+        self.assertTrue((ROOT / "planning" / "publish" / "__main__.py").is_file())
 
     def test_planning_support_root_facades_are_removed(self):
         legacy = [
