@@ -165,6 +165,8 @@ class RepoHygieneTests(unittest.TestCase):
             "sync_planning_layout",
             "sync_planning_stock_inputs",
             "sync_planning_pipeline",
+            "planning_cleanup",
+            "planning_schedule_report",
         }
         shim_paths = set()
         offenders = []
@@ -394,6 +396,22 @@ class RepoHygieneTests(unittest.TestCase):
             oversized,
             [],
             "Planning root entrypoint bị phình lại: " + "; ".join(oversized),
+        )
+
+    def test_planning_support_root_facades_are_thin(self):
+        limits = {
+            "planning_cleanup.py": 40,
+            "planning_schedule_report.py": 50,
+        }
+        oversized = []
+        for name, limit in limits.items():
+            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
+            if count >= limit:
+                oversized.append(f"{name}={count} dòng")
+        self.assertEqual(
+            oversized,
+            [],
+            "Planning support facade bị phình lại: " + "; ".join(oversized),
         )
 
     def test_canonical_planning_does_not_import_root_sync_modules(self):

@@ -1,7 +1,7 @@
 from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
-from planning_schedule_report import load_schedule_report
+from planning.schedule_report import load_schedule_report
 from sharepoint.client import GraphClient, get_access_token
 from stock import DEST_PATH
 

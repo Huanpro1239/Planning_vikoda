@@ -23,6 +23,8 @@ SUPPORT_MODULES = {
     "planning.layout": "layout",
     "planning.calendar": "calendar",
     "planning.stock_inputs": "stock_inputs",
+    "planning.cleanup": "cleanup",
+    "planning.schedule_report": "schedule_report",
 }
 
 # Package-level architecture:
@@ -52,17 +54,22 @@ ALLOWED_DOMAIN_EDGES = {
         "metrics",
         "weekly_model",
         "khsx_ki",
+        "cleanup",
+        "schedule_report",
     },
-    "publish": {"pipeline", "metrics"},
+    "publish": {"pipeline", "metrics", "schedule_report"},
     "verification": {
         "fc",
         "calendar",
         "weekly_engine",
+        "schedule_report",
     },
     "fc": set(),
     "layout": {"fc"},
     "calendar": {"fc", "layout"},
     "stock_inputs": {"fc"},
+    "cleanup": set(),
+    "schedule_report": set(),
 }
 
 MIDDLE_DOMAINS = {"metrics", "weekly_model", "khsx_ki"}
@@ -219,6 +226,8 @@ class PlanningPackageArchitectureTests(unittest.TestCase):
             "layout",
             "calendar",
             "stock_inputs",
+            "cleanup",
+            "schedule_report",
         }
         forbidden_targets = {"pipeline", "publish", "verification"}
         offenders = []

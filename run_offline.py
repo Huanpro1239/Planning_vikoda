@@ -25,7 +25,7 @@ from pathlib import Path
 
 from planning import metrics
 from planning.pipeline import SOURCE_KEYS, prepare_pipeline_output
-from planning_schedule_report import print_operational_report, save_schedule_report
+from planning.schedule_report import print_operational_report, save_schedule_report
 
 
 _ARG_TO_KEY = {

@@ -4,8 +4,8 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
-from planning_cleanup import remove_sheet_formulas
-from planning_schedule_report import attach_output_hash, json_safe
+from planning.cleanup import remove_sheet_formulas
+from planning.schedule_report import attach_output_hash, json_safe
 from planning.calendar import prepare_calendar_update_all_months
 from planning.fc import prepare_planning_fc_update
 from planning import metrics

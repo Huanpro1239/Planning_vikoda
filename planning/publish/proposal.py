@@ -5,7 +5,7 @@ import json
 from io import BytesIO
 from zipfile import BadZipFile, ZipFile
 
-from planning_schedule_report import save_schedule_report
+from planning.schedule_report import save_schedule_report
 
 from .constants import (
     AUDIT_REVISION_FILE,
