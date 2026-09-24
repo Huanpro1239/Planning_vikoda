@@ -98,27 +98,19 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertIs(legacy.run_online, packaged.run_online)
 
 
-    def test_planning_support_root_facades_reexport_canonical_api(self):
-        import importlib
-
+    def test_planning_support_modules_are_canonical_packages(self):
         import planning.cleanup as cleanup
         import planning.schedule_report as schedule_report
 
-        legacy_cleanup = importlib.import_module("planning_cleanup")
-        legacy_report = importlib.import_module("planning_schedule_report")
-
-        self.assertIs(
-            legacy_cleanup.remove_sheet_formulas,
-            cleanup.remove_sheet_formulas,
+        self.assertEqual(cleanup.remove_sheet_formulas.__module__, "planning.cleanup")
+        self.assertEqual(schedule_report.json_safe.__module__, "planning.schedule_report")
+        self.assertEqual(
+            schedule_report.save_schedule_report.__module__,
+            "planning.schedule_report",
         )
-        self.assertIs(legacy_report.json_safe, schedule_report.json_safe)
-        self.assertIs(
-            legacy_report.save_schedule_report,
-            schedule_report.save_schedule_report,
-        )
-        self.assertIs(
-            legacy_report.load_schedule_report,
-            schedule_report.load_schedule_report,
+        self.assertEqual(
+            schedule_report.load_schedule_report.__module__,
+            "planning.schedule_report",
         )
 
     def test_planning_facade_imports(self):

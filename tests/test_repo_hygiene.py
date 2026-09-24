@@ -402,20 +402,16 @@ class RepoHygieneTests(unittest.TestCase):
             "Planning root entrypoint bị phình lại: " + "; ".join(oversized),
         )
 
-    def test_planning_support_root_facades_are_thin(self):
-        limits = {
-            "planning_cleanup.py": 40,
-            "planning_schedule_report.py": 50,
-        }
-        oversized = []
-        for name, limit in limits.items():
-            count = len((ROOT / name).read_text(encoding="utf-8").splitlines())
-            if count >= limit:
-                oversized.append(f"{name}={count} dòng")
+    def test_planning_support_root_facades_are_removed(self):
+        legacy = [
+            ROOT / "planning_cleanup.py",
+            ROOT / "planning_schedule_report.py",
+        ]
+        leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
         self.assertEqual(
-            oversized,
+            leftovers,
             [],
-            "Planning support facade bị phình lại: " + "; ".join(oversized),
+            "Planning support facade cũ vẫn còn: " + ", ".join(leftovers),
         )
 
     def test_canonical_planning_does_not_import_root_sync_modules(self):
