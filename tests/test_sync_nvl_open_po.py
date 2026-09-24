@@ -5,7 +5,7 @@ import unittest
 
 from openpyxl import Workbook, load_workbook
 
-from sync_nvl_open_po import (
+from nvl.open_po import (
     OpenPOConfig,
     patch_target_workbook,
     read_open_po,
