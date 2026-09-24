@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from graph_retry import parse_retry_after, retry_delay_seconds
+from sharepoint.retry import parse_retry_after, retry_delay_seconds
 from sharepoint.client import GraphRequestError
 
 
