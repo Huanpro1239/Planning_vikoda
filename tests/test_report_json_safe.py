@@ -2,7 +2,7 @@ import json
 import unittest
 from datetime import date, datetime
 
-from planning_schedule_report import json_safe
+from planning.schedule_report import json_safe
 
 
 class ReportJsonSafeTests(unittest.TestCase):
