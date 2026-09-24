@@ -3,7 +3,7 @@
 import argparse
 import os
 
-from graph_retry import install_retry_after_support
+from sharepoint.retry import install_retry_after_support
 from sharepoint.client import GraphClient, get_access_token
 
 from .service import run_pipeline_with_retry
