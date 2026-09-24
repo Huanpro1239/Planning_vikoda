@@ -79,5 +79,19 @@ class ReleaseGateWiringTests(unittest.TestCase):
         )
 
 
+    def test_release_history_requires_manifest_before_persisting_state(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-stock.yml"
+        ).read_text(encoding="utf-8")
+        history_step = workflow.split(
+            "- name: Save runtime state to runtime-state branch",
+            1,
+        )[1]
+        self.assertIn(
+            "test -f planning_release_manifest.json",
+            history_step,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
