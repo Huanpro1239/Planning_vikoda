@@ -121,3 +121,8 @@ If a clone is shallow and does not contain an old commit, fetch the relevant Git
 history before strict verification. `--no-git` explicitly skips local commit
 history lookup; use it only when commit existence is being verified by another
 trusted mechanism.
+
+
+The verifier itself is covered by the production-readiness release-safety phase,
+so changes to release verification must pass the same gate used before merge and
+production publish.
