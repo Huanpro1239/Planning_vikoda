@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from planning_schedule_report import json_safe
+from planning.schedule_report import json_safe
 
 from .proposal import proposal_output_sha256
 
