@@ -26,7 +26,7 @@ class ReleaseGateWiringTests(unittest.TestCase):
 
         gate_index = workflow.find(GATE_COMMAND)
         publish_index = workflow.find(
-            "python -X utf8 sync_planning_pipeline.py"
+            "python -X utf8 -m planning.publish"
         )
         self.assertGreaterEqual(gate_index, 0)
         self.assertGreater(publish_index, gate_index)
