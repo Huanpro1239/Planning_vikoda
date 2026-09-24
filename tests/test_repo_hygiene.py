@@ -9,6 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RepoHygieneTests(unittest.TestCase):
+    def test_graph_retry_lives_under_sharepoint_package(self):
+        self.assertFalse((ROOT / "graph_retry.py").exists())
+        self.assertTrue((ROOT / "sharepoint" / "retry.py").is_file())
+
     def test_root_has_no_temporary_review_or_antigravity_docs(self):
         forbidden_patterns = ("REVIEW_*.md", "RECHECK_*.md", "PLAN_*ANTIGRAVITY*.md")
         leftovers = []
