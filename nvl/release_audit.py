@@ -336,9 +336,13 @@ def audit_nvl_release_ledger(
                 record,
                 "chain_gap_or_branch",
                 (
-                    f"expected chronological predecessor="
-                    f"{previous_ordered.get('release_id') if previous_ordered else None!r}; "
-                    f"manifest points to={prev_id!r}"
+                    "expected chronological predecessor="
+                    + repr(
+                        previous_ordered.get("release_id")
+                        if previous_ordered
+                        else None
+                    )
+                    + f"; manifest points to={prev_id!r}"
                 ),
             )
             record["chain_status"] = "broken"
