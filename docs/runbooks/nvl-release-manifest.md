@@ -68,3 +68,60 @@ upload GitHub Actions audit artifacts
 ```
 
 Proposal-only, staging-only hoặc publish thất bại không được tạo release record.
+
+## Verify an old NVL release
+
+Basic verification of a historical manifest:
+
+```bash
+python -X utf8 scripts/verify_nvl_release.py \
+  runtime-state/nvl/releases/<release_id>.json
+```
+
+This always validates the manifest contract itself: schema/version, release ID
+derived from the final stable workbook hash, successful Stock/Open-PO publish
+evidence, readiness status, commit consistency, revision shape and internal hash
+consistency. If external evidence is not present beside the manifest, basic mode
+reports warnings rather than claiming those files were rechecked.
+
+For complete evidence verification, place/download the per-run artifacts beside
+the manifest and run:
+
+```bash
+python -X utf8 scripts/verify_nvl_release.py nvl_release_manifest.json \
+  --strict \
+  --stock-proposal nvl_stock_proposal.xlsx \
+  --final-workbook nvl_open_po_proposal.xlsx \
+  --readiness nvl_production_readiness_report.json \
+  --stock-report nvl_stock_report.json \
+  --open-po-report nvl_open_po_report.json
+```
+
+Strict mode recomputes or cross-checks:
+
+- raw and stable SHA-256 of the stock proposal,
+- raw and stable SHA-256 of the final Open-PO proposal,
+- final published-workbook/server SHA against Open-PO post-upload evidence,
+- readiness report SHA-256, PASS status, gate version and Git SHA,
+- Stock source/target revisions, status, changed count and verification evidence,
+- Open-PO source/target revisions, changed cells and exact publish evidence,
+- release ID/version identity,
+- release commit existence in local Git history.
+
+Machine-readable output:
+
+```bash
+python -X utf8 scripts/verify_nvl_release.py <manifest> --json
+```
+
+Local Make target:
+
+```bash
+make verify-nvl-release MANIFEST=runtime-state/nvl/releases/<release_id>.json
+make verify-nvl-release MANIFEST=nvl_release_manifest.json STRICT=1
+```
+
+For a shallow clone that does not contain an old release commit, fetch the
+relevant Git history before strict verification. `--no-git` skips only the
+local Git-history lookup; use it when commit existence is verified by another
+trusted mechanism.
