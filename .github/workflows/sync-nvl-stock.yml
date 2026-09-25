@@ -74,7 +74,7 @@ jobs:
 
       - name: Clean test artifacts from workspace
         run: |
-          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json nvl_release_manifest.json nvl_release_index.json nvl_release_index.csv audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json nvl_release_manifest.json nvl_release_index.json nvl_release_index.csv nvl_operational_summary.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
 
       - name: Ensure staging copy on SharePoint
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy }}
@@ -153,6 +153,13 @@ jobs:
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state
 
+      - name: Write NVL operational summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python -X utf8 scripts/summarize_nvl_run.py
+
       - name: Upload NVL proposal and report audit
         if: always()
         uses: actions/upload-artifact@v6
@@ -167,6 +174,7 @@ jobs:
             nvl_production_readiness_report.json
             nvl_release_index.json
             nvl_release_index.csv
+            nvl_operational_summary.json
             audit_summary.json
             staging_copy_info.json
             official_backup_*
