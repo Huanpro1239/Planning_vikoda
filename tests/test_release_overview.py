@@ -87,6 +87,7 @@ class ReleaseOverviewTests(unittest.TestCase):
         )
         decision = {
             "state": "published",
+            "proposal_id": report["proposal_id"],
             "reason": "test",
         }
         manifest = build_planning_manifest(
