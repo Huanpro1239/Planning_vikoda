@@ -1,0 +1,144 @@
+name: NVL Staging E2E Drill
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  drill:
+    if: contains(github.event.head_commit.message, '[nvl-staging-drill]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run NVL production readiness gate
+        run: python -X utf8 scripts/nvl_production_readiness.py
+
+      - name: Ensure staging copy exists
+        run: |
+          python -X utf8 scripts/ensure_staging_copy.py \
+            --config nvl_stock_staging_config.json \
+            --official-config nvl_stock_config.json
+
+      - name: Publish stock D to staging copy
+        run: |
+          python -X utf8 -m nvl.stock \
+            --config nvl_stock_staging_config.json \
+            --publish
+
+      - name: Publish Open PO E to staging copy
+        run: |
+          python -X utf8 -m nvl.open_po_safe \
+            --target-config nvl_stock_staging_config.json \
+            --publish
+
+      - name: Build staging NVL release manifest
+        env:
+          NVL_REQUIRE_READINESS: "1"
+        run: python -X utf8 -m nvl.release
+
+      - name: Strictly verify staging release
+        run: |
+          python -X utf8 scripts/verify_nvl_release.py \
+            nvl_release_manifest.json \
+            --strict \
+            --stock-proposal nvl_stock_proposal.xlsx \
+            --final-workbook nvl_open_po_proposal.xlsx \
+            --readiness nvl_production_readiness_report.json \
+            --stock-report nvl_stock_report.json \
+            --open-po-report nvl_open_po_report.json
+
+      - name: Build and audit isolated staging ledger
+        shell: bash
+        run: |
+          RELEASE_ID="$(python -c 'import json; from pathlib import Path; m=json.loads(Path("nvl_release_manifest.json").read_text(encoding="utf-8")); print(m["release_id"])')"
+          mkdir -p staging-ledger/nvl/releases
+          cp nvl_release_manifest.json "staging-ledger/nvl/releases/${RELEASE_ID}.json"
+          cp nvl_release_manifest.json staging-ledger/nvl/latest_release.json
+
+          python -X utf8 scripts/audit_nvl_releases.py \
+            staging-ledger/nvl/releases \
+            --latest staging-ledger/nvl/latest_release.json \
+            --out-json nvl_release_index.json \
+            --out-csv nvl_release_index.csv
+
+      - name: Write drill summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          print("# NVL Staging E2E Drill")
+          for name in (
+              "nvl_stock_report.json",
+              "nvl_open_po_report.json",
+              "nvl_release_manifest.json",
+              "nvl_release_index.json",
+          ):
+              p = Path(name)
+              if not p.exists():
+                  print(f"- {name}: MISSING")
+                  continue
+              try:
+                  data = json.loads(p.read_text(encoding="utf-8"))
+              except Exception:
+                  print(f"- {name}: PRESENT")
+                  continue
+
+              if name == "nvl_stock_report.json":
+                  print(f"- Stock: status={data.get('status')} changed={((data.get('metrics') or {}).get('changed_count'))}")
+              elif name == "nvl_open_po_report.json":
+                  print(f"- Open PO: published={data.get('published')} changed_cells={((data.get('target') or {}).get('changed_cells'))}")
+              elif name == "nvl_release_manifest.json":
+                  print(f"- Release: {data.get('release_id')}")
+                  print(f"- Workbook SHA: {((data.get('published_workbook') or {}).get('sha256'))}")
+              elif name == "nvl_release_index.json":
+                  print(f"- Ledger: status={data.get('status')} releases={((data.get('summary') or {}).get('release_count'))}")
+          PY
+
+      - name: Upload staging drill evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nvl-staging-e2e-${{ github.run_id }}
+          path: |
+            staging_copy_info.json
+            nvl_production_readiness_report.json
+            nvl_stock_proposal.xlsx
+            nvl_stock_report.json
+            nvl_open_po_proposal.xlsx
+            nvl_open_po_report.json
+            nvl_release_manifest.json
+            nvl_release_index.json
+            nvl_release_index.csv
+            staging-ledger/nvl/latest_release.json
+            staging-ledger/nvl/releases/*.json
+          if-no-files-found: warn
+          retention-days: 7
