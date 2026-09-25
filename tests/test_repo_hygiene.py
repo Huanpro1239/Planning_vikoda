@@ -354,15 +354,9 @@ class RepoHygieneTests(unittest.TestCase):
             "Runtime còn phụ thuộc root sync_stock: " + ", ".join(offenders),
         )
 
-    def test_legacy_sync_stock_cli_is_thin(self):
-        line_count = len(
-            (ROOT / "sync_stock.py").read_text(encoding="utf-8").splitlines()
-        )
-        self.assertLess(
-            line_count,
-            150,
-            f"sync_stock.py vẫn quá lớn: {line_count} dòng",
-        )
+    def test_stock_uses_package_native_cli(self):
+        self.assertFalse((ROOT / "sync_stock.py").exists())
+        self.assertTrue((ROOT / "stock" / "__main__.py").is_file())
 
     def test_sync_stock_compat_is_removed(self):
         self.assertFalse((ROOT / "sync_stock_compat.py").exists())
