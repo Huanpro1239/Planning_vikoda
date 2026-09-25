@@ -275,6 +275,55 @@ class NVLReleaseAuditTests(unittest.TestCase):
         }
         self.assertIn("filename_release_id_mismatch", codes)
 
+    def test_legacy_unlinked_manifest_is_warning_not_tamper(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            nvl = root / "nvl"
+            releases = nvl / "releases"
+            releases.mkdir(parents=True)
+            release = self._append_release(
+                root,
+                releases,
+                suffix="legacy",
+                timestamp="2026-09-25T01:00:00+00:00",
+                run_id="90",
+            )
+            manifest = json.loads(release.read_text(encoding="utf-8"))
+            manifest.pop("chain", None)
+            release.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            latest = nvl / "latest_release.json"
+            shutil.copyfile(release, latest)
+
+            index = audit_nvl_release_ledger(
+                releases,
+                latest_path=latest,
+                verify_commit=False,
+            )
+
+        self.assertEqual(index["status"], "passed")
+        self.assertEqual(
+            index["summary"]["legacy_unlinked_count"],
+            1,
+        )
+        self.assertEqual(
+            index["releases"][0]["chain_status"],
+            "legacy_unlinked",
+        )
+        codes = {
+            issue["code"]
+            for issue in index["releases"][0]["issues"]
+        }
+        self.assertIn("legacy_unlinked", codes)
+
     def test_empty_ledger_is_not_a_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             releases = Path(tmpdir) / "nvl" / "releases"
