@@ -27,6 +27,9 @@ verify-nvl-release:
 audit-nvl-releases:
 	$(PYTHON) -X utf8 scripts/audit_nvl_releases.py $(if $(RELEASES_DIR),"$(RELEASES_DIR)",runtime-state/nvl/releases) $(if $(NO_GIT),--no-git,)
 
+release-overview:
+	$(PYTHON) -X utf8 scripts/release_overview.py $(if $(RUNTIME_STATE),"$(RUNTIME_STATE)",.runtime-state) $(if $(NO_GIT),--no-git,)
+
 restore-nvl-release:
 	@test -n "$(RELEASE)" || (echo "Usage: make restore-nvl-release RELEASE=<release_id> HISTORICAL=<workbook.xlsx> [PUBLISH=1 APPROVE=<release_id>]" && exit 2)
 	@test -n "$(HISTORICAL)" || (echo "HISTORICAL=<nvl_open_po_proposal.xlsx> is required" && exit 2)
