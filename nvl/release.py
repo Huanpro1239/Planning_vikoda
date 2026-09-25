@@ -92,7 +92,11 @@ def _require_successful_publish(
         raise RuntimeError(
             "NVL stock report không phải production publish."
         )
-    if stock_report.get("status") not in {"published", "unchanged"}:
+    if stock_report.get("status") not in {
+        "published",
+        "published_with_warnings",
+        "unchanged",
+    }:
         raise RuntimeError(
             "NVL stock publish chưa hoàn tất thành công."
         )
@@ -149,6 +153,7 @@ def build_release_manifest(
 
     stock_source = stock_report.get("source") or {}
     stock_target = stock_report.get("target") or {}
+    stock_upload = stock_report.get("upload_result") or {}
     open_source = open_po_report.get("source") or {}
     open_target = open_po_report.get("target") or {}
     open_evidence = open_po_report.get("publish_evidence") or {}
@@ -200,6 +205,14 @@ def build_release_manifest(
         "input_revision": {
             "stock_source_etag": stock_source.get("revision"),
             "stock_target_etag_before": stock_target.get("revision"),
+            "stock_target_etag_after": (
+                stock_upload.get("eTag")
+                or (
+                    stock_target.get("revision")
+                    if stock_report.get("status") == "unchanged"
+                    else None
+                )
+            ),
             "open_po_source_etag": open_source.get("revision"),
             "open_po_target_etag_before": open_target.get("revision_before"),
             "open_po_target_etag_after": open_evidence.get(
