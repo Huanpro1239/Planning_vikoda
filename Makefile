@@ -1,4 +1,4 @@
-.PHONY: install test readiness nvl-readiness verify-release verify-nvl-release audit-nvl-releases restore-nvl-release compile clean
+.PHONY: install test readiness nvl-readiness verify-release verify-nvl-release audit-nvl-releases restore-nvl-release nvl-ops-summary compile clean
 
 PYTHON ?= python3
 
@@ -31,6 +31,9 @@ restore-nvl-release:
 	@test -n "$(RELEASE)" || (echo "Usage: make restore-nvl-release RELEASE=<release_id> HISTORICAL=<workbook.xlsx> [PUBLISH=1 APPROVE=<release_id>]" && exit 2)
 	@test -n "$(HISTORICAL)" || (echo "HISTORICAL=<nvl_open_po_proposal.xlsx> is required" && exit 2)
 	$(PYTHON) -X utf8 scripts/restore_nvl_release.py "$(RELEASE)" --historical-workbook "$(HISTORICAL)" $(if $(PUBLISH),--publish --approve-release-id "$(APPROVE)",)
+
+nvl-ops-summary:
+	$(PYTHON) -X utf8 scripts/summarize_nvl_run.py
 
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:
