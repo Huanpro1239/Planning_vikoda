@@ -79,9 +79,9 @@ class SharePointAuthTests(unittest.TestCase):
             self.assertEqual(auth.get_access_token(), "legacy")
         legacy.assert_called_once()
 
-    def test_sync_stock_reexports_canonical_auth_provider(self):
-        import sync_stock
-        self.assertIs(sync_stock.get_access_token, auth.get_access_token)
+    def test_sharepoint_client_uses_canonical_auth_provider(self):
+        import sharepoint.client as client
+        self.assertIs(client.get_access_token, auth.get_access_token)
 
 
 
