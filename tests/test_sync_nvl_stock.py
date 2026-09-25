@@ -1,4 +1,4 @@
-"""Unit tests for sync_nvl_stock module."""
+"""Unit tests for the canonical nvl.stock module."""
 
 from io import BytesIO
 import json
@@ -10,7 +10,7 @@ import zipfile
 from lxml import etree
 from openpyxl import Workbook, load_workbook
 
-from sync_nvl_stock import (
+from nvl.stock import (
     NVLConfig,
     normalize_nvl_code,
     parse_nvl_quantity,
@@ -791,13 +791,13 @@ class SyncNVLStockTests(unittest.TestCase):
 
     def test_cli_main_failure_exits_with_code_1_and_writes_error_report(self):
         """CLI main() bắt lỗi, xuất error report và thoát với mã lỗi 1."""
-        from sync_nvl_stock import main
+        from nvl.stock import main
         import sys
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_args = [
-                "sync_nvl_stock.py",
+                "nvl.stock",
                 "--source-file", "nonexistent_source.xlsx",
                 "--target-file", "nonexistent_target.xlsx",
                 "--out", tmpdir,
@@ -815,13 +815,13 @@ class SyncNVLStockTests(unittest.TestCase):
 
     def test_cli_main_config_error_writes_error_report_and_exits_1(self):
         """CLI main() gặp lỗi nạp cấu hình vẫn xuất error report và thoát với mã lỗi 1."""
-        from sync_nvl_stock import main
+        from nvl.stock import main
         import sys
         from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_args = [
-                "sync_nvl_stock.py",
+                "nvl.stock",
                 "--config", "nonexistent_config.json",
                 "--out", tmpdir,
             ]
@@ -840,7 +840,7 @@ class SyncNVLStockTests(unittest.TestCase):
         """Khi preserve_missing_in_source=False, gặp mã đích thiếu trong nguồn sẽ dừng và báo lỗi."""
         import io
         import openpyxl
-        from sync_nvl_stock import reconcile_nvl_target, NVLConfig
+        from nvl.stock import reconcile_nvl_target, NVLConfig
         cfg = NVLConfig(
             source_name="src.xlsm",
             source_path="",

@@ -60,11 +60,7 @@ class RepoHygieneTests(unittest.TestCase):
 
 
     def test_nvl_runtime_has_no_direct_sync_stock_import(self):
-        paths = [
-            ROOT / "sync_nvl_stock.py",
-            ROOT / "sync_nvl_open_po.py",
-            *sorted((ROOT / "nvl").glob("*.py")),
-        ]
+        paths = sorted((ROOT / "nvl").glob("*.py"))
         offenders = []
         for path in paths:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -76,9 +72,18 @@ class RepoHygieneTests(unittest.TestCase):
                     offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [], f"NVL còn phụ thuộc trực tiếp sync_stock: {offenders}")
 
-    def test_legacy_nvl_cli_is_thin(self):
-        line_count = len((ROOT / "sync_nvl_stock.py").read_text(encoding="utf-8").splitlines())
-        self.assertLess(line_count, 80, f"sync_nvl_stock.py vẫn quá lớn: {line_count} dòng")
+    def test_legacy_nvl_root_facades_are_removed(self):
+        legacy = [
+            ROOT / "sync_nvl_stock.py",
+            ROOT / "sync_nvl_open_po.py",
+            ROOT / "sync_nvl_open_po_safe.py",
+        ]
+        leftovers = [str(path.relative_to(ROOT)) for path in legacy if path.exists()]
+        self.assertEqual(
+            leftovers,
+            [],
+            "NVL root compatibility facade cũ vẫn còn: " + ", ".join(leftovers),
+        )
 
 
     def test_nvl_open_po_canonical_does_not_depend_on_root_entrypoint(self):
@@ -100,20 +105,9 @@ class RepoHygieneTests(unittest.TestCase):
             "nvl.open_po phải là canonical implementation, không import ngược root CLI",
         )
 
-    def test_legacy_nvl_open_po_cli_is_thin(self):
-        line_count = len(
-            (ROOT / "sync_nvl_open_po.py").read_text(encoding="utf-8").splitlines()
-        )
-        self.assertLess(
-            line_count,
-            80,
-            f"sync_nvl_open_po.py vẫn quá lớn: {line_count} dòng",
-        )
 
     def test_safe_nvl_open_po_entrypoint_uses_canonical_module(self):
-        legacy = (ROOT / "sync_nvl_open_po_safe.py").read_text(encoding="utf-8")
         canonical = (ROOT / "nvl" / "open_po_safe.py").read_text(encoding="utf-8")
-        self.assertIn("from nvl.open_po_safe import main", legacy)
         self.assertIn("import nvl.open_po as base", canonical)
         self.assertNotIn("import sync_nvl_open_po as base", canonical)
 
