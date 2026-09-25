@@ -67,17 +67,16 @@ utilities go through `excel/`.
 retry classification and SharePoint identity/read helpers. Authentication comes from
 `sharepoint/auth.py`.
 
-Legacy `sync_stock.py` re-exports the canonical Graph API for compatibility, but
-canonical/runtime callers import Graph/auth symbols from `sharepoint.client` and
-finished-goods stock business logic from `stock/`.
+Canonical/runtime callers import Graph/auth symbols from `sharepoint.client` and
+finished-goods stock business logic from `stock/`. The legacy root
+`sync_stock.py` facade has been removed; standalone stock synchronization uses
+`python -m stock`.
 The dependency direction is therefore:
 
 ```text
 planning/ scripts/ -> stock/ -> excel/
        |              |
        +------------> sharepoint.client -> sharepoint.auth
-
-sync_stock.py -> stock/ + sharepoint.client  (legacy CLI/facade only)
 ```
 
 Production workflows call their entrypoints directly. `scripts/auth_runner.py` has been removed; authentication is resolved by `sharepoint.auth` through canonical imports.
@@ -134,13 +133,12 @@ Finished-goods stock synchronization is canonical under `stock/`:
 - `stock/service.py`: standalone Graph orchestration.
 - `stock/__init__.py`: stable business facade.
 
-Root `sync_stock.py` is a thin compatibility CLI/facade only. Production runtime
-must not import business logic from it. The obsolete `sync_stock_compat.py`
-import-time patcher is removed; the dimension-tolerant Danh_muc reader is now the
-single canonical implementation in `stock.readers`.
+Legacy root entrypoints `sync_stock.py` and `sync_stock_compat.py` are removed.
+Use the package-native CLI `python -m stock`. The dimension-tolerant Danh_muc
+reader is the single canonical implementation in `stock.readers`.
 
 The `stock/` package may depend on `excel/` and `sharepoint/`, but must not
-depend on `planning/` or the legacy root `sync_stock.py`.
+depend on `planning/` or any root compatibility module.
 
 
 ## Canonical Planning entrypoints

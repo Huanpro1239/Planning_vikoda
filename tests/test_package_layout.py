@@ -2,36 +2,22 @@ import unittest
 
 
 class PackageLayoutTests(unittest.TestCase):
-    def test_sync_stock_reexports_canonical_graph_api(self):
-        import sharepoint.auth as auth
-        import sharepoint.client as packaged
-        import sync_stock as legacy
-
-        self.assertIs(packaged.GraphClient, legacy.GraphClient)
-        self.assertIs(packaged.GraphRequestError, legacy.GraphRequestError)
-        self.assertIs(packaged.is_retryable_graph_error, legacy.is_retryable_graph_error)
-        self.assertIs(packaged.get_access_token, auth.get_access_token)
-
-    def test_sync_stock_reexports_canonical_business_api(self):
+    def test_stock_package_exposes_canonical_business_api(self):
         import stock
-        import sync_stock as legacy
+        import stock.service as service
 
-        self.assertIs(legacy.normalize_code, stock.normalize_code)
-        self.assertIs(legacy.to_number, stock.to_number)
-        self.assertIs(legacy.clean_number, stock.clean_number)
-        self.assertIs(legacy.read_actual_stock, stock.read_actual_stock)
-        self.assertIs(
-            legacy.read_single_value_source,
-            stock.read_single_value_source,
+        self.assertEqual(stock.normalize_code.__module__, "stock.values")
+        self.assertEqual(stock.to_number.__module__, "stock.values")
+        self.assertEqual(stock.read_actual_stock.__module__, "stock.readers")
+        self.assertEqual(
+            stock.read_conversion_factors.__module__,
+            "stock.readers",
         )
-        self.assertIs(
-            legacy.read_conversion_factors,
-            stock.read_conversion_factors,
+        self.assertEqual(
+            stock.patch_destination_workbook.__module__,
+            "stock.workbook",
         )
-        self.assertIs(
-            legacy.patch_destination_workbook,
-            stock.patch_destination_workbook,
-        )
+        self.assertTrue(callable(service.main))
 
     def test_planning_root_entrypoints_point_to_canonical_modules(self):
         import planning.calendar as calendar
