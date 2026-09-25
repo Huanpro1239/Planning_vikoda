@@ -42,7 +42,7 @@ docs/         # architecture, review history, runbooks
 ## NVL module boundaries
 
 `nvl.stock` owns the canonical stock API and CLI (`python -m nvl.stock`).
-`sync_nvl_stock.py` is a temporary thin compatibility facade. Canonical responsibilities:
+The legacy root `sync_nvl_stock.py` facade has been removed. Canonical responsibilities:
 
 - `nvl/models.py`: immutable data contracts/state containers.
 - `nvl/config.py`: JSON configuration loading.
@@ -55,12 +55,11 @@ docs/         # architecture, review history, runbooks
 - `excel/workbook_xml.py`: reusable low-level OpenXML helpers.
 - `excel/openpyxl_io.py`: deterministic workbook/ZipFile lifecycle cleanup.
 
-NVL runtime modules must not import root compatibility modules directly.
-`sync_nvl_open_po.py` remains a thin compatibility facade for `nvl.open_po`.
-The safe resolver now lives at `nvl.open_po_safe` and production invokes it with
-`python -m nvl.open_po_safe`; the root `sync_nvl_open_po_safe.py` file is temporary
-compatibility only. SharePoint access goes through `sharepoint.client`, while workbook
-XML utilities go through `excel/`.
+Legacy root NVL facades `sync_nvl_stock.py`, `sync_nvl_open_po.py` and
+`sync_nvl_open_po_safe.py` have been removed. Runtime/tests use only canonical
+`nvl.*` modules. The safe resolver lives at `nvl.open_po_safe`, and production
+invokes it with `python -m nvl.open_po_safe`. SharePoint access goes through
+`sharepoint.client`, while workbook XML utilities go through `excel/`.
 
 
 ## Canonical SharePoint dependency
