@@ -72,17 +72,11 @@ class PackageLayoutTests(unittest.TestCase):
         )
         self.assertTrue(callable(open_po.read_open_po))
 
-    def test_sync_nvl_open_po_reexports_canonical_business_api(self):
-        import nvl.open_po as packaged
-        import sync_nvl_open_po as legacy
+    def test_nvl_safe_entrypoint_is_canonical_package_module(self):
+        import nvl.open_po_safe as safe
 
-        self.assertIs(legacy.OpenPOConfig, packaged.OpenPOConfig)
-        self.assertIs(legacy.load_open_po_config, packaged.load_open_po_config)
-        self.assertIs(legacy.read_open_po, packaged.read_open_po)
-        self.assertIs(legacy.reconcile_target, packaged.reconcile_target)
-        self.assertIs(legacy.patch_target_workbook, packaged.patch_target_workbook)
-        self.assertIs(legacy.verify_target, packaged.verify_target)
-        self.assertIs(legacy.run_online, packaged.run_online)
+        self.assertTrue(callable(safe.main))
+        self.assertEqual(safe.main.__module__, "nvl.open_po_safe")
 
 
     def test_planning_support_modules_are_canonical_packages(self):
