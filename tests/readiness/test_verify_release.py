@@ -275,6 +275,21 @@ class ReleaseVerifierTests(unittest.TestCase):
                 )
 
 
+    def test_strict_verification_requires_all_external_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self._fixture(Path(tmp))
+            fixture["proposal"].unlink()
+
+            with self.assertRaisesRegex(
+                ReleaseVerificationError,
+                "evidence.proposal",
+            ):
+                verify_release(
+                    fixture["manifest"],
+                    strict=True,
+                    verify_commit=False,
+                )
+
     def test_strict_verification_confirms_release_commit_exists_in_git_history(self):
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
