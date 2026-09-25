@@ -367,6 +367,14 @@ fork/gap/reset conditions and the latest pointer, then emits JSON/CSV indexes.
 Production runs this audit before committing release history to
 `runtime-state`.
 
+## NVL operational summary
+
+Every NVL workflow run emits `nvl_operational_summary.json` and appends a
+compact Markdown status table to GitHub Step Summary, even when an earlier step
+fails. The summary surfaces readiness status, Stock D/Open-PO E changes,
+release ID, published workbook hash, ledger status and the best available
+failed phase. It is observational only and does not change publish behavior.
+
 ## Release manifest and versioning
 
 Successful production publishes create
