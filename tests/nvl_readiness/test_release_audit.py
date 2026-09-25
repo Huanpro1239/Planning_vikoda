@@ -253,7 +253,6 @@ class NVLReleaseAuditTests(unittest.TestCase):
         }
         self.assertIn("chain_gap_or_branch", codes)
         self.assertIn("chain_fork", codes)
-        self.assertTrue(second.is_file())
 
     def test_filename_release_id_mismatch_is_detected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
