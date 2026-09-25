@@ -29,6 +29,7 @@ class NVLReleaseSafetyTests(unittest.TestCase):
         )
 
     def _offline_proposal(self, root: Path) -> bytes:
+        root.mkdir(parents=True, exist_ok=True)
         source = root / "source.xlsm"
         target = root / "target.xlsx"
         out = root / "out"
