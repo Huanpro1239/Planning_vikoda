@@ -119,6 +119,8 @@ def build_release_manifest(
     published_at: str | None = None,
     environ: dict[str, str] | None = None,
     readiness_path: Path = NVL_READINESS_REPORT_FILE,
+    previous_manifest: dict[str, Any] | None = None,
+    previous_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Build one release record for the final Ton_NVL state after D + E publish."""
     _require_successful_publish(stock_report, open_po_report)
@@ -177,12 +179,32 @@ def build_release_manifest(
         + (f".run-{run_id}.{run_attempt}" if run_id else "")
     )
 
+    previous_release_id = None
+    previous_hash = None
+    if previous_manifest is not None:
+        previous_release_id = str(
+            previous_manifest.get("release_id") or ""
+        ).strip()
+        if not previous_release_id:
+            raise RuntimeError(
+                "Previous NVL manifest thiếu release_id."
+            )
+        previous_hash = str(previous_manifest_sha256 or "").strip()
+        if not previous_hash:
+            raise RuntimeError(
+                "Previous NVL manifest thiếu SHA-256 để nối release chain."
+            )
+
     manifest = {
         "schema": NVL_RELEASE_SCHEMA,
         "schema_version": NVL_RELEASE_SCHEMA_VERSION,
         "release_id": release_id,
         "release_version": release_version,
         "published_at": timestamp,
+        "chain": {
+            "previous_release_id": previous_release_id,
+            "previous_manifest_sha256": previous_hash,
+        },
         "commit": {
             "sha": commit_sha or None,
             "ref": env.get("GITHUB_REF") or None,
@@ -288,6 +310,8 @@ def save_release_manifest(
     *,
     path: Path = NVL_RELEASE_MANIFEST_FILE,
     readiness_path: Path = NVL_READINESS_REPORT_FILE,
+    previous_manifest: dict[str, Any] | None = None,
+    previous_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     manifest = build_release_manifest(
         stock_report,
@@ -295,6 +319,8 @@ def save_release_manifest(
         stock_proposal_bytes,
         final_workbook_bytes,
         readiness_path=readiness_path,
+        previous_manifest=previous_manifest,
+        previous_manifest_sha256=previous_manifest_sha256,
     )
     return write_release_manifest(manifest, path=path)
 
@@ -327,6 +353,14 @@ def main(argv: list[str] | None = None) -> int:
         "--out",
         default=str(NVL_RELEASE_MANIFEST_FILE),
     )
+    parser.add_argument(
+        "--previous-manifest",
+        default="",
+        help=(
+            "Manifest NVL release liền trước để nối hash chain; "
+            "bỏ trống cho release đầu tiên."
+        ),
+    )
     args = parser.parse_args(argv)
 
     stock_report_path = Path(args.stock_report)
@@ -334,12 +368,25 @@ def main(argv: list[str] | None = None) -> int:
     stock_proposal_path = Path(args.stock_proposal)
     final_workbook_path = Path(args.final_workbook)
 
+    previous_manifest = None
+    previous_manifest_sha256 = None
+    previous_path = Path(args.previous_manifest) if args.previous_manifest else None
+    if previous_path is not None and previous_path.is_file():
+        previous_bytes = previous_path.read_bytes()
+        previous_manifest_sha256 = _sha256_bytes(previous_bytes)
+        previous_manifest = _read_json(
+            previous_path,
+            label="previous NVL release manifest",
+        )
+
     manifest = build_release_manifest(
         _read_json(stock_report_path, label="NVL stock report"),
         _read_json(open_po_report_path, label="NVL open-PO report"),
         stock_proposal_path.read_bytes(),
         final_workbook_path.read_bytes(),
         readiness_path=Path(args.readiness_report),
+        previous_manifest=previous_manifest,
+        previous_manifest_sha256=previous_manifest_sha256,
     )
     write_release_manifest(manifest, path=Path(args.out))
     print(
