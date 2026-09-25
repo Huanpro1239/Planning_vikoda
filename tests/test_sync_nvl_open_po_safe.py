@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from nvl.open_po import OpenPOConfig
-from sync_nvl_open_po_safe import _graph_share_id, resolve_source_item_exact_url
+from nvl.open_po_safe import _graph_share_id, resolve_source_item_exact_url
 from sharepoint.client import GraphRequestError
 
 
@@ -69,7 +69,7 @@ class SafeOpenPOResolverTests(unittest.TestCase):
         self.assertTrue(share_id.startswith("u!"))
         self.assertNotIn("=", share_id)
 
-    @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
+    @patch("nvl.open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_resolves_by_exact_sharepoint_url_without_search(self, _):
         graph = FakeGraph()
         item = resolve_source_item_exact_url(graph, "drive-1", make_config())
@@ -80,7 +80,7 @@ class SafeOpenPOResolverTests(unittest.TestCase):
         self.assertNotIn("/search", graph.urls[0])
         self.assertNotIn("/items/", graph.urls[0])
 
-    @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
+    @patch("nvl.open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_transient_graph_500_is_retried(self, _):
         graph = FakeGraph(failures=1)
         with patch("sharepoint.client.time.sleep") as mocked_sleep:
@@ -89,19 +89,19 @@ class SafeOpenPOResolverTests(unittest.TestCase):
         self.assertEqual(len(graph.urls), 2)
         mocked_sleep.assert_called_once()
 
-    @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
+    @patch("nvl.open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_wrong_sourcedoc_is_rejected(self, _):
         graph = FakeGraph(guid="5D3E08DB-83EC-43AD-8F53-83D56B1C0D53")
         with self.assertRaises(RuntimeError):
             resolve_source_item_exact_url(graph, "drive-1", make_config())
 
-    @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
+    @patch("nvl.open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_wrong_name_is_rejected(self, _):
         graph = FakeGraph(name="Kế hoạch mua hàng.xlsx")
         with self.assertRaises(RuntimeError):
             resolve_source_item_exact_url(graph, "drive-1", make_config())
 
-    @patch("sync_nvl_open_po_safe._configured_source_url", return_value=SOURCE_URL)
+    @patch("nvl.open_po_safe._configured_source_url", return_value=SOURCE_URL)
     def test_other_drive_is_rejected_with_clear_error(self, _):
         graph = FakeGraph(drive_id="drive-OTHER")
         with self.assertRaisesRegex(RuntimeError, "document library khác"):

@@ -78,7 +78,7 @@ class RepoHygieneTests(unittest.TestCase):
 
     def test_legacy_nvl_cli_is_thin(self):
         line_count = len((ROOT / "sync_nvl_stock.py").read_text(encoding="utf-8").splitlines())
-        self.assertLess(line_count, 180, f"sync_nvl_stock.py vẫn quá lớn: {line_count} dòng")
+        self.assertLess(line_count, 80, f"sync_nvl_stock.py vẫn quá lớn: {line_count} dòng")
 
 
     def test_nvl_open_po_canonical_does_not_depend_on_root_entrypoint(self):
@@ -111,9 +111,11 @@ class RepoHygieneTests(unittest.TestCase):
         )
 
     def test_safe_nvl_open_po_entrypoint_uses_canonical_module(self):
-        text = (ROOT / "sync_nvl_open_po_safe.py").read_text(encoding="utf-8")
-        self.assertIn("import nvl.open_po as base", text)
-        self.assertNotIn("import sync_nvl_open_po as base", text)
+        legacy = (ROOT / "sync_nvl_open_po_safe.py").read_text(encoding="utf-8")
+        canonical = (ROOT / "nvl" / "open_po_safe.py").read_text(encoding="utf-8")
+        self.assertIn("from nvl.open_po_safe import main", legacy)
+        self.assertIn("import nvl.open_po as base", canonical)
+        self.assertNotIn("import sync_nvl_open_po as base", canonical)
 
 
     def test_graph_api_is_not_imported_from_sync_stock(self):
