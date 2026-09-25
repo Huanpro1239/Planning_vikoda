@@ -333,6 +333,18 @@ full regression. The production NVL workflow invokes this command before any
 staging-copy, survey, proposal or publish operation and uploads
 `nvl_production_readiness_report.json` with the audit artifacts.
 
+## NVL release manifest and versioning
+
+Successful NVL production publishes create `nvl_release_manifest.json` with
+schema `nvl_release_manifest_v1`. One release represents the final
+`Ton_NVL` state after both stock (column D) and Open PO (column E) publish
+steps succeed. The manifest binds commit SHA, NVL gate version, source/target
+revisions, proposal/workbook hashes and post-upload verification evidence.
+
+History is persisted on the state-only `runtime-state` branch under
+`nvl/latest_release.json` and `nvl/releases/<release_id>.json`, separate
+from Planning release history. See `docs/runbooks/nvl-release-manifest.md`.
+
 ## Release manifest and versioning
 
 Successful production publishes create
