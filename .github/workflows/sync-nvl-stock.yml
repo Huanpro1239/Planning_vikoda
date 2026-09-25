@@ -62,9 +62,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run test suite gate
-        run: |
-          python -X utf8 -m unittest discover -s tests -v
+      - name: Run NVL production readiness gate
+        run: python -X utf8 scripts/nvl_production_readiness.py
 
       - name: Clean test artifacts from workspace
         run: |
@@ -109,6 +108,7 @@ jobs:
             nvl_stock_report.json
             nvl_open_po_proposal.xlsx
             nvl_open_po_report.json
+            nvl_production_readiness_report.json
             audit_summary.json
             staging_copy_info.json
             official_backup_*
