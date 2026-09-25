@@ -102,12 +102,12 @@ python run_offline.py \
 
 ## Đồng bộ Tồn Nguyên Vật Liệu (NVL)
 
-Module độc lập `sync_nvl_stock.py` đồng bộ số lượng tồn kho nguyên vật liệu từ `XNT_ketoan_Vikoda.xlsm` (Sheet1, cột B là mã, cột M là tồn) sang `Kế hoạch mua hàng.xlsx` (sheet `Ton_NVL`, ghép mã tại cột A, ghi tồn vào cột D).
+Package canonical `nvl.stock` đồng bộ số lượng tồn kho nguyên vật liệu từ `XNT_ketoan_Vikoda.xlsm` (Sheet1, cột B là mã, cột M là tồn) sang `Kế hoạch mua hàng.xlsx` (sheet `Ton_NVL`, ghép mã tại cột A, ghi tồn vào cột D).
 
 ### 1. Vận hành Offline
 Dùng khi nghiệm thu dữ liệu từ các file tải về máy:
 ```bash
-python -X utf8 sync_nvl_stock.py \
+python -X utf8 -m nvl.stock \
     --config nvl_stock_config.json \
     --source-file "XNT_ketoan_Vikoda.xlsm" \
     --target-file "Kế hoạch mua hàng.xlsx" \
