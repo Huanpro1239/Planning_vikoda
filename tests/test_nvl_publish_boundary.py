@@ -1,4 +1,4 @@
-"""Integration & boundary tests for sync_nvl_stock using mock Graph."""
+"""Integration & boundary tests for nvl.stock using mock Graph."""
 
 from io import BytesIO
 import json
@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from sync_nvl_stock import run_nvl_sync
+from nvl.stock import run_nvl_sync
 from sharepoint.client import GraphRequestError
 from tests.test_sync_nvl_stock import make_mock_config, make_mock_source_bytes, make_mock_target_bytes
 
@@ -755,7 +755,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
 
             import subprocess, sys
             proc = subprocess.run(
-                [sys.executable, "-X", "utf8", "sync_nvl_stock.py", "--config", str(Path(tmpdir) / "non_existent.json"), "--out", tmpdir],
+                [sys.executable, "-X", "utf8", "-m", "nvl.stock", "--config", str(Path(tmpdir) / "non_existent.json"), "--out", tmpdir],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -785,7 +785,7 @@ class NVLPublishBoundaryTests(unittest.TestCase):
 
             import subprocess, sys
             proc = subprocess.run(
-                [sys.executable, "-X", "utf8", "sync_nvl_stock.py", "--config", str(corrupt_cfg), "--out", tmpdir],
+                [sys.executable, "-X", "utf8", "-m", "nvl.stock", "--config", str(corrupt_cfg), "--out", tmpdir],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
