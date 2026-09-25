@@ -321,6 +321,18 @@ Planning workflow invoke this exact command. See
 `docs/runbooks/production-readiness.md`.
 
 
+## NVL production readiness gate
+
+NVL production quality is enforced by one executable command:
+`python -X utf8 scripts/nvl_production_readiness.py`.
+
+The gate is intentionally separate from Planning release readiness and runs
+seven ordered phases: architecture, business contracts, workbook round-trip,
+deterministic proposal, ETag/concurrency safety, publish dry-run safety and
+full regression. The production NVL workflow invokes this command before any
+staging-copy, survey, proposal or publish operation and uploads
+`nvl_production_readiness_report.json` with the audit artifacts.
+
 ## Release manifest and versioning
 
 Successful production publishes create
