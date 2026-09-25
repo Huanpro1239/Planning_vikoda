@@ -128,11 +128,18 @@ class NVLReleaseManifestTests(unittest.TestCase):
         )
         self.assertEqual(
             manifest["published_workbook"]["sha256"],
+            "server-sha",
+        )
+        self.assertEqual(
+            manifest["published_workbook"]["proposal_sha256"],
             hashlib.sha256(final_bytes).hexdigest(),
         )
         self.assertEqual(
             manifest["published_workbook"]["stable_sha256"],
             stable_workbook_sha256(final_bytes),
+        )
+        self.assertTrue(
+            manifest["published_workbook"]["post_upload_verified"]
         )
         self.assertTrue(
             manifest["publish_evidence"]["stock"]["post_upload_verified"]
