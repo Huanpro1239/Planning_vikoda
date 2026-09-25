@@ -174,6 +174,7 @@ def verify_nvl_release(
 
     release_id = str(manifest.get("release_id") or "").strip()
     release_version = str(manifest.get("release_version") or "").strip()
+    chain = manifest.get("chain")
     commit = manifest.get("commit") or {}
     readiness_info = manifest.get("readiness") or {}
     revisions = manifest.get("input_revision") or {}
@@ -204,6 +205,30 @@ def verify_nvl_release(
         ),
         detail=f"release_version không đúng schema: {release_version!r}",
     )
+    if chain is not None:
+        _check(
+            checks,
+            "manifest.chain_shape",
+            isinstance(chain, dict),
+            detail="chain phải là JSON object khi được khai báo",
+        )
+        if isinstance(chain, dict):
+            previous_release_id = str(
+                chain.get("previous_release_id") or ""
+            ).strip()
+            previous_manifest_sha256 = str(
+                chain.get("previous_manifest_sha256") or ""
+            ).strip()
+            _check(
+                checks,
+                "manifest.chain_link_pair",
+                bool(previous_release_id)
+                == bool(previous_manifest_sha256),
+                detail=(
+                    "previous_release_id và previous_manifest_sha256 "
+                    "phải cùng có hoặc cùng rỗng"
+                ),
+            )
     _check(
         checks,
         "manifest.final_stable_sha256",

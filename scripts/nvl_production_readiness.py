@@ -103,6 +103,7 @@ PHASES = (
             "tests.nvl_readiness.test_release_safety.NVLReleaseSafetyTests.test_dry_run_produces_auditable_artifacts_without_upload",
             "tests.nvl_readiness.test_release_manifest",
             "tests.nvl_readiness.test_release_verification",
+            "tests.nvl_readiness.test_release_audit",
         ),
     ),
     (

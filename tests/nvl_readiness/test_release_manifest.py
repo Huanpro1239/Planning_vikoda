@@ -151,6 +151,83 @@ class NVLReleaseManifestTests(unittest.TestCase):
         )
         self.assertIn("run-12345.2", manifest["release_version"])
 
+    def test_first_release_is_chain_anchor(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            manifest = build_release_manifest(
+                stock_report,
+                open_po_report,
+                workbook,
+                workbook,
+                environ={
+                    "NVL_REQUIRE_READINESS": "1",
+                    "GITHUB_SHA": "commit-sha",
+                },
+                readiness_path=readiness,
+            )
+
+        self.assertEqual(
+            manifest["chain"],
+            {
+                "previous_release_id": None,
+                "previous_manifest_sha256": None,
+            },
+        )
+
+    def test_release_links_previous_manifest_by_id_and_sha256(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            readiness = self._readiness(root)
+            previous = build_release_manifest(
+                stock_report,
+                open_po_report,
+                workbook,
+                workbook,
+                published_at="2026-09-25T07:00:00+00:00",
+                environ={
+                    "NVL_REQUIRE_READINESS": "1",
+                    "GITHUB_SHA": "commit-sha",
+                    "GITHUB_RUN_ID": "100",
+                },
+                readiness_path=readiness,
+            )
+            previous_path = root / "previous.json"
+            write_release_manifest(previous, path=previous_path)
+            previous_sha = hashlib.sha256(
+                previous_path.read_bytes()
+            ).hexdigest()
+
+            current = build_release_manifest(
+                stock_report,
+                open_po_report,
+                workbook,
+                workbook,
+                published_at="2026-09-25T08:00:00+00:00",
+                environ={
+                    "NVL_REQUIRE_READINESS": "1",
+                    "GITHUB_SHA": "commit-sha",
+                    "GITHUB_RUN_ID": "101",
+                },
+                readiness_path=readiness,
+                previous_manifest=previous,
+                previous_manifest_sha256=previous_sha,
+            )
+
+        self.assertEqual(
+            current["chain"]["previous_release_id"],
+            previous["release_id"],
+        )
+        self.assertEqual(
+            current["chain"]["previous_manifest_sha256"],
+            previous_sha,
+        )
+
     def test_manifest_accepts_published_with_warnings(self):
         stock_report, open_po_report = self._reports()
         stock_report["status"] = "published_with_warnings"

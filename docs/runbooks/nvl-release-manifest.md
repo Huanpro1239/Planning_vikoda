@@ -125,3 +125,82 @@ For a shallow clone that does not contain an old release commit, fetch the
 relevant Git history before strict verification. `--no-git` skips only the
 local Git-history lookup; use it when commit existence is verified by another
 trusted mechanism.
+
+## Hash-linked release chain
+
+New NVL manifests contain:
+
+```json
+{
+  "chain": {
+    "previous_release_id": "...",
+    "previous_manifest_sha256": "..."
+  }
+}
+```
+
+The first NVL release is the chain anchor and stores both values as `null`.
+Every later release hashes the exact immutable JSON bytes of the previous
+manifest. This makes mutation or deletion of an older release detectable by the
+next release in the ledger.
+
+The production workflow refreshes `runtime-state` immediately before manifest
+creation, passes `nvl/latest_release.json` as the predecessor, audits the
+updated ledger, and only then commits/pushes release history.
+
+## Audit the whole NVL release ledger
+
+Run:
+
+```bash
+python -X utf8 scripts/audit_nvl_releases.py runtime-state/nvl/releases
+```
+
+The command scans all immutable manifests and checks:
+
+- each manifest with the normal NVL release verifier,
+- filename ↔ `release_id` identity,
+- duplicate release IDs,
+- chronological order,
+- predecessor existence,
+- predecessor manifest SHA-256,
+- chain gaps, resets and forks,
+- `latest_release.json` identity and byte equality with the newest release.
+
+It writes two derived indexes:
+
+```text
+nvl_release_index.json
+nvl_release_index.csv
+```
+
+The CSV is a compact history table with release time, release ID, commit,
+readiness gate, source revisions, workbook hash, chain status and issues.
+
+Production persists the derived indexes in the state-only branch:
+
+```text
+runtime-state/nvl/release_index.json
+runtime-state/nvl/release_index.csv
+```
+
+If the ledger is missing a referenced predecessor, a predecessor hash no longer
+matches, the chain forks/resets, a manifest fails verification, or
+`latest_release.json` is stale, the audit exits non-zero and production does
+not persist the new history commit.
+
+For a local checkout with shallow Git history:
+
+```bash
+python -X utf8 scripts/audit_nvl_releases.py runtime-state/nvl/releases --no-git
+```
+
+Make target:
+
+```bash
+make audit-nvl-releases
+make audit-nvl-releases RELEASES_DIR=.runtime-state/nvl/releases NO_GIT=1
+```
+
+A legacy manifest without a `chain` block is reported as
+`legacy_unlinked` with a warning rather than falsely classified as tampered.

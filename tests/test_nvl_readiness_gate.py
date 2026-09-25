@@ -38,16 +38,36 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
         ).read_text(encoding="utf-8")
         publish_index = workflow.find("- name: Generate NVL proposal or controlled publish")
+        refresh_index = workflow.find("- name: Refresh NVL release history")
         manifest_index = workflow.find("- name: Record NVL release manifest")
         history_index = workflow.find("- name: Save NVL release history to runtime-state branch")
-        self.assertGreater(manifest_index, publish_index)
+        self.assertGreater(refresh_index, publish_index)
+        self.assertGreater(manifest_index, refresh_index)
         self.assertGreater(history_index, manifest_index)
         self.assertIn("python -X utf8 -m nvl.release", workflow)
+        self.assertIn(
+            "--previous-manifest .runtime-state/nvl/latest_release.json",
+            workflow,
+        )
         self.assertIn('NVL_REQUIRE_READINESS: "1"', workflow)
         self.assertIn(".runtime-state/nvl/latest_release.json", workflow)
         self.assertIn(".runtime-state/nvl/releases/", workflow)
         self.assertIn("nvl_release_manifest.json", workflow)
         self.assertIn("contents: write", workflow)
+
+    def test_release_history_is_audited_and_indexed_before_push(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("scripts/audit_nvl_releases.py", workflow)
+        self.assertIn(".runtime-state/nvl/release_index.json", workflow)
+        self.assertIn(".runtime-state/nvl/release_index.csv", workflow)
+        audit_index = workflow.find("scripts/audit_nvl_releases.py")
+        commit_index = workflow.find('git commit -m "chore: record NVL release')
+        push_index = workflow.find("git push origin HEAD:runtime-state")
+        self.assertGreater(audit_index, 0)
+        self.assertGreater(commit_index, audit_index)
+        self.assertGreater(push_index, commit_index)
 
     def test_readiness_report_is_uploaded(self):
         workflow = (

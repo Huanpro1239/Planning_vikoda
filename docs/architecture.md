@@ -351,6 +351,13 @@ manifest identity, commit/readiness evidence, input revisions, proposal/final
 workbook hashes and Stock/Open-PO audit consistency; strict mode requires the
 full evidence bundle.
 
+NVL release history is also hash-linked: each new manifest records the previous
+release ID and SHA-256 of the exact predecessor manifest bytes. The ledger audit
+command `scripts/audit_nvl_releases.py` verifies every manifest, continuity,
+fork/gap/reset conditions and the latest pointer, then emits JSON/CSV indexes.
+Production runs this audit before committing release history to
+`runtime-state`.
+
 ## Release manifest and versioning
 
 Successful production publishes create
