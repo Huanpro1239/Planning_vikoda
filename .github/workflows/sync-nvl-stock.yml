@@ -29,7 +29,7 @@ on:
       - nvl_open_po_updated
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -65,9 +65,16 @@ jobs:
       - name: Run NVL production readiness gate
         run: python -X utf8 scripts/nvl_production_readiness.py
 
+      - name: Checkout runtime state
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        uses: actions/checkout@v5
+        with:
+          ref: runtime-state
+          path: .runtime-state
+
       - name: Clean test artifacts from workspace
         run: |
-          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
+          rm -f nvl_stock_proposal.xlsx nvl_stock_report.json nvl_release_manifest.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
 
       - name: Ensure staging copy on SharePoint
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy }}
@@ -98,6 +105,38 @@ jobs:
             python -X utf8 -m nvl.open_po_safe --target-config "$CONFIG_FILE"
           fi
 
+      - name: Record NVL release manifest
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        env:
+          NVL_REQUIRE_READINESS: "1"
+        run: python -X utf8 -m nvl.release
+
+      - name: Save NVL release history to runtime-state branch
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        shell: bash
+        run: |
+          test -f nvl_release_manifest.json
+          RELEASE_ID="$(python -c 'import json; from pathlib import Path; manifest=json.loads(Path("nvl_release_manifest.json").read_text(encoding="utf-8")); release_id=str(manifest.get("release_id") or "").strip(); assert release_id, "release_id missing"; print(release_id)')"
+
+          mkdir -p .runtime-state/nvl/releases
+          cp nvl_release_manifest.json .runtime-state/nvl/latest_release.json
+          cp nvl_release_manifest.json ".runtime-state/nvl/releases/${RELEASE_ID}.json"
+
+          cd .runtime-state
+
+          if [[ -z "$(git status --porcelain -- nvl/latest_release.json nvl/releases)" ]]; then
+            echo "[NVL-RELEASE] Không có thay đổi release history."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add nvl/latest_release.json nvl/releases
+          git commit -m "chore: record NVL release ${RELEASE_ID}"
+          git pull --rebase origin runtime-state
+          git push origin HEAD:runtime-state
+
       - name: Upload NVL proposal and report audit
         if: always()
         uses: actions/upload-artifact@v6
@@ -108,6 +147,7 @@ jobs:
             nvl_stock_report.json
             nvl_open_po_proposal.xlsx
             nvl_open_po_report.json
+            nvl_release_manifest.json
             nvl_production_readiness_report.json
             audit_summary.json
             staging_copy_info.json

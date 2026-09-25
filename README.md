@@ -125,4 +125,5 @@ python -X utf8 -m nvl.stock \
 Workflow riêng `.github/workflows/sync-nvl-stock.yml`:
 - **Tạo Proposal (Mặc định):** `publish = false`. Tải snapshot từ SharePoint, đối soát và sinh artifact `nvl_stock_proposal.xlsx` + `nvl_stock_report.json`.
 - **Duyệt Publish:** `publish = true`. Tải lên file đích trên SharePoint sau khi proposal đã được kiểm tra.
+- **Release traceability:** publish thành công tạo `nvl_release_manifest.json` và lưu immutable history dưới `runtime-state/nvl/releases/`.
 
