@@ -104,6 +104,7 @@ PHASES = (
             "tests.nvl_readiness.test_release_manifest",
             "tests.nvl_readiness.test_release_verification",
             "tests.nvl_readiness.test_release_audit",
+            "tests.nvl_readiness.test_release_recovery",
         ),
     ),
     (
