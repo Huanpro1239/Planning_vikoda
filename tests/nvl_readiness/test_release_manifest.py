@@ -111,6 +111,10 @@ class NVLReleaseManifestTests(unittest.TestCase):
             '"stock-source-etag"',
         )
         self.assertEqual(
+            manifest["input_revision"]["stock_target_etag_after"],
+            '"target-after-stock"',
+        )
+        self.assertEqual(
             manifest["input_revision"]["open_po_source_etag"],
             '"open-po-source-etag"',
         )
@@ -139,6 +143,30 @@ class NVLReleaseManifestTests(unittest.TestCase):
             ]
         )
         self.assertIn("run-12345.2", manifest["release_version"])
+
+    def test_manifest_accepts_published_with_warnings(self):
+        stock_report, open_po_report = self._reports()
+        stock_report["status"] = "published_with_warnings"
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            manifest = build_release_manifest(
+                stock_report,
+                open_po_report,
+                workbook,
+                workbook,
+                environ={
+                    "NVL_REQUIRE_READINESS": "1",
+                    "GITHUB_SHA": "commit-sha",
+                },
+                readiness_path=readiness,
+            )
+
+        self.assertEqual(
+            manifest["publish_evidence"]["stock"]["status"],
+            "published_with_warnings",
+        )
 
     def test_strict_manifest_rejects_readiness_commit_mismatch(self):
         stock_report, open_po_report = self._reports()
