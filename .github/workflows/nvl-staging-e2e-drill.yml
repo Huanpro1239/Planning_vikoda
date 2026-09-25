@@ -45,16 +45,59 @@ jobs:
             --config nvl_stock_staging_config.json \
             --official-config nvl_stock_config.json
 
+      - name: Bind runtime config to actual staging identity
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          base = json.loads(
+              Path("nvl_stock_staging_config.json").read_text(encoding="utf-8")
+          )
+          info = json.loads(
+              Path("staging_copy_info.json").read_text(encoding="utf-8")
+          )
+
+          target = base.setdefault("target", {})
+          expected_name = str(target.get("name") or "")
+          expected_path = str(target.get("sharepoint_path") or "")
+          actual_name = str(info.get("name") or "")
+          actual_path = str(info.get("sharepoint_path") or "")
+          actual_sourcedoc = str(info.get("sourcedoc") or "").strip()
+
+          if actual_name != expected_name:
+              raise SystemExit(
+                  f"Staging name mismatch: expected={expected_name!r} actual={actual_name!r}"
+              )
+          if actual_path != expected_path:
+              raise SystemExit(
+                  f"Staging path mismatch: expected={expected_path!r} actual={actual_path!r}"
+              )
+          if not actual_sourcedoc:
+              raise SystemExit("Staging sourcedoc is empty.")
+
+          target["sourcedoc"] = actual_sourcedoc
+          Path("nvl_stock_staging_runtime.json").write_text(
+              json.dumps(base, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(
+              "[STAGING] Runtime target identity locked to sourcedoc="
+              + actual_sourcedoc
+          )
+          PY
+
       - name: Publish stock D to staging copy
         run: |
           python -X utf8 -m nvl.stock \
-            --config nvl_stock_staging_config.json \
+            --config nvl_stock_staging_runtime.json \
             --publish
 
       - name: Publish Open PO E to staging copy
         run: |
           python -X utf8 -m nvl.open_po_safe \
-            --target-config nvl_stock_staging_config.json \
+            --target-config nvl_stock_staging_runtime.json \
             --publish
 
       - name: Build staging NVL release manifest
@@ -130,6 +173,7 @@ jobs:
           name: nvl-staging-e2e-${{ github.run_id }}
           path: |
             staging_copy_info.json
+            nvl_stock_staging_runtime.json
             nvl_production_readiness_report.json
             nvl_stock_proposal.xlsx
             nvl_stock_report.json
