@@ -80,10 +80,17 @@ Hệ thống theo dõi toàn diện các đầu vào nghiệp vụ qua SHA-256 f
 - **Duyệt Publish:** `publish = true`, kèm `approval_proposal_id` và `approval_reason` nếu proposal ở trạng thái `review_required`.
 
 ### 3. CI Gate
-Tất cả các workflow (gồm cả workflow sync và kiểm thử PR) đều chạy qua cổng kiểm thử bắt buộc trước khi chạm vào SharePoint:
+Planning dùng unified production-readiness gate trước khi publish:
 ```bash
-python -X utf8 -m unittest discover -s tests -v
+python -X utf8 scripts/production_readiness.py
 ```
+
+Workflow NVL dùng gate riêng trước mọi thao tác SharePoint:
+```bash
+python -X utf8 scripts/nvl_production_readiness.py
+```
+
+NVL gate chạy theo thứ tự: architecture → business contracts → workbook round-trip → deterministic proposal → ETag/concurrency → publish dry-run → full regression.
 
 ## Chạy offline (không cần SharePoint)
 
