@@ -351,6 +351,15 @@ manifest identity, commit/readiness evidence, input revisions, proposal/final
 workbook hashes and Stock/Open-PO audit consistency; strict mode requires the
 full evidence bundle.
 
+
+NVL historical recovery is exposed through
+`scripts/restore_nvl_release.py`. Recovery is proposal-first and restores only
+`Ton_NVL!D:E` from a verified historical release. It requires a healthy ledger,
+matching historical artifact hashes and stable target identity/layout; publish
+requires exact release-ID approval plus an unchanged target ETag and performs a
+post-upload integrity check. Recovery does not overwrite the whole historical
+workbook and does not bypass normal release provenance.
+
 NVL release history is also hash-linked: each new manifest records the previous
 release ID and SHA-256 of the exact predecessor manifest bytes. The ledger audit
 command `scripts/audit_nvl_releases.py` verifies every manifest, continuity,
