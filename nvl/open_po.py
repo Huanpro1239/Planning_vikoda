@@ -19,6 +19,7 @@ File đích được patch trực tiếp XML của đúng sheet, không round-tr
 from __future__ import annotations
 
 import argparse
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -502,8 +503,22 @@ def run_online(
 
     Path(proposal_path).write_bytes(patched_bytes)
     report = build_report(config, source_info, changes, expected)
+    report["source"]["revision"] = source_item_before.get("eTag")
+    report["target"]["revision_before"] = target_item_before.get("eTag")
+    report["target"]["sha256_before"] = hashlib.sha256(target_bytes).hexdigest()
+    report["proposal"] = {
+        "sha256": hashlib.sha256(patched_bytes).hexdigest(),
+    }
     report["publish_requested"] = publish
     report["published"] = False
+    report["publish_evidence"] = {
+        "expected_etag": target_item_before.get("eTag"),
+        "upload_skipped": not bool(changes),
+        "upload_etag": None,
+        "target_revision_after": None,
+        "post_upload_verified": False,
+        "server_sha256": None,
+    }
 
     if publish and changes:
         source_pre_upload = _item_metadata(
@@ -542,9 +557,27 @@ def run_online(
         verify_target(server_bytes, expected, config)
         report["published"] = True
         report["upload_name"] = upload_result.get("name", config.target_name)
+        report["target"]["revision_after"] = upload_result.get("eTag")
+        report["publish_evidence"] = {
+            "expected_etag": target_item_before.get("eTag"),
+            "upload_skipped": False,
+            "upload_etag": upload_result.get("eTag"),
+            "target_revision_after": upload_result.get("eTag"),
+            "post_upload_verified": True,
+            "server_sha256": hashlib.sha256(server_bytes).hexdigest(),
+        }
     elif publish:
         report["published"] = True
         report["message"] = "Cột E đã đúng; không cần upload."
+        report["target"]["revision_after"] = target_item_before.get("eTag")
+        report["publish_evidence"] = {
+            "expected_etag": target_item_before.get("eTag"),
+            "upload_skipped": True,
+            "upload_etag": None,
+            "target_revision_after": target_item_before.get("eTag"),
+            "post_upload_verified": True,
+            "server_sha256": hashlib.sha256(target_bytes).hexdigest(),
+        }
 
     Path(report_path).write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
