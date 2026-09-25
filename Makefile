@@ -1,4 +1,4 @@
-.PHONY: install test readiness nvl-readiness verify-release compile clean
+.PHONY: install test readiness nvl-readiness verify-release verify-nvl-release compile clean
 
 PYTHON ?= python3
 
@@ -19,6 +19,10 @@ nvl-readiness:
 verify-release:
 	@test -n "$(MANIFEST)" || (echo "Usage: make verify-release MANIFEST=<manifest.json> [STRICT=1]" && exit 2)
 	$(PYTHON) -X utf8 scripts/verify_release.py "$(MANIFEST)" $(if $(STRICT),--strict,)
+
+verify-nvl-release:
+	@test -n "$(MANIFEST)" || (echo "Usage: make verify-nvl-release MANIFEST=<manifest.json> [STRICT=1]" && exit 2)
+	$(PYTHON) -X utf8 scripts/verify_nvl_release.py "$(MANIFEST)" $(if $(STRICT),--strict,)
 
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:

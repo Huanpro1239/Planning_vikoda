@@ -102,6 +102,7 @@ PHASES = (
             "tests.test_nvl_publish_boundary.NVLPublishBoundaryTests.test_publish_without_changes_skips_upload",
             "tests.nvl_readiness.test_release_safety.NVLReleaseSafetyTests.test_dry_run_produces_auditable_artifacts_without_upload",
             "tests.nvl_readiness.test_release_manifest",
+            "tests.nvl_readiness.test_release_verification",
         ),
     ),
     (

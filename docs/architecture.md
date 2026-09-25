@@ -345,6 +345,12 @@ History is persisted on the state-only `runtime-state` branch under
 `nvl/latest_release.json` and `nvl/releases/<release_id>.json`, separate
 from Planning release history. See `docs/runbooks/nvl-release-manifest.md`.
 
+Historical NVL releases are independently re-verifiable with
+`python -X utf8 scripts/verify_nvl_release.py <manifest>`. The verifier checks
+manifest identity, commit/readiness evidence, input revisions, proposal/final
+workbook hashes and Stock/Open-PO audit consistency; strict mode requires the
+full evidence bundle.
+
 ## Release manifest and versioning
 
 Successful production publishes create
