@@ -19,6 +19,7 @@ from nvl.release import (
     write_release_manifest as write_nvl_manifest,
 )
 from ops.release_overview import build_release_overview
+from planning.publish.proposal import with_proposal_identity
 from planning.publish.release import (
     build_release_manifest as build_planning_manifest,
     write_release_manifest as write_planning_manifest,
@@ -75,13 +76,15 @@ class ReleaseOverviewTests(unittest.TestCase):
             "production_readiness_v1",
         )
         proposal = workbook_bytes(10)
-        report = {
-            "proposal_id": f"proposal-{run_id}",
-            "plan_month": "2026-09",
-            "algorithm": "weekly",
-            "input_revision": {"source": f"rev-{run_id}"},
-            "pipeline": {"engine_version": "engine-v1"},
-        }
+        report = with_proposal_identity(
+            {
+                "plan_month": "2026-09",
+                "algorithm": "weekly",
+                "input_revision": {"source": f"rev-{run_id}"},
+                "pipeline": {"engine_version": "engine-v1"},
+            },
+            proposal,
+        )
         decision = {
             "state": "published",
             "reason": "test",
