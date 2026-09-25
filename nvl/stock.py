@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import sys
 
-from excel.openpyxl_io import safe_close_workbook as _safe_close_workbook
 from nvl.config import DEFAULT_CONFIG_FILE, load_nvl_config
 from nvl.models import NVLConfig, NVLReconcileResult
 from nvl.reconcile import (
@@ -111,13 +110,7 @@ __all__ = [
     "load_nvl_config",
     "normalize_nvl_code",
     "parse_nvl_quantity",
-    "check_target_sheet_safety",
-    "read_nvl_source_stock",
-    "reconcile_nvl_target",
     "patch_nvl_destination_workbook",
-    "identify_sharepoint_metadata_exemption",
-    "verify_nvl_patched_workbook",
-    "generate_nvl_report",
-    "generate_nvl_error_report",
     "run_nvl_sync",
+    "verify_nvl_patched_workbook",
 ]
