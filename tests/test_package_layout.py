@@ -57,6 +57,7 @@ class PackageLayoutTests(unittest.TestCase):
             },
         )
         self.assertTrue(callable(stock.run_nvl_sync))
+        self.assertTrue(callable(stock.main))
         self.assertEqual(
             set(open_po.__all__),
             {
