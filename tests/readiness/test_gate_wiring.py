@@ -31,6 +31,17 @@ class ReleaseGateWiringTests(unittest.TestCase):
         self.assertGreaterEqual(gate_index, 0)
         self.assertGreater(publish_index, gate_index)
 
+    def test_runtime_state_checkout_happens_after_readiness_gate(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-stock.yml"
+        ).read_text(encoding="utf-8")
+        gate_index = workflow.find("- name: Run production readiness gate")
+        runtime_checkout_index = workflow.find("- name: Checkout runtime state")
+        restore_index = workflow.find("- name: Restore production runtime state")
+        self.assertGreaterEqual(gate_index, 0)
+        self.assertGreater(runtime_checkout_index, gate_index)
+        self.assertGreater(restore_index, runtime_checkout_index)
+
     def test_production_gate_cannot_be_conditionally_skipped(self):
         workflow = (
             ROOT / ".github" / "workflows" / "sync-stock.yml"

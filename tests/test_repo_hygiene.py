@@ -8,6 +8,15 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _repo_python_files():
+    """Return repository Python files, excluding external checkout worktrees."""
+    return sorted(
+        path
+        for path in ROOT.rglob("*.py")
+        if ".runtime-state" not in path.relative_to(ROOT).parts
+    )
+
+
 class RepoHygieneTests(unittest.TestCase):
     def test_graph_retry_lives_under_sharepoint_package(self):
         self.assertFalse((ROOT / "graph_retry.py").exists())
@@ -118,7 +127,7 @@ class RepoHygieneTests(unittest.TestCase):
             "is_retryable_graph_error",
         }
         offenders = []
-        for path in sorted(ROOT.rglob("*.py")):
+        for path in _repo_python_files():
             if path.name == "sync_stock.py":
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -174,7 +183,7 @@ class RepoHygieneTests(unittest.TestCase):
         }
         shim_paths = set()
         offenders = []
-        for path in sorted(ROOT.rglob("*.py")):
+        for path in _repo_python_files():
             if path in shim_paths:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -230,7 +239,7 @@ class RepoHygieneTests(unittest.TestCase):
 
     def test_planning_metrics_has_no_runtime_monkey_patching(self):
         offenders = []
-        for path in sorted(ROOT.rglob("*.py")):
+        for path in _repo_python_files():
             if path == ROOT / "tests" / "test_repo_hygiene.py":
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -327,7 +336,7 @@ class RepoHygieneTests(unittest.TestCase):
 
     def test_finished_goods_runtime_has_no_direct_sync_stock_import(self):
         offenders = []
-        for path in sorted(ROOT.rglob("*.py")):
+        for path in _repo_python_files():
             if path == ROOT / "sync_stock.py":
                 continue
             if "tests" in path.parts:
@@ -441,7 +450,7 @@ class RepoHygieneTests(unittest.TestCase):
             ("calendar_sync", "prepare_calendar_update"),
         }
         offenders = []
-        for path in sorted(ROOT.rglob("*.py")):
+        for path in _repo_python_files():
             if "tests" in path.parts:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
