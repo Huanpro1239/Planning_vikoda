@@ -10,7 +10,7 @@ class OIDCWorkflowContractTests(unittest.TestCase):
         text = self._read("sync-stock.yml")
         self.assertIn("id-token: write", text)
         self.assertIn("MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}", text)
-        self.assertIn("python -X utf8 sync_planning_pipeline.py", text)
+        self.assertIn("python -X utf8 -m planning.publish", text)
         self.assertNotIn("auth_runner.py", text)
         self.assertNotIn("MS_CLIENT_SECRET", text)
 

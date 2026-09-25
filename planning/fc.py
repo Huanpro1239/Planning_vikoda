@@ -515,3 +515,5 @@ def main():
         result.get("name", "Sắp kế hoạch.xlsx"),
     )
 
+if __name__ == "__main__":
+    main()
