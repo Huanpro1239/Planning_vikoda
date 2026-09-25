@@ -1,4 +1,4 @@
-"""Unit tests for sync_nvl_stock module."""
+"""Unit tests for canonical nvl.stock module."""
 
 from io import BytesIO
 import json
@@ -10,7 +10,7 @@ import zipfile
 from lxml import etree
 from openpyxl import Workbook, load_workbook
 
-from sync_nvl_stock import (
+from nvl.stock import (
     NVLConfig,
     normalize_nvl_code,
     parse_nvl_quantity,
@@ -797,7 +797,7 @@ class SyncNVLStockTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_args = [
-                "sync_nvl_stock.py",
+                "nvl.stock",
                 "--source-file", "nonexistent_source.xlsx",
                 "--target-file", "nonexistent_target.xlsx",
                 "--out", tmpdir,
@@ -821,7 +821,7 @@ class SyncNVLStockTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_args = [
-                "sync_nvl_stock.py",
+                "nvl.stock",
                 "--config", "nonexistent_config.json",
                 "--out", tmpdir,
             ]
