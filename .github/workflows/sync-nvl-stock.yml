@@ -105,11 +105,17 @@ jobs:
             python -X utf8 -m nvl.open_po_safe --target-config "$CONFIG_FILE"
           fi
 
+      - name: Refresh NVL release history
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        run: git -C .runtime-state pull --rebase origin runtime-state
+
       - name: Record NVL release manifest
         if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         env:
           NVL_REQUIRE_READINESS: "1"
-        run: python -X utf8 -m nvl.release
+        run: |
+          python -X utf8 -m nvl.release \
+            --previous-manifest .runtime-state/nvl/latest_release.json
 
       - name: Save NVL release history to runtime-state branch
         if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
@@ -122,9 +128,16 @@ jobs:
           cp nvl_release_manifest.json .runtime-state/nvl/latest_release.json
           cp nvl_release_manifest.json ".runtime-state/nvl/releases/${RELEASE_ID}.json"
 
+          python -X utf8 scripts/audit_nvl_releases.py \
+            .runtime-state/nvl/releases \
+            --latest .runtime-state/nvl/latest_release.json \
+            --out-json .runtime-state/nvl/release_index.json \
+            --out-csv .runtime-state/nvl/release_index.csv \
+            --no-git
+
           cd .runtime-state
 
-          if [[ -z "$(git status --porcelain -- nvl/latest_release.json nvl/releases)" ]]; then
+          if [[ -z "$(git status --porcelain -- nvl/latest_release.json nvl/releases nvl/release_index.json nvl/release_index.csv)" ]]; then
             echo "[NVL-RELEASE] Không có thay đổi release history."
             exit 0
           fi
@@ -132,7 +145,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add nvl/latest_release.json nvl/releases
+          git add nvl/latest_release.json nvl/releases nvl/release_index.json nvl/release_index.csv
           git commit -m "chore: record NVL release ${RELEASE_ID}"
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state
@@ -149,6 +162,8 @@ jobs:
             nvl_open_po_report.json
             nvl_release_manifest.json
             nvl_production_readiness_report.json
+            .runtime-state/nvl/release_index.json
+            .runtime-state/nvl/release_index.csv
             audit_summary.json
             staging_copy_info.json
             official_backup_*
