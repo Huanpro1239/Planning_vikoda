@@ -215,8 +215,9 @@ def build_release_manifest(
             ),
             "open_po_source_etag": open_source.get("revision"),
             "open_po_target_etag_before": open_target.get("revision_before"),
-            "open_po_target_etag_after": open_evidence.get(
-                "target_revision_after"
+            "open_po_target_etag_after": (
+                open_evidence.get("target_revision_after")
+                or open_target.get("revision_after")
             ),
         },
         "artifacts": {
@@ -230,8 +231,12 @@ def build_release_manifest(
             },
         },
         "published_workbook": {
-            "sha256": final_raw,
+            "sha256": open_evidence.get("server_sha256") or final_raw,
+            "proposal_sha256": final_raw,
             "stable_sha256": final_stable,
+            "post_upload_verified": open_evidence.get(
+                "post_upload_verified"
+            ),
         },
         "publish_evidence": {
             "stock": {
