@@ -69,6 +69,19 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
         self.assertGreater(commit_index, audit_index)
         self.assertGreater(push_index, commit_index)
 
+    def test_workflow_always_emits_operational_summary_before_artifact_upload(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        summary_index = workflow.find("- name: Write NVL operational summary")
+        upload_index = workflow.find("- name: Upload NVL proposal and report audit")
+        self.assertGreaterEqual(summary_index, 0)
+        self.assertGreater(upload_index, summary_index)
+        self.assertIn("if: always()", workflow[summary_index:upload_index])
+        self.assertIn("python -X utf8 scripts/summarize_nvl_run.py", workflow)
+        self.assertIn("JOB_STATUS: ${{ job.status }}", workflow)
+        self.assertIn("nvl_operational_summary.json", workflow)
+
     def test_readiness_report_is_uploaded(self):
         workflow = (
             ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
