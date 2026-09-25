@@ -397,3 +397,12 @@ boundary. Verification recomputes proposal artifact hashes/identity when the
 workbook is available, checks readiness evidence and audit consistency, and can
 require the recorded commit to exist in local Git history. Tamper detection is
 part of the production-readiness release-safety suite.
+
+## Cross-domain release overview
+
+A read-only outer operations layer lives under `ops/`. The command
+`scripts/release_overview.py` reads the state-only `runtime-state` checkout,
+uses the canonical Planning verifier and NVL ledger auditor, and emits a unified
+JSON/CSV/Markdown release history. It never participates in publish execution
+and is deliberately not persisted by either production workflow, avoiding a
+cross-domain write race between Planning and NVL.
