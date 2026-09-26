@@ -261,12 +261,19 @@ class PairedRunHealthTests(unittest.TestCase):
             release_dir = runtime / "nvl" / "releases"
             release_dir.mkdir(parents=True)
 
+            planning_fixture = planning_run()
+            planning_fixture["created_at"] = "2026-09-26T01:31:00Z"
+            planning_fixture["updated_at"] = "2026-09-26T01:32:00Z"
+            nvl_fixture = nvl_run()
+            nvl_fixture["created_at"] = "2026-09-26T01:33:00Z"
+            nvl_fixture["updated_at"] = "2026-09-26T01:36:00Z"
+
             planning_path.write_text(
-                json.dumps([planning_run()]),
+                json.dumps([planning_fixture]),
                 encoding="utf-8",
             )
             nvl_path.write_text(
-                json.dumps([nvl_run()]),
+                json.dumps([nvl_fixture]),
                 encoding="utf-8",
             )
             (release_dir / "nvl-release-1.json").write_text(
@@ -303,7 +310,7 @@ class PairedRunHealthTests(unittest.TestCase):
                     "--nvl-runs-file",
                     str(nvl_path),
                     "--enforce-after",
-                    CUTOFF,
+                    "2026-09-26T00:00:00Z",
                     "--grace-minutes",
                     "0",
                     "--out-json",
