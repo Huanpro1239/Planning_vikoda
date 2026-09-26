@@ -241,6 +241,29 @@ class NVLReleaseManifestTests(unittest.TestCase):
                     readiness_path=readiness,
                 )
 
+    def test_workflow_run_release_requires_paired_provenance(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "workflow_run production",
+            ):
+                build_release_manifest(
+                    stock_report,
+                    open_po_report,
+                    workbook,
+                    workbook,
+                    environ={
+                        "NVL_REQUIRE_READINESS": "1",
+                        "NVL_RELEASE_COMMIT_SHA": "commit-sha",
+                        "GITHUB_EVENT_NAME": "workflow_run",
+                    },
+                    readiness_path=readiness,
+                )
+
     def test_first_release_is_chain_anchor(self):
         stock_report, open_po_report = self._reports()
         workbook = make_mock_target_bytes([("VT001", 100)])
