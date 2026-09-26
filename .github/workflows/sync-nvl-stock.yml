@@ -1,10 +1,11 @@
 name: Sync SharePoint NVL Stock
 
 on:
-  schedule:
-    # 06:15 AM VN (UTC+7) = 23:15 UTC ngày trước.
-    # Chạy sau workflow Planning 15 phút để giảm tải đồng thời lên Microsoft Graph.
-    - cron: "15 23 * * *"
+  workflow_run:
+    workflows:
+      - Sync SharePoint Stock
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       publish:
@@ -38,6 +39,17 @@ concurrency:
 
 jobs:
   sync:
+    if: >-
+      ${{
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          (
+            github.event.workflow_run.event == 'schedule' ||
+            github.event.workflow_run.event == 'repository_dispatch'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -49,6 +61,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -66,7 +80,7 @@ jobs:
         run: python -X utf8 scripts/nvl_production_readiness.py
 
       - name: Checkout runtime state
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         uses: actions/checkout@v5
         with:
           ref: runtime-state
@@ -87,14 +101,17 @@ jobs:
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) }}
         shell: bash
         env:
-          # Schedule/repository_dispatch là luồng tự động production; workflow_dispatch
-          # vẫn mặc định proposal-only trừ khi người dùng bật publish=true.
-          REQUEST_PUBLISH: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
+          # workflow_run chỉ được job-level guard cho phép khi Planning schedule/
+          # repository_dispatch đã PASS; repository_dispatch là production tự động.
+          # workflow_dispatch vẫn mặc định proposal-only trừ khi người dùng bật publish=true.
+          REQUEST_PUBLISH: ${{ (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
           CONFIG_FILE: ${{ (github.event_name == 'workflow_dispatch' && inputs.config_file) || 'nvl_stock_config.json' }}
           TRIGGER_EVENT: ${{ github.event_name }}
           TRIGGER_ACTION: ${{ github.event.action }}
+          UPSTREAM_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}
+          UPSTREAM_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
         run: |
-          echo "[NVL] trigger event=$TRIGGER_EVENT action=$TRIGGER_ACTION publish=$REQUEST_PUBLISH config=$CONFIG_FILE"
+          echo "[NVL] trigger event=$TRIGGER_EVENT action=$TRIGGER_ACTION upstream_event=$UPSTREAM_EVENT upstream_run_id=$UPSTREAM_RUN_ID publish=$REQUEST_PUBLISH config=$CONFIG_FILE"
           echo "[AUTH] Microsoft Graph auth mode: $MS_AUTH_MODE"
 
           if [[ "$REQUEST_PUBLISH" == "true" ]]; then
@@ -106,11 +123,11 @@ jobs:
           fi
 
       - name: Refresh NVL release history
-        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         run: git -C .runtime-state pull --rebase origin runtime-state
 
       - name: Record NVL release manifest
-        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         env:
           NVL_REQUIRE_READINESS: "1"
         run: |
@@ -118,7 +135,7 @@ jobs:
             --previous-manifest .runtime-state/nvl/latest_release.json
 
       - name: Save NVL release history to runtime-state branch
-        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) && (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
         shell: bash
         run: |
           test -f nvl_release_manifest.json
