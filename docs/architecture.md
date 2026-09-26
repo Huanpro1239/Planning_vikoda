@@ -321,6 +321,22 @@ Planning workflow invoke this exact command. See
 `docs/runbooks/production-readiness.md`.
 
 
+## NVL production orchestration
+
+Automatic NVL production no longer relies on an independent delayed cron. The
+`Sync SharePoint NVL Stock` workflow listens to `workflow_run` completion of
+`Sync SharePoint Stock` and starts only when the upstream Planning run
+succeeded and its original event was `schedule` or `repository_dispatch`.
+This makes NVL sequencing deterministic: Planning finishes first, then NVL
+starts, so the two SharePoint writers do not overlap.
+
+The NVL checkout is pinned to the upstream Planning `head_sha`, preserving
+commit-level provenance across the paired production runs. A manual Planning
+`workflow_dispatch` does not automatically publish NVL because the upstream
+payload does not expose the Planning publish input safely. Manual NVL
+`workflow_dispatch` remains available and is proposal-only unless
+`publish=true`.
+
 ## NVL production readiness gate
 
 NVL production quality is enforced by one executable command:
