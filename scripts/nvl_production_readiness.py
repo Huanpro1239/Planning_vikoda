@@ -36,6 +36,7 @@ PHASES = (
             "tests.test_package_layout",
             "tests.test_repo_hygiene",
             "tests.test_nvl_workflow_contract",
+            "tests.test_paired_run_health.PairedRunHealthWorkflowTests",
             "tests.test_oidc_workflow_contract.OIDCWorkflowContractTests.test_nvl_workflow_is_oidc_only",
         ),
     ),
@@ -106,6 +107,7 @@ PHASES = (
             "tests.nvl_readiness.test_release_audit",
             "tests.nvl_readiness.test_release_recovery",
             "tests.nvl_readiness.test_operational_summary",
+            "tests.test_paired_run_health.PairedRunHealthTests",
         ),
     ),
     (
