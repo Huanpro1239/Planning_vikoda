@@ -166,6 +166,13 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn(REPORT_NAME, workflow)
 
+    def test_readiness_uses_checked_out_release_sha_for_provenance(self):
+        gate = (
+            ROOT / "scripts" / "nvl_production_readiness.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('os.getenv("NVL_RELEASE_COMMIT_SHA")', gate)
+        self.assertIn('or os.getenv("GITHUB_SHA")', gate)
+
     def test_gate_declares_all_required_phases_in_order(self):
         gate = (
             ROOT / "scripts" / "nvl_production_readiness.py"
