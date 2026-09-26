@@ -122,6 +122,19 @@ class PairedRunHealthTests(unittest.TestCase):
         }
         self.assertIn("missing_nvl", codes)
 
+    def test_ledger_only_pair_is_accepted_during_cutover(self):
+        health = self._evaluate(
+            nvl=[],
+            releases=[release_pair()],
+        )
+        self.assertEqual(health["status"], "passed")
+        codes = {
+            issue["code"]
+            for issue in health["pairs"][0]["issues"]
+        }
+        self.assertIn("actions_pair_evidence_missing", codes)
+        self.assertNotIn("missing_nvl", codes)
+
     def test_duplicate_nvl_is_detected(self):
         health = self._evaluate(
             nvl=[
