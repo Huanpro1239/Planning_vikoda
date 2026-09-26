@@ -12,10 +12,16 @@ from sharepoint.client import GraphRequestError
 
 class PublishBoundaryTests(unittest.TestCase):
     class FakeGraph:
-        def __init__(self, *, first_upload_412=False):
+        def __init__(
+            self,
+            *,
+            first_upload_412=False,
+            upload_statuses=None,
+        ):
             self.uploads = []
             self.attempt = 0
             self.first_upload_412 = first_upload_412
+            self.upload_statuses = list(upload_statuses or [])
 
         def get_item_by_path(self, drive_id, path):
             if path == stock.DEST_PATH:
@@ -39,6 +45,21 @@ class PublishBoundaryTests(unittest.TestCase):
 
         def upload_file(self, drive_id, item_id, content, expected_etag):
             self.uploads.append((item_id, content, expected_etag))
+            upload_index = len(self.uploads) - 1
+            if upload_index < len(self.upload_statuses):
+                status = self.upload_statuses[upload_index]
+                if status == 423:
+                    raise GraphRequestError(
+                        "resource locked",
+                        status_code=423,
+                        error_code="resourceLocked",
+                    )
+                if status == 412:
+                    raise GraphRequestError(
+                        "precondition failed",
+                        status_code=412,
+                        error_code="preconditionFailed",
+                    )
             if self.first_upload_412 and len(self.uploads) == 1:
                 raise GraphRequestError(
                     "precondition failed",
@@ -103,6 +124,8 @@ class PublishBoundaryTests(unittest.TestCase):
         graph=None,
         max_attempts=2,
         retry_delay_seconds=3,
+        lock_upload_attempts=4,
+        lock_retry_delay_seconds=5,
         monthly_ok=True,
         resource_ok=True,
     ):
@@ -130,6 +153,8 @@ class PublishBoundaryTests(unittest.TestCase):
             "sleep_func": sleeps.append,
             "max_attempts": max_attempts,
             "retry_delay_seconds": retry_delay_seconds,
+            "lock_upload_attempts": lock_upload_attempts,
+            "lock_retry_delay_seconds": lock_retry_delay_seconds,
         }
         if not use_default_mode:
             call_kwargs["publish_mode"] = publish_mode
@@ -326,6 +351,77 @@ class PublishBoundaryTests(unittest.TestCase):
             proposals[-1][1]["publish_decision"]["basis"],
             "non_waivable_validation",
         )
+
+    def test_423_retries_exact_snapshot_and_etag_until_success(self):
+        graph = self.FakeGraph(upload_statuses=[423, 423])
+
+        result, graph, states, decisions, _, sleeps = self._run(
+            status="ready_for_publish",
+            publish_mode="publish",
+            graph=graph,
+            max_attempts=2,
+            lock_upload_attempts=4,
+            lock_retry_delay_seconds=5,
+        )
+
+        self.assertTrue(result["uploaded"])
+        self.assertEqual(len(graph.uploads), 3)
+        self.assertEqual(
+            [upload[2] for upload in graph.uploads],
+            ["target-etag-r1"] * 3,
+        )
+        self.assertEqual(graph.attempt, 1)
+        self.assertEqual(sleeps, [5, 10])
+        self.assertEqual(len(states), 1)
+        self.assertEqual(len(decisions), 1)
+
+    def test_423_then_412_recomputes_full_snapshot(self):
+        graph = self.FakeGraph(upload_statuses=[423, 412])
+
+        result, graph, states, decisions, _, sleeps = self._run(
+            status="ready_for_publish",
+            publish_mode="publish",
+            graph=graph,
+            max_attempts=2,
+            retry_delay_seconds=3,
+            lock_upload_attempts=4,
+            lock_retry_delay_seconds=5,
+        )
+
+        self.assertTrue(result["uploaded"])
+        self.assertEqual(len(graph.uploads), 3)
+        self.assertEqual(graph.uploads[0][2], "target-etag-r1")
+        self.assertEqual(graph.uploads[1][2], "target-etag-r1")
+        self.assertEqual(graph.uploads[2][2], "target-etag-r2")
+        self.assertEqual(graph.attempt, 2)
+        self.assertEqual(sleeps, [5, 3])
+        self.assertEqual(len(states), 1)
+        self.assertEqual(len(decisions), 1)
+
+    def test_423_exhaustion_fails_without_full_pipeline_recompute(self):
+        graph = self.FakeGraph(upload_statuses=[423, 423, 423])
+
+        with self.assertRaises(GraphRequestError) as ctx:
+            self._run(
+                status="ready_for_publish",
+                publish_mode="publish",
+                graph=graph,
+                max_attempts=6,
+                retry_delay_seconds=3,
+                lock_upload_attempts=3,
+                lock_retry_delay_seconds=5,
+            )
+
+        self.assertEqual(ctx.exception.status_code, 423)
+        self.assertTrue(
+            getattr(
+                ctx.exception,
+                "planning_lock_retries_exhausted",
+                False,
+            )
+        )
+        self.assertEqual(len(graph.uploads), 3)
+        self.assertEqual(graph.attempt, 1)
 
     def test_412_recompute_invalidates_review_approval_for_old_snapshot(self):
         proposal_id = self._expected_proposal_id()
