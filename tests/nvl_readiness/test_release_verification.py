@@ -121,6 +121,11 @@ class NVLReleaseVerificationTests(unittest.TestCase):
                 "GITHUB_RUN_ATTEMPT": "1",
                 "GITHUB_WORKFLOW": "Sync SharePoint NVL Stock",
                 "GITHUB_ACTOR": "tester",
+                "NVL_RELEASE_COMMIT_SHA": "deadbeef",
+                "NVL_UPSTREAM_PLANNING_WORKFLOW": "Sync SharePoint Stock",
+                "NVL_UPSTREAM_PLANNING_RUN_ID": "777",
+                "NVL_UPSTREAM_PLANNING_HEAD_SHA": "deadbeef",
+                "NVL_UPSTREAM_PLANNING_EVENT": "schedule",
             },
             readiness_path=readiness,
         )
@@ -151,9 +156,39 @@ class NVLReleaseVerificationTests(unittest.TestCase):
         self.assertTrue(result["strict"])
         self.assertEqual(result["warnings"], [])
         self.assertEqual(result["commit_sha"], "deadbeef")
+        self.assertEqual(
+            result["upstream_planning"]["run_id"],
+            "777",
+        )
+        self.assertEqual(
+            result["upstream_planning"]["head_sha"],
+            "deadbeef",
+        )
         self.assertTrue(
             result["release_id"].startswith("nvl-")
         )
+
+    def test_tampered_upstream_planning_head_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = self._bundle(Path(tmpdir))
+            manifest = json.loads(
+                paths["manifest"].read_text(encoding="utf-8")
+            )
+            manifest["upstream_planning"]["head_sha"] = "tampered-sha"
+            paths["manifest"].write_text(
+                json.dumps(manifest, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                NVLReleaseVerificationError,
+                "upstream_planning_head_matches_commit",
+            ):
+                verify_nvl_release(
+                    paths["manifest"],
+                    strict=True,
+                    verify_commit=False,
+                )
 
     def test_tampered_stock_proposal_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
