@@ -139,10 +139,38 @@ def build_release_manifest(
     )
 
     commit_sha = (
-        str(env.get("GITHUB_SHA") or "").strip()
+        str(env.get("NVL_RELEASE_COMMIT_SHA") or "").strip()
+        or str(env.get("GITHUB_SHA") or "").strip()
         or str(readiness.get("git_sha") or "").strip()
     )
     readiness_sha = str(readiness.get("git_sha") or "").strip()
+
+    upstream_run_id = str(
+        env.get("NVL_UPSTREAM_PLANNING_RUN_ID") or ""
+    ).strip()
+    upstream_head_sha = str(
+        env.get("NVL_UPSTREAM_PLANNING_HEAD_SHA") or ""
+    ).strip()
+    upstream_event = str(
+        env.get("NVL_UPSTREAM_PLANNING_EVENT") or ""
+    ).strip()
+    upstream_workflow = str(
+        env.get("NVL_UPSTREAM_PLANNING_WORKFLOW") or ""
+    ).strip()
+
+    upstream_present = any(
+        (upstream_run_id, upstream_head_sha, upstream_event)
+    )
+    if upstream_present and not all(
+        (upstream_run_id, upstream_head_sha, upstream_event)
+    ):
+        raise RuntimeError(
+            "Paired-run provenance thiếu Planning run_id/head_sha/event."
+        )
+    if strict and upstream_present and upstream_head_sha != commit_sha:
+        raise RuntimeError(
+            "Planning upstream head_sha không khớp NVL release commit SHA."
+        )
 
     if strict and not commit_sha:
         raise RuntimeError(
@@ -204,6 +232,12 @@ def build_release_manifest(
         "chain": {
             "previous_release_id": previous_release_id,
             "previous_manifest_sha256": previous_hash,
+        },
+        "upstream_planning": {
+            "workflow": upstream_workflow or None,
+            "run_id": upstream_run_id or None,
+            "head_sha": upstream_head_sha or None,
+            "event": upstream_event or None,
         },
         "commit": {
             "sha": commit_sha or None,
