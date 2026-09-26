@@ -218,14 +218,24 @@ def evaluate_paired_run_health(
             "issues": [],
         }
 
-        if not downstream:
+        if not downstream and not releases:
             _issue(
                 row,
                 "missing_nvl",
                 (
                     f"Planning run {plan_id} thành công nhưng không tìm thấy "
-                    "NVL downstream workflow_run."
+                    "NVL downstream workflow_run hoặc paired release."
                 ),
+            )
+        elif not downstream and len(releases) == 1:
+            _issue(
+                row,
+                "actions_pair_evidence_missing",
+                (
+                    f"Planning run {plan_id} có paired release "
+                    "nhưng Actions run-name cũ không mang pair identity."
+                ),
+                severity="warning",
             )
         elif len(downstream) > 1:
             _issue(
