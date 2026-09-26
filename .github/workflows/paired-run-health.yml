@@ -1,0 +1,83 @@
+name: Planning NVL Paired-Run Health
+
+on:
+  workflow_run:
+    workflows:
+      - Sync SharePoint NVL Stock
+    types:
+      - completed
+  schedule:
+    # 06:45 AM VN (UTC+7) = 23:45 UTC ngày trước.
+    - cron: "45 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: planning-nvl-paired-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Checkout runtime state
+        uses: actions/checkout@v5
+        with:
+          ref: runtime-state
+          path: .runtime-state
+
+      - name: Check Planning to NVL paired-run health
+        id: paired_health
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -X utf8 scripts/check_paired_runs.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --runtime-state .runtime-state \
+            --lookback-hours 168 \
+            --grace-minutes 20 \
+            --enforce-after "2026-09-26T03:30:00Z" \
+            --out-json paired_run_health.json \
+            --out-csv paired_run_health.csv \
+            --out-md paired_run_health.md
+
+      - name: Upload paired-run health evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: paired-run-health-${{ github.run_id }}
+          path: |
+            paired_run_health.json
+            paired_run_health.csv
+            paired_run_health.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail when paired-run health is unhealthy
+        if: ${{ steps.paired_health.outcome == 'failure' }}
+        run: |
+          echo "[PAIRED-HEALTH] Planning -> NVL pairing is unhealthy."
+          exit 1

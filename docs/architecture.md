@@ -429,3 +429,16 @@ uses the canonical Planning verifier and NVL ledger auditor, and emits a unified
 JSON/CSV/Markdown release history. It never participates in publish execution
 and is deliberately not persisted by either production workflow, avoiding a
 cross-domain write race between Planning and NVL.
+
+## Planning → NVL paired-run health
+
+The outer operations layer also owns a read-only paired-run monitor. Automatic
+NVL runs encode their upstream Planning run ID, head SHA and trigger event in
+the GitHub Actions `run-name`. `scripts/check_paired_runs.py` combines
+Actions runtime evidence with immutable NVL release provenance and requires a
+1:1 mapping for successful Planning production runs.
+
+The monitor detects missing/duplicate NVL downstream runs, failed downstream
+runs, SHA/event mismatches and missing/duplicate release provenance. It runs
+after NVL workflow completion and on a daily safety-net schedule, with read-only
+GitHub permissions. It never participates in either publish path.

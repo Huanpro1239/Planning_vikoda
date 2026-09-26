@@ -1,4 +1,4 @@
-.PHONY: install test readiness nvl-readiness verify-release verify-nvl-release audit-nvl-releases restore-nvl-release nvl-ops-summary compile clean
+.PHONY: install test readiness nvl-readiness verify-release verify-nvl-release audit-nvl-releases release-overview restore-nvl-release nvl-ops-summary paired-run-health compile clean
 
 PYTHON ?= python3
 
@@ -38,6 +38,9 @@ restore-nvl-release:
 nvl-ops-summary:
 	$(PYTHON) -X utf8 scripts/summarize_nvl_run.py
 
+paired-run-health:
+	$(PYTHON) -X utf8 scripts/check_paired_runs.py --runtime-state $(if $(RUNTIME_STATE),"$(RUNTIME_STATE)",.runtime-state) --enforce-after $(if $(ENFORCE_AFTER),"$(ENFORCE_AFTER)",2026-09-26T03:30:00Z) $(if $(LOOKBACK_HOURS),--lookback-hours $(LOOKBACK_HOURS),) $(if $(GRACE_MINUTES),--grace-minutes $(GRACE_MINUTES),)
+
 # Kiểm tra biên dịch mọi module (bắt lỗi cú pháp nhanh).
 compile:
 	$(PYTHON) -m compileall -q .
@@ -46,5 +49,5 @@ clean:
 	rm -rf __pycache__ tests/__pycache__ .mypy_cache .pytest_cache
 	rm -f planning_proposal.xlsx planning_schedule_report.json \
 	      planning_input_revision.json planning_publish_decision.json \
-	      production_readiness_report.json nvl_production_readiness_report.json planning_release_manifest.json nvl_release_manifest.json nvl_release_index.json nvl_release_index.csv nvl_recovery_report.json nvl_recovery_proposal.xlsx nvl_recovery_current_backup.xlsx
+	      production_readiness_report.json nvl_production_readiness_report.json planning_release_manifest.json nvl_release_manifest.json nvl_release_index.json nvl_release_index.csv nvl_recovery_report.json nvl_recovery_proposal.xlsx nvl_recovery_current_backup.xlsx paired_run_health.json paired_run_health.csv paired_run_health.md
 	rm -rf offline_out dry_run_artifacts

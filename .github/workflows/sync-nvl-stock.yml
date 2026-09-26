@@ -1,4 +1,5 @@
 name: Sync SharePoint NVL Stock
+run-name: ${{ github.event_name == 'workflow_run' && format('NVL paired planning={0} sha={1} event={2}', github.event.workflow_run.id, github.event.workflow_run.head_sha, github.event.workflow_run.event) || format('NVL direct event={0} sha={1}', github.event_name, github.sha) }}
 
 on:
   workflow_run:
