@@ -33,6 +33,59 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
         self.assertGreater(staging_index, gate_index)
         self.assertGreater(publish_index, gate_index)
 
+    def test_nvl_automatic_trigger_follows_successful_planning_run(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("workflow_run:", workflow)
+        self.assertIn("- Sync SharePoint Stock", workflow)
+        self.assertIn("- completed", workflow)
+        self.assertNotIn('cron: "15 23 * * *"', workflow)
+        self.assertIn(
+            "github.event.workflow_run.conclusion == 'success'",
+            workflow,
+        )
+        self.assertIn(
+            "github.event.workflow_run.event == 'schedule'",
+            workflow,
+        )
+        self.assertIn(
+            "github.event.workflow_run.event == 'repository_dispatch'",
+            workflow,
+        )
+        self.assertIn(
+            "github.event.workflow_run.head_sha || github.sha",
+            workflow,
+        )
+
+    def test_manual_planning_run_does_not_auto_publish_nvl(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        guard = workflow[
+            workflow.find("jobs:"):
+            workflow.find("runs-on: ubuntu-latest")
+        ]
+        self.assertNotIn(
+            "github.event.workflow_run.event == 'workflow_dispatch'",
+            guard,
+        )
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && inputs.publish",
+            workflow,
+        )
+
+    def test_workflow_run_is_treated_as_authorized_production_trigger(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            workflow.count("github.event_name == 'workflow_run'"),
+            5,
+        )
+        self.assertIn("UPSTREAM_RUN_ID:", workflow)
+        self.assertIn("UPSTREAM_EVENT:", workflow)
+
     def test_release_manifest_is_recorded_after_publish_and_persisted_state_only(self):
         workflow = (
             ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
