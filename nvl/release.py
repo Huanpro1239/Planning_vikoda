@@ -159,13 +159,23 @@ def build_release_manifest(
     ).strip()
 
     upstream_present = any(
-        (upstream_run_id, upstream_head_sha, upstream_event)
+        (
+            upstream_run_id,
+            upstream_head_sha,
+            upstream_event,
+            upstream_workflow,
+        )
     )
     if upstream_present and not all(
         (upstream_run_id, upstream_head_sha, upstream_event)
     ):
         raise RuntimeError(
             "Paired-run provenance thiếu Planning run_id/head_sha/event."
+        )
+    trigger_event = str(env.get("GITHUB_EVENT_NAME") or "").strip()
+    if strict and trigger_event == "workflow_run" and not upstream_present:
+        raise RuntimeError(
+            "NVL workflow_run production thiếu paired Planning provenance."
         )
     if strict and upstream_present and upstream_head_sha != commit_sha:
         raise RuntimeError(
