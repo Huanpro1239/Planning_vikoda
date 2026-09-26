@@ -57,6 +57,11 @@ jobs:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
       MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+      NVL_RELEASE_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      NVL_UPSTREAM_PLANNING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+      NVL_UPSTREAM_PLANNING_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+      NVL_UPSTREAM_PLANNING_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}
+      NVL_UPSTREAM_PLANNING_WORKFLOW: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}
 
     steps:
       - name: Checkout repository
