@@ -110,9 +110,14 @@ class NVLReleaseAuditTests(unittest.TestCase):
             published_at=timestamp,
             environ={
                 "NVL_REQUIRE_READINESS": "1",
-                "GITHUB_SHA": "deadbeef",
+                "NVL_RELEASE_COMMIT_SHA": "deadbeef",
+                "GITHUB_SHA": "workflow-context-sha",
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
+                "NVL_UPSTREAM_PLANNING_WORKFLOW": "Sync SharePoint Stock",
+                "NVL_UPSTREAM_PLANNING_RUN_ID": f"planning-{run_id}",
+                "NVL_UPSTREAM_PLANNING_HEAD_SHA": "deadbeef",
+                "NVL_UPSTREAM_PLANNING_EVENT": "schedule",
             },
             readiness_path=readiness,
             previous_manifest=previous_manifest,
@@ -161,6 +166,18 @@ class NVLReleaseAuditTests(unittest.TestCase):
         self.assertEqual(
             [row["chain_status"] for row in index["releases"]],
             ["anchor", "linked"],
+        )
+        self.assertEqual(
+            index["releases"][0]["upstream_planning_run_id"],
+            "planning-100",
+        )
+        self.assertEqual(
+            index["releases"][1]["upstream_planning_head_sha"],
+            "deadbeef",
+        )
+        self.assertEqual(
+            index["releases"][1]["upstream_planning_event"],
+            "schedule",
         )
 
     def test_missing_predecessor_is_detected(self):
@@ -377,6 +394,8 @@ class NVLReleaseAuditTests(unittest.TestCase):
             csv_text = out_csv.read_text(encoding="utf-8-sig")
             self.assertIn("release_id", csv_text)
             self.assertIn("chain_status", csv_text)
+            self.assertIn("upstream_planning_run_id", csv_text)
+            self.assertIn("upstream_planning_head_sha", csv_text)
 
 
 if __name__ == "__main__":

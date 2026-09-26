@@ -55,6 +55,12 @@ class NVLOperationalSummaryTests(unittest.TestCase):
                 {
                     "release_id": "nvl-release-1",
                     "release_version": "v1",
+                    "upstream_planning": {
+                        "workflow": "Sync SharePoint Stock",
+                        "run_id": "998877",
+                        "head_sha": "planning-sha",
+                        "event": "schedule",
+                    },
                     "published_workbook": {"sha256": "workbook-sha"},
                 },
             )
@@ -91,6 +97,17 @@ class NVLOperationalSummaryTests(unittest.TestCase):
             "workbook-sha",
         )
         self.assertEqual(result["ledger"]["status"], "passed")
+        self.assertEqual(
+            result["release"]["upstream_planning_run_id"],
+            "998877",
+        )
+        self.assertEqual(
+            result["release"]["upstream_planning_event"],
+            "schedule",
+        )
+        markdown = render_markdown(result)
+        self.assertIn("Upstream Planning run", markdown)
+        self.assertIn("998877", markdown)
 
     def test_failure_summary_reports_stock_phase(self):
         with tempfile.TemporaryDirectory() as tmpdir:

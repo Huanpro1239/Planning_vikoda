@@ -204,3 +204,39 @@ make audit-nvl-releases RELEASES_DIR=.runtime-state/nvl/releases NO_GIT=1
 
 A legacy manifest without a `chain` block is reported as
 `legacy_unlinked` with a warning rather than falsely classified as tampered.
+
+## Paired Planning → NVL provenance
+
+When NVL production is triggered by a successful Planning workflow run, the
+release manifest records the exact upstream run:
+
+```json
+{
+  "upstream_planning": {
+    "workflow": "Sync SharePoint Stock",
+    "run_id": "3620...",
+    "head_sha": "<planning commit sha>",
+    "event": "schedule"
+  }
+}
+```
+
+The same upstream `head_sha` is used as the NVL release commit identity and as
+the `git_sha` in `nvl_production_readiness_report.json`. This binds three
+facts together:
+
+1. which Planning run triggered NVL,
+2. which repository revision that Planning run used,
+3. which exact revision NVL readiness/publish/release provenance represents.
+
+The release builder rejects partial paired provenance and, in production,
+rejects an upstream Planning `head_sha` that differs from the NVL release
+commit SHA.
+
+Manual NVL `workflow_dispatch` and direct NVL `repository_dispatch` runs do
+not invent an upstream Planning run. Their `upstream_planning` fields remain
+`null`.
+
+The paired fields are also exposed in `nvl/release_index.json`,
+`nvl/release_index.csv`, the operational summary, and the unified Planning +
+NVL release overview.

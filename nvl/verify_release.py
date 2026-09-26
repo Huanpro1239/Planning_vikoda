@@ -175,6 +175,7 @@ def verify_nvl_release(
     release_id = str(manifest.get("release_id") or "").strip()
     release_version = str(manifest.get("release_version") or "").strip()
     chain = manifest.get("chain")
+    upstream_planning = manifest.get("upstream_planning")
     commit = manifest.get("commit") or {}
     readiness_info = manifest.get("readiness") or {}
     revisions = manifest.get("input_revision") or {}
@@ -229,6 +230,56 @@ def verify_nvl_release(
                     "phải cùng có hoặc cùng rỗng"
                 ),
             )
+    if upstream_planning is not None:
+        _check(
+            checks,
+            "manifest.upstream_planning_shape",
+            isinstance(upstream_planning, dict),
+            detail="upstream_planning phải là JSON object khi được khai báo",
+        )
+        if isinstance(upstream_planning, dict):
+            upstream_run_id = str(
+                upstream_planning.get("run_id") or ""
+            ).strip()
+            upstream_head_sha = str(
+                upstream_planning.get("head_sha") or ""
+            ).strip()
+            upstream_event = str(
+                upstream_planning.get("event") or ""
+            ).strip()
+            upstream_workflow = str(
+                upstream_planning.get("workflow") or ""
+            ).strip()
+            upstream_present = any(
+                (
+                    upstream_run_id,
+                    upstream_head_sha,
+                    upstream_event,
+                    upstream_workflow,
+                )
+            )
+            if upstream_present:
+                _check(
+                    checks,
+                    "manifest.upstream_planning_complete",
+                    bool(upstream_run_id)
+                    and bool(upstream_head_sha)
+                    and bool(upstream_event),
+                    detail=(
+                        "paired-run provenance phải có "
+                        "run_id/head_sha/event"
+                    ),
+                )
+                _check(
+                    checks,
+                    "manifest.upstream_planning_head_matches_commit",
+                    upstream_head_sha
+                    == str(commit.get("sha") or "").strip(),
+                    detail=(
+                        f"upstream.head_sha={upstream_head_sha!r}; "
+                        f"commit.sha={commit.get('sha')!r}"
+                    ),
+                )
     _check(
         checks,
         "manifest.final_stable_sha256",
@@ -682,6 +733,11 @@ def verify_nvl_release(
         "release_version": release_version,
         "manifest": str(manifest_path),
         "commit_sha": commit_sha,
+        "upstream_planning": (
+            upstream_planning
+            if isinstance(upstream_planning, dict)
+            else None
+        ),
         "published_workbook_sha256": server_sha,
         "published_workbook_stable_sha256": final_stable,
         "checks": checks,

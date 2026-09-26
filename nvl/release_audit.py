@@ -107,6 +107,10 @@ def audit_nvl_release_ledger(
             "published_at": None,
             "commit_sha": None,
             "gate_version": None,
+            "upstream_planning_run_id": None,
+            "upstream_planning_head_sha": None,
+            "upstream_planning_event": None,
+            "upstream_planning_workflow": None,
             "published_workbook_sha256": None,
             "published_workbook_stable_sha256": None,
             "stock_source_etag": None,
@@ -141,6 +145,7 @@ def audit_nvl_release_ledger(
         readiness = manifest.get("readiness") or {}
         workbook = manifest.get("published_workbook") or {}
         revisions = manifest.get("input_revision") or {}
+        upstream = manifest.get("upstream_planning") or {}
         chain = manifest.get("chain")
 
         record.update(
@@ -149,6 +154,10 @@ def audit_nvl_release_ledger(
                 "published_at": published_at or None,
                 "commit_sha": commit.get("sha"),
                 "gate_version": readiness.get("gate_version"),
+                "upstream_planning_run_id": upstream.get("run_id"),
+                "upstream_planning_head_sha": upstream.get("head_sha"),
+                "upstream_planning_event": upstream.get("event"),
+                "upstream_planning_workflow": upstream.get("workflow"),
                 "published_workbook_sha256": workbook.get("sha256"),
                 "published_workbook_stable_sha256": workbook.get(
                     "stable_sha256"
@@ -536,6 +545,10 @@ def write_index_csv(
         "release_id",
         "commit_sha",
         "gate_version",
+        "upstream_planning_run_id",
+        "upstream_planning_head_sha",
+        "upstream_planning_event",
+        "upstream_planning_workflow",
         "stock_source_etag",
         "open_po_source_etag",
         "published_workbook_sha256",

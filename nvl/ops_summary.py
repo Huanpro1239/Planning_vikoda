@@ -50,6 +50,11 @@ def build_operational_summary(
         if manifest
         else {}
     )
+    upstream_planning = (
+        manifest.get("upstream_planning") or {}
+        if manifest
+        else {}
+    )
     ledger_summary = (
         ledger.get("summary") or {}
         if ledger
@@ -118,6 +123,9 @@ def build_operational_summary(
                 manifest.get("release_version") if manifest else None
             ),
             "workbook_sha256": published_workbook.get("sha256"),
+            "upstream_planning_run_id": upstream_planning.get("run_id"),
+            "upstream_planning_head_sha": upstream_planning.get("head_sha"),
+            "upstream_planning_event": upstream_planning.get("event"),
         },
         "ledger": {
             "status": ledger.get("status") if ledger else "missing",
@@ -159,6 +167,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"| Stock D | status={stock.get('status')}; changed={stock.get('changed_D')} |",
         f"| Open PO E | published={open_po.get('published')}; changed={open_po.get('changed_E')} |",
         f"| Release ID | {release.get('release_id') or '-'} |",
+        f"| Upstream Planning run | {release.get('upstream_planning_run_id') or '-'} |",
+        f"| Upstream Planning event | {release.get('upstream_planning_event') or '-'} |",
         f"| Workbook SHA-256 | {release.get('workbook_sha256') or '-'} |",
         f"| Ledger | status={ledger.get('status')}; releases={ledger.get('release_count')} |",
     ]

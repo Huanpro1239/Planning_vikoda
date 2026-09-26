@@ -89,19 +89,33 @@ class NVLReleaseManifestTests(unittest.TestCase):
                 published_at="2026-09-25T08:00:00+00:00",
                 environ={
                     "NVL_REQUIRE_READINESS": "1",
-                    "GITHUB_SHA": "commit-sha",
+                    "NVL_RELEASE_COMMIT_SHA": "commit-sha",
+                    "GITHUB_SHA": "workflow-run-default-sha",
                     "GITHUB_REF": "refs/heads/main",
                     "GITHUB_REPOSITORY": "Huanpro1239/Planning_vikoda",
                     "GITHUB_RUN_ID": "12345",
                     "GITHUB_RUN_ATTEMPT": "2",
                     "GITHUB_WORKFLOW": "Sync SharePoint NVL Stock",
                     "GITHUB_ACTOR": "tester",
+                    "NVL_UPSTREAM_PLANNING_WORKFLOW": "Sync SharePoint Stock",
+                    "NVL_UPSTREAM_PLANNING_RUN_ID": "998877",
+                    "NVL_UPSTREAM_PLANNING_HEAD_SHA": "commit-sha",
+                    "NVL_UPSTREAM_PLANNING_EVENT": "schedule",
                 },
                 readiness_path=readiness,
             )
 
         self.assertEqual(manifest["schema"], NVL_RELEASE_SCHEMA)
         self.assertEqual(manifest["commit"]["sha"], "commit-sha")
+        self.assertEqual(
+            manifest["upstream_planning"],
+            {
+                "workflow": "Sync SharePoint Stock",
+                "run_id": "998877",
+                "head_sha": "commit-sha",
+                "event": "schedule",
+            },
+        )
         self.assertEqual(
             manifest["readiness"]["gate_version"],
             "nvl_production_readiness_v1",
@@ -150,6 +164,105 @@ class NVLReleaseManifestTests(unittest.TestCase):
             ]
         )
         self.assertIn("run-12345.2", manifest["release_version"])
+
+    def test_manual_release_has_no_upstream_planning_pair(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            manifest = build_release_manifest(
+                stock_report,
+                open_po_report,
+                workbook,
+                workbook,
+                environ={
+                    "NVL_REQUIRE_READINESS": "1",
+                    "GITHUB_SHA": "commit-sha",
+                },
+                readiness_path=readiness,
+            )
+
+        self.assertEqual(
+            manifest["upstream_planning"],
+            {
+                "workflow": None,
+                "run_id": None,
+                "head_sha": None,
+                "event": None,
+            },
+        )
+
+    def test_partial_upstream_planning_provenance_is_rejected(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "run_id/head_sha/event",
+            ):
+                build_release_manifest(
+                    stock_report,
+                    open_po_report,
+                    workbook,
+                    workbook,
+                    environ={
+                        "NVL_REQUIRE_READINESS": "1",
+                        "NVL_RELEASE_COMMIT_SHA": "commit-sha",
+                        "NVL_UPSTREAM_PLANNING_RUN_ID": "123",
+                    },
+                    readiness_path=readiness,
+                )
+
+    def test_upstream_head_sha_must_match_release_commit(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "head_sha",
+            ):
+                build_release_manifest(
+                    stock_report,
+                    open_po_report,
+                    workbook,
+                    workbook,
+                    environ={
+                        "NVL_REQUIRE_READINESS": "1",
+                        "NVL_RELEASE_COMMIT_SHA": "commit-sha",
+                        "NVL_UPSTREAM_PLANNING_RUN_ID": "123",
+                        "NVL_UPSTREAM_PLANNING_HEAD_SHA": "other-sha",
+                        "NVL_UPSTREAM_PLANNING_EVENT": "schedule",
+                    },
+                    readiness_path=readiness,
+                )
+
+    def test_workflow_run_release_requires_paired_provenance(self):
+        stock_report, open_po_report = self._reports()
+        workbook = make_mock_target_bytes([("VT001", 100)])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            readiness = self._readiness(Path(tmpdir))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "workflow_run production",
+            ):
+                build_release_manifest(
+                    stock_report,
+                    open_po_report,
+                    workbook,
+                    workbook,
+                    environ={
+                        "NVL_REQUIRE_READINESS": "1",
+                        "NVL_RELEASE_COMMIT_SHA": "commit-sha",
+                        "GITHUB_EVENT_NAME": "workflow_run",
+                    },
+                    readiness_path=readiness,
+                )
 
     def test_first_release_is_chain_anchor(self):
         stock_report, open_po_report = self._reports()

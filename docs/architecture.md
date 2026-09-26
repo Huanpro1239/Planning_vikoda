@@ -337,6 +337,13 @@ payload does not expose the Planning publish input safely. Manual NVL
 `workflow_dispatch` remains available and is proposal-only unless
 `publish=true`.
 
+For paired automatic runs, the NVL manifest stores
+`upstream_planning.workflow/run_id/head_sha/event`. The upstream `head_sha`
+is also the canonical NVL release/readiness commit SHA, so the release record
+can be traced directly back to the exact Planning run and code revision.
+Direct/manual NVL runs keep this block present with null values rather than
+fabricating an upstream Planning relationship.
+
 ## NVL production readiness gate
 
 NVL production quality is enforced by one executable command:

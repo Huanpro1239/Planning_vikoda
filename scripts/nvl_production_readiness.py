@@ -139,7 +139,11 @@ def main() -> int:
         "gate_version": GATE_VERSION,
         "status": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "git_sha": os.getenv("GITHUB_SHA") or "",
+        "git_sha": (
+            os.getenv("NVL_RELEASE_COMMIT_SHA")
+            or os.getenv("GITHUB_SHA")
+            or ""
+        ),
         "python": sys.version,
         "phases": [],
     }
