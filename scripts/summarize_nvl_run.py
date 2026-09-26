@@ -24,7 +24,13 @@ def main(argv=None) -> int:
     parser.add_argument("--job-status", default=os.getenv("JOB_STATUS", "unknown"))
     parser.add_argument("--event", default=os.getenv("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--run-id", default=os.getenv("GITHUB_RUN_ID", ""))
-    parser.add_argument("--commit", default=os.getenv("GITHUB_SHA", ""))
+    parser.add_argument(
+        "--commit",
+        default=(
+            os.getenv("NVL_RELEASE_COMMIT_SHA")
+            or os.getenv("GITHUB_SHA", "")
+        ),
+    )
     parser.add_argument("--out", default="nvl_operational_summary.json")
     parser.add_argument(
         "--markdown",
