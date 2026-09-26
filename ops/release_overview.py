@@ -295,6 +295,15 @@ def _nvl_rows(index: dict[str, Any]) -> list[dict[str, Any]]:
                 "plan_month": None,
                 "proposal_id": None,
                 "artifact_sha256": item.get("published_workbook_sha256"),
+                "upstream_planning_run_id": item.get(
+                    "upstream_planning_run_id"
+                ),
+                "upstream_planning_head_sha": item.get(
+                    "upstream_planning_head_sha"
+                ),
+                "upstream_planning_event": item.get(
+                    "upstream_planning_event"
+                ),
                 "status": item.get("status"),
                 "chain_status": item.get("chain_status"),
                 "issues": item.get("issues") or [],
@@ -405,6 +414,9 @@ def write_overview_csv(
         "plan_month",
         "proposal_id",
         "artifact_sha256",
+        "upstream_planning_run_id",
+        "upstream_planning_head_sha",
+        "upstream_planning_event",
         "status",
         "chain_status",
         "issues",
