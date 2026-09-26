@@ -28,8 +28,8 @@ class GraphRetryTests(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "preconditionFailed")
         self.assertTrue(is_retryable_graph_error(ctx.exception))
 
-    def test_429_5xx_and_timeout_are_retryable(self):
-        for status in (429, 500, 502, 503, 504):
+    def test_423_429_5xx_and_timeout_are_retryable(self):
+        for status in (423, 429, 500, 502, 503, 504):
             self.assertTrue(
                 is_retryable_graph_error(
                     GraphRequestError("transient", status_code=status)

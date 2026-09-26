@@ -25,6 +25,8 @@ from .state import (
     save_publish_decision,
     save_states_after_success,
 )
+from .upload import upload_authorized_snapshot
+
 
 
 def run_pipeline_with_retry(
@@ -37,6 +39,8 @@ def run_pipeline_with_retry(
     sleep_func=time.sleep,
     max_attempts=6,
     retry_delay_seconds=10,
+    lock_upload_attempts=4,
+    lock_retry_delay_seconds=15,
     skip_if_unchanged=False,
     force=False,
 ):
@@ -197,15 +201,18 @@ def run_pipeline_with_retry(
                 }
 
             if changed:
-                graph.upload_file(
+                upload_authorized_snapshot(
+                    graph,
                     drive_id,
-                    target_item["id"],
+                    target_item,
                     final_bytes,
-                    expected_etag=target_item["eTag"],
+                    sleep_func=sleep_func,
+                    lock_attempts=lock_upload_attempts,
+                    lock_retry_delay_seconds=lock_retry_delay_seconds,
                 )
                 print(
-                    "[PIPELINE] Authorized snapshot uploaded exactly once "
-                    "with If-Match ETag."
+                    "[PIPELINE] Authorized snapshot uploaded with If-Match "
+                    "ETag; HTTP 423 lock retries (nếu có) giữ nguyên snapshot."
                 )
             else:
                 print(
@@ -248,6 +255,12 @@ def run_pipeline_with_retry(
             }
 
         except Exception as exc:
+            if getattr(
+                exc,
+                "planning_lock_retries_exhausted",
+                False,
+            ):
+                raise
             if (
                 not is_retryable_graph_error(exc)
                 or attempt == max_attempts
