@@ -27,6 +27,63 @@ from .state import (
 )
 
 
+def _is_resource_locked(exc):
+    return (
+        getattr(exc, "status_code", None) == 423
+        or str(getattr(exc, "error_code", "") or "").casefold()
+        == "resourcelocked"
+    )
+
+
+def _upload_authorized_snapshot(
+    graph,
+    drive_id,
+    target_item,
+    final_bytes,
+    *,
+    sleep_func,
+    lock_attempts=4,
+    lock_retry_delay_seconds=15,
+):
+    """Retry only HTTP 423 using the exact authorized snapshot + If-Match."""
+    if lock_attempts < 1:
+        raise ValueError("lock_attempts phải >= 1")
+
+    for lock_attempt in range(1, lock_attempts + 1):
+        try:
+            return graph.upload_file(
+                drive_id,
+                target_item["id"],
+                final_bytes,
+                expected_etag=target_item["eTag"],
+            )
+        except Exception as exc:
+            if not _is_resource_locked(exc):
+                raise
+            if lock_attempt >= lock_attempts:
+                # The outer pipeline must not recompute another six times for a
+                # workbook that is still exclusively locked. A future run can
+                # retry safely once SharePoint releases the lock.
+                exc.planning_lock_retries_exhausted = True
+                raise
+
+            default_delay = min(
+                lock_retry_delay_seconds * lock_attempt,
+                60,
+            )
+            delay = min(
+                retry_wait_seconds(exc, default_delay),
+                60,
+            )
+            print(
+                "[PIPELINE] SharePoint target đang bị khóa "
+                f"(HTTP 423, lượt {lock_attempt}/{lock_attempts}). "
+                f"Giữ nguyên authorized snapshot + ETag; thử upload lại "
+                f"sau {delay:g}s."
+            )
+            sleep_func(delay)
+
+
 def run_pipeline_with_retry(
     graph,
     drive_id,
@@ -37,6 +94,8 @@ def run_pipeline_with_retry(
     sleep_func=time.sleep,
     max_attempts=6,
     retry_delay_seconds=10,
+    lock_upload_attempts=4,
+    lock_retry_delay_seconds=15,
     skip_if_unchanged=False,
     force=False,
 ):
@@ -197,15 +256,18 @@ def run_pipeline_with_retry(
                 }
 
             if changed:
-                graph.upload_file(
+                _upload_authorized_snapshot(
+                    graph,
                     drive_id,
-                    target_item["id"],
+                    target_item,
                     final_bytes,
-                    expected_etag=target_item["eTag"],
+                    sleep_func=sleep_func,
+                    lock_attempts=lock_upload_attempts,
+                    lock_retry_delay_seconds=lock_retry_delay_seconds,
                 )
                 print(
-                    "[PIPELINE] Authorized snapshot uploaded exactly once "
-                    "with If-Match ETag."
+                    "[PIPELINE] Authorized snapshot uploaded with If-Match "
+                    "ETag; HTTP 423 lock retries (nếu có) giữ nguyên snapshot."
                 )
             else:
                 print(
@@ -248,6 +310,12 @@ def run_pipeline_with_retry(
             }
 
         except Exception as exc:
+            if getattr(
+                exc,
+                "planning_lock_retries_exhausted",
+                False,
+            ):
+                raise
             if (
                 not is_retryable_graph_error(exc)
                 or attempt == max_attempts
