@@ -25,63 +25,8 @@ from .state import (
     save_publish_decision,
     save_states_after_success,
 )
+from .upload import upload_authorized_snapshot
 
-
-def _is_resource_locked(exc):
-    return (
-        getattr(exc, "status_code", None) == 423
-        or str(getattr(exc, "error_code", "") or "").casefold()
-        == "resourcelocked"
-    )
-
-
-def _upload_authorized_snapshot(
-    graph,
-    drive_id,
-    target_item,
-    final_bytes,
-    *,
-    sleep_func,
-    lock_attempts=4,
-    lock_retry_delay_seconds=15,
-):
-    """Retry only HTTP 423 using the exact authorized snapshot + If-Match."""
-    if lock_attempts < 1:
-        raise ValueError("lock_attempts phải >= 1")
-
-    for lock_attempt in range(1, lock_attempts + 1):
-        try:
-            return graph.upload_file(
-                drive_id,
-                target_item["id"],
-                final_bytes,
-                expected_etag=target_item["eTag"],
-            )
-        except Exception as exc:
-            if not _is_resource_locked(exc):
-                raise
-            if lock_attempt >= lock_attempts:
-                # The outer pipeline must not recompute another six times for a
-                # workbook that is still exclusively locked. A future run can
-                # retry safely once SharePoint releases the lock.
-                exc.planning_lock_retries_exhausted = True
-                raise
-
-            default_delay = min(
-                lock_retry_delay_seconds * lock_attempt,
-                60,
-            )
-            delay = min(
-                retry_wait_seconds(exc, default_delay),
-                60,
-            )
-            print(
-                "[PIPELINE] SharePoint target đang bị khóa "
-                f"(HTTP 423, lượt {lock_attempt}/{lock_attempts}). "
-                f"Giữ nguyên authorized snapshot + ETag; thử upload lại "
-                f"sau {delay:g}s."
-            )
-            sleep_func(delay)
 
 
 def run_pipeline_with_retry(
@@ -256,7 +201,7 @@ def run_pipeline_with_retry(
                 }
 
             if changed:
-                _upload_authorized_snapshot(
+                upload_authorized_snapshot(
                     graph,
                     drive_id,
                     target_item,
