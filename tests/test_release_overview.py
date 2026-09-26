@@ -173,9 +173,14 @@ class ReleaseOverviewTests(unittest.TestCase):
             published_at=timestamp,
             environ={
                 "NVL_REQUIRE_READINESS": "1",
-                "GITHUB_SHA": "deadbeef",
+                "NVL_RELEASE_COMMIT_SHA": "deadbeef",
+                "GITHUB_SHA": "workflow-context-sha",
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
+                "NVL_UPSTREAM_PLANNING_WORKFLOW": "Sync SharePoint Stock",
+                "NVL_UPSTREAM_PLANNING_RUN_ID": f"planning-{run_id}",
+                "NVL_UPSTREAM_PLANNING_HEAD_SHA": "deadbeef",
+                "NVL_UPSTREAM_PLANNING_EVENT": "schedule",
             },
             readiness_path=readiness,
             previous_manifest=previous_manifest,
@@ -226,6 +231,14 @@ class ReleaseOverviewTests(unittest.TestCase):
         self.assertEqual(
             overview["latest"]["nvl"]["domain"],
             "nvl",
+        )
+        self.assertEqual(
+            overview["latest"]["nvl"]["upstream_planning_run_id"],
+            "planning-101",
+        )
+        self.assertEqual(
+            overview["latest"]["nvl"]["upstream_planning_event"],
+            "schedule",
         )
 
     def test_stale_planning_latest_pointer_fails_overview(self):
