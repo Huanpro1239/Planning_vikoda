@@ -68,6 +68,7 @@ Each row contains:
 - commit SHA,
 - readiness gate version,
 - Planning plan month/proposal ID when applicable,
+- for NVL, upstream Planning run ID/head SHA/trigger event when paired,
 - final proposal/workbook hash,
 - verification status and issues.
 
