@@ -86,6 +86,31 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
         self.assertIn("UPSTREAM_RUN_ID:", workflow)
         self.assertIn("UPSTREAM_EVENT:", workflow)
 
+    def test_workflow_passes_paired_planning_provenance_to_release(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "NVL_RELEASE_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}",
+            workflow,
+        )
+        self.assertIn(
+            "NVL_UPSTREAM_PLANNING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}",
+            workflow,
+        )
+        self.assertIn(
+            "NVL_UPSTREAM_PLANNING_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}",
+            workflow,
+        )
+        self.assertIn(
+            "NVL_UPSTREAM_PLANNING_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}",
+            workflow,
+        )
+        self.assertIn(
+            "NVL_UPSTREAM_PLANNING_WORKFLOW: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}",
+            workflow,
+        )
+
     def test_release_manifest_is_recorded_after_publish_and_persisted_state_only(self):
         workflow = (
             ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
