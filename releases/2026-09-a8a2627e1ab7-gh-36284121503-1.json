@@ -1,0 +1,92 @@
+{
+  "algorithm": "ke_hoach_sx_tuan_v2_service_first",
+  "commit": {
+    "actor": "Huanpro1239",
+    "ref": "refs/heads/main",
+    "repository": "Huanpro1239/Planning_vikoda",
+    "run_attempt": "1",
+    "run_id": "36284121503",
+    "sha": "77b03c0c9fa73fed2938ccdae8e8cd5b0b41637f",
+    "workflow": "Sync SharePoint Stock"
+  },
+  "engine_version": "ke_hoach_sx_tuan_v5_khsx_ki_20260908",
+  "input_revision": {
+    "sources": {
+      "accounting_vikoda": {
+        "etag": "\"{1E2437FE-C373-4797-8DAE-F53096F0CB7A},4\"",
+        "item_id": "01EX3DDZH6G4SB446DS5DY3LXVGCLPBS32",
+        "last_modified": "2026-09-12T03:17:13Z",
+        "path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_Vikoda.xlsm",
+        "sha256": "82b434df423879291c492d72c28e1b2ae68ee2efcbbcaa6ae256eb1c3d375e89"
+      },
+      "accounting_vkd": {
+        "etag": "\"{E096A4BE-0CBF-4843-991A-7098F23351BF},1\"",
+        "item_id": "01EX3DDZF6USLOBPYMINEJSGTQTDZDGUN7",
+        "last_modified": "2026-09-03T03:38:00Z",
+        "path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Ke Toan/XNT_ketoan_VKD.xlsm",
+        "sha256": "83fef16f16b0e3653d71bba1d5f6bb3bf3b303330fd3841b972a551297efabd2"
+      },
+      "actual_stock": {
+        "etag": "\"{B0B8E5DD-0869-4466-BB0F-7477DCAE8E3D},5\"",
+        "item_id": "01EX3DDZG54W4LA2IIMZCLWD3UO7OK5DR5",
+        "last_modified": "2026-09-03T09:03:13Z",
+        "path": "Tinh san xuat Mua hang 2027/Ton thuc te/Bao cao ton thuc te hien tai.xlsx",
+        "sha256": "bac4d44dba84940eb4c2e25867d05d5a710e6e0aa9ec55de052bd376cefad25e"
+      },
+      "factory_vikoda": {
+        "etag": "\"{317BCC7B-A546-45A8-8AEA-902ACA5704B4},2\"",
+        "item_id": "01EX3DDZD3ZR5TCRVFVBCYV2UQFLFFOBFU",
+        "last_modified": "2026-09-03T04:01:15Z",
+        "path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Nha May/NXT_Vikoda.xlsm",
+        "sha256": "3d9bea051215186eae611f63524e793c44ba3fd11d0b26214bf007c0fd497c5e"
+      },
+      "factory_vkd": {
+        "etag": "\"{C08F60FB-055B-436A-B546-39F452CC4ADE},5\"",
+        "item_id": "01EX3DDZH3MCH4AWYFNJB3KRRZ6RJMYSW6",
+        "last_modified": "2026-09-03T08:11:54Z",
+        "path": "Tinh san xuat Mua hang 2027/Ton He thong/Ton Nha May/NXT_VKD.xlsm",
+        "sha256": "ea6176abfd2fd9edd85168cb834d4e613517e018da538bbacbce076ded6bf878"
+      }
+    },
+    "target": {
+      "etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},152\"",
+      "item_id": "01EX3DDZGDKHPGY5HLMJAJKFWC3IVMHDEL",
+      "last_modified": "2026-09-22T01:32:38Z",
+      "path": "Tinh san xuat Mua hang 2027/Sắp kế hoạch.xlsx",
+      "sha256": "689d484aaf51984600680f1a827b180abd8dac57d466b266b4bbe285f12ffb7d"
+    }
+  },
+  "pipeline_fingerprints": {
+    "conversion_hash": "31ccb5146784d6a0fb3e75090fc90af03496e617c05057c249e6bceb138d415f",
+    "engine_version": "ke_hoach_sx_tuan_v5_khsx_ki_20260908",
+    "fc_hash": "d9dbde752108a66a488f1887334e47b928a51495195151f93cc0257bc5c92044",
+    "no_kho_hash": "4dcb9fc4c6d3d885f87faaee98cd48e4d9aa9b7a510d7530e00b8185aa56b390",
+    "planning_inputs_hash": "cd30cc4e8c42a2ae97ddb3017ad1b5fdc0a5f7167a93f0a46efbe2dcd5383c93"
+  },
+  "plan_month": "2026-09",
+  "proposal": {
+    "output_sha256": "ec6a51f412b28aad0d0e1b098282f4ff8e519451b0f9f33af9daf96524a4c0c6",
+    "proposal_id": "a8a2627e1ab7c5ba2cdf77589853b78d5ff44394a30c9f3b2fcfa24ed032e9c6",
+    "stable_output_sha256": "e2b27021dff949b9db9744906c329845b22dd07d9d082cbf9a4a37ff8232740e"
+  },
+  "publish_decision": {
+    "basis": "publish_status",
+    "proposal_id": "a8a2627e1ab7c5ba2cdf77589853b78d5ff44394a30c9f3b2fcfa24ed032e9c6",
+    "publish_status": "ready_for_publish",
+    "publisher": "daily-schedule",
+    "review_approval": null,
+    "state": "published",
+    "target_etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},152\""
+  },
+  "published_at": "2026-09-27T01:00:02.732654+00:00",
+  "readiness": {
+    "gate_version": "production_readiness_v1",
+    "git_sha": "77b03c0c9fa73fed2938ccdae8e8cd5b0b41637f",
+    "report_sha256": "2e8664f06bf5f6ef43b4c690cd618dd6b4d77fe057352c3031bec763fee2bda5",
+    "status": "passed"
+  },
+  "release_id": "2026-09-a8a2627e1ab7-gh-36284121503-1",
+  "release_version": "planning_release_manifest_v1.proposal-a8a2627e1ab7.run-36284121503.1",
+  "schema": "planning_release_manifest_v1",
+  "schema_version": 1
+}
