@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-28T01:16:49.780638+00:00",
+  "generated_at": "2026-09-29T02:23:07.304029+00:00",
   "latest": {
     "detail": "latest pointer khớp newest release",
     "path": ".runtime-state/nvl/latest_release.json",
-    "release_id": "nvl-4a4ea8736d8ed409-gh-36365332905-1",
+    "release_id": "nvl-4a4ea8736d8ed409-gh-36512266011-1",
     "status": "passed"
   },
   "releases": [
@@ -56,6 +56,31 @@
       "upstream_planning_workflow": "Sync SharePoint Stock",
       "verification_status": "passed",
       "verification_warning_count": 5
+    },
+    {
+      "chain_status": "linked",
+      "commit_sha": "77b03c0c9fa73fed2938ccdae8e8cd5b0b41637f",
+      "filename": "nvl-4a4ea8736d8ed409-gh-36512266011-1.json",
+      "gate_version": "nvl_production_readiness_v1",
+      "issues": [],
+      "manifest_sha256": "91a4a15e48ca67cf1b0df7b8ff4b9ce8173c92c488a5e3aacaf7fa2f8fd4b7a4",
+      "open_po_source_etag": "\"{1836226D-FB9D-4F8A-B6D5-3508A975936C},2\"",
+      "path": ".runtime-state/nvl/releases/nvl-4a4ea8736d8ed409-gh-36512266011-1.json",
+      "previous_manifest_sha256": "f6183884bb9260351968932eb129ab12883405d3011a69657cc705ac6dfcdc4c",
+      "previous_release_id": "nvl-4a4ea8736d8ed409-gh-36365332905-1",
+      "published_at": "2026-09-29T02:23:07.208411+00:00",
+      "published_workbook_sha256": "db70199e62f9a3905e6de33f72c91718b61b63b90d8c5072646e225ae114f31c",
+      "published_workbook_stable_sha256": "4a4ea8736d8ed409acbedd088eb002f6dde6d43dc23e288340a7963ebe9ba7bd",
+      "release_id": "nvl-4a4ea8736d8ed409-gh-36512266011-1",
+      "sequence": 3,
+      "status": "passed",
+      "stock_source_etag": "\"{1E2437FE-C373-4797-8DAE-F53096F0CB7A},4\"",
+      "upstream_planning_event": "schedule",
+      "upstream_planning_head_sha": "77b03c0c9fa73fed2938ccdae8e8cd5b0b41637f",
+      "upstream_planning_run_id": "36512159434",
+      "upstream_planning_workflow": "Sync SharePoint Stock",
+      "verification_status": "passed",
+      "verification_warning_count": 5
     }
   ],
   "releases_dir": ".runtime-state/nvl/releases",
@@ -67,8 +92,8 @@
     "issue_error_count": 0,
     "issue_warning_count": 0,
     "legacy_unlinked_count": 0,
-    "passed_count": 2,
-    "release_count": 2,
+    "passed_count": 3,
+    "release_count": 3,
     "warning_count": 0
   }
 }
