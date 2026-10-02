@@ -1,0 +1,110 @@
+name: SharePoint Planning Change Watch
+
+on:
+  schedule:
+    # Poll nhẹ mỗi 10 phút. Chỉ phát event khi fingerprint input thực sự đổi.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+# Dùng cùng concurrency group với production Planning để watcher không phát
+# event mới trong lúc một cycle Planning đang chạy/pending.
+concurrency:
+  group: sharepoint-stock-sync
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Checkout runtime state
+        uses: actions/checkout@v5
+        with:
+          ref: runtime-state
+          path: .runtime-state
+
+      - name: Restore production input state
+        run: |
+          test -f .runtime-state/state.json
+          cp .runtime-state/state.json state.json
+
+      - name: Detect SharePoint production input changes
+        id: detect
+        run: python -X utf8 scripts/watch_sharepoint_changes.py
+
+      - name: Dispatch sharepoint_stock_updated
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DETECTED_CHANGES: ${{ steps.detect.outputs.reasons_json }}
+          WATCH_RUN_ID: ${{ github.run_id }}
+          WATCH_HEAD_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          owner_repo = os.environ["REPOSITORY"]
+          payload = {
+              "event_type": "sharepoint_stock_updated",
+              "client_payload": {
+                  "source": "github-sharepoint-watch",
+                  "detected_changes": json.loads(
+                      os.environ.get("DETECTED_CHANGES") or "[]"
+                  ),
+                  "watch_run_id": os.environ["WATCH_RUN_ID"],
+                  "watch_head_sha": os.environ["WATCH_HEAD_SHA"],
+              },
+          }
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{owner_repo}/dispatches",
+              data=json.dumps(payload).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request) as response:
+              if response.status != 204:
+                  raise RuntimeError(
+                      f"repository_dispatch trả HTTP {response.status}"
+                  )
+          print(
+              "[WATCH] Đã phát repository_dispatch "
+              "sharepoint_stock_updated."
+          )
+          PY
+
+      - name: No material change
+        if: steps.detect.outputs.changed != 'true'
+        run: echo "[WATCH] Không dispatch; input production không đổi."
