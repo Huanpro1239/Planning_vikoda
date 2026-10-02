@@ -82,7 +82,7 @@ jobs:
           REQUEST_PUBLISH: ${{ (github.event_name == 'schedule' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
           APPROVAL_PROPOSAL_ID: ${{ inputs.approval_proposal_id }}
           APPROVAL_REASON: ${{ inputs.approval_reason }}
-          APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'power-automate' || github.actor) }}
+          APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'sharepoint-event' || github.actor) }}
           EVENT_NAME: ${{ github.event_name }}
           PLANNING_REQUIRE_READINESS: "1"
         run: |
