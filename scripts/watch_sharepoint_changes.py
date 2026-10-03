@@ -8,17 +8,23 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import sys
 
-import stock
-from planning import metrics
-from planning.fc import compute_fc_hash
-from planning.publish.constants import SOURCES
-from planning.publish.state import detect_input_changes
-from planning.weekly_model import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import stock  # noqa: E402
+from planning import metrics  # noqa: E402
+from planning.fc import compute_fc_hash  # noqa: E402
+from planning.publish.constants import SOURCES  # noqa: E402
+from planning.publish.state import detect_input_changes  # noqa: E402
+from planning.weekly_model import (  # noqa: E402
     ENGINE_VERSION,
     compute_planning_inputs_hash,
 )
-from sharepoint.client import GraphClient, get_access_token
+from sharepoint.client import GraphClient, get_access_token  # noqa: E402
 
 
 def collect_current_inputs(graph, drive_id):
