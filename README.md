@@ -76,8 +76,11 @@ Hệ thống theo dõi toàn diện các đầu vào nghiệp vụ qua SHA-256 f
 ## Vận hành CI/CD
 
 ### 1. Kích hoạt tự động
-- **Lịch hàng ngày:** Chạy định kỳ lúc 06:00 sáng VN (23:00 UTC) với cờ `--force`.
-- **Power Automate Dispatch:** Sự kiện `repository_dispatch` (`sharepoint_stock_updated`) sử dụng `--skip-if-unchanged` để bỏ qua tính lại nếu không có thay đổi đầu vào.
+Planning **không chạy theo giờ cố định**; chỉ chạy khi input SharePoint thay đổi:
+
+- **Power Automate (tức thì):** flow SharePoint "khi file được sửa" trên 5 file tồn (XNT/NXT/tồn thực tế) gửi `repository_dispatch` (`sharepoint_stock_updated`). Cách cài: `docs/runbooks/sharepoint-change-watch.md`.
+- **Watcher dự phòng:** `sharepoint-watch.yml` so fingerprint input và phát cùng event khi có thay đổi (GitHub có thể giãn lịch poll ra vài giờ).
+- Cả hai đều chạy Planning với `--skip-if-unchanged`, nên event trùng hoặc không có thay đổi thật sẽ được bỏ qua.
 
 ### 2. Kích hoạt thủ công (Workflow Dispatch)
 - **Tạo Proposal (Read-only):** `publish = false`. Chỉ sinh file excel và report artifact trên GitHub Actions để kiểm tra.
