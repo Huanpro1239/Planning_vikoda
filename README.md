@@ -17,7 +17,7 @@ Khi capacity không đủ:
 3. **Tồn cuối dự kiến là Safety-stock buffer:** Chỉ được sản xuất bằng **capacity còn lại**.
 4. **Bảo vệ Service trên timeline:** Buffer của SKU bắt đầu sớm không bao giờ được chiếm lịch hoặc làm thiếu hụt Service của SKU sau trên timeline sản xuất thực tế.
 5. **Không đủ buffer nhưng vẫn đủ Service:** `safety_stock = partially_achieved`, có thể `ready_for_publish`.
-6. **Không đủ Service (Service Shortfall):** Bắt buộc đánh dấu `service.ok = False`, lưu `stockout_skus`, chuyển trạng thái thành `review_required` và **chặn tuyệt đối auto-publish**.
+6. **Không đủ Service (Service Shortfall):** Bắt buộc đánh dấu `service.ok = False`, lưu `stockout_skus`, chuyển trạng thái thành `review_required` và chặn auto-publish (trừ khi bật tự duyệt thiếu do công suất, xem mục Duyệt Publish).
 
 Rule Nợ kho `SUBTRACT_BOOK_ON_DEBT` và `IGNORE_BOOK_ON_DEBT` được cấu hình từ sheet `Danh_muc`.
 
@@ -63,11 +63,15 @@ Hệ thống theo dõi toàn diện các đầu vào nghiệp vụ qua SHA-256 f
 ## Trạng thái và Chính sách Duyệt Publish
 
 - `ready_for_publish`: Service đầy đủ, tài nguyên KHS/PET hợp lệ, metadata hợp lệ. Cho phép tự động publish theo lịch hoặc sự kiện.
-- `review_required`: Thiếu Service, hoặc lỗi cấu hình/tài nguyên. **Auto-publish bị chặn hoàn toàn**.
+- `review_required`: Thiếu Service, hoặc lỗi cấu hình/tài nguyên. Auto-publish bị chặn, trừ trường hợp tự duyệt thiếu do công suất bên dưới.
 - **Quy trình Duyệt (Review Approval):**
   - Chỉ áp dụng cho trường hợp thiếu Service do giới hạn công suất thực tế (`stockout_risk`).
   - Bắt buộc phải cung cấp đúng `proposal_id` của bản snapshot hiện tại và kèm theo `approval_reason` cụ thể.
   - Lỗi vi phạm máy chung hoặc carryover chưa giải quyết tuyệt đối không thể duyệt bỏ qua.
+- **Tự duyệt thiếu do công suất (`PLANNING_AUTO_APPROVE_CAPACITY_SHORTFALL=1`, đang bật trong `sync-stock.yml`):**
+  - Khi không có duyệt tay và **mọi** SKU thiếu Service đều nằm trong `capacity_balanced_skus` (đã dùng hết công suất), hệ thống tự duyệt và publish.
+  - Ghi chú tự sinh liệt kê từng SKU và số lượng thiếu; `review_approval.approved_by = auto-policy:capacity-shortfall`, `review_approval.auto = true`.
+  - Thiếu không do công suất, lỗi máy chung, carryover vẫn bị chặn. Bỏ biến môi trường để quay lại bắt buộc duyệt tay.
 
 ## Vận hành CI/CD
 
