@@ -1,9 +1,11 @@
 """Publish authorization policy.
 
 Only validated stockout risk can be explicitly approved. Resource failures and
-carryover remain non-waivable.
+carryover remain non-waivable. Thiếu do công suất có thể được tự duyệt, xem
+auto_approval.py.
 """
 
+from .auto_approval import auto_approval_enabled, build_auto_approval
 from .constants import READY_PUBLISH_STATUSES, REVIEW_REQUIRED_STATUS
 
 
@@ -18,7 +20,7 @@ def blocked_decision(report, publisher, basis, reason):
     }
 
 
-def publish_decision(report, review_approval, publisher):
+def publish_decision(report, review_approval, publisher, environ=None):
     status = str(report.get("publish_status") or "").strip()
     proposal_id = report.get("proposal_id")
 
@@ -73,6 +75,19 @@ def publish_decision(report, review_approval, publisher):
         )
 
     approval = dict(review_approval or {})
+    auto_approved = False
+    if not approval and auto_approval_enabled(environ):
+        auto = build_auto_approval(report)
+        if auto is None:
+            return False, blocked_decision(
+                report,
+                publisher,
+                "review_approval",
+                "Auto-approval chỉ áp dụng khi mọi SKU thiếu đều do giới hạn "
+                "công suất; cần duyệt thủ công.",
+            )
+        approval = auto
+        auto_approved = True
     approved_proposal_id = str(
         approval.get("proposal_id") or ""
     ).strip()
@@ -107,5 +122,6 @@ def publish_decision(report, review_approval, publisher):
             "proposal_id": approved_proposal_id,
             "reason": reason,
             "approved_by": approved_by or None,
+            "auto": auto_approved,
         },
     }

@@ -85,6 +85,9 @@ jobs:
           APPROVED_BY: ${{ github.event_name == 'schedule' && 'daily-schedule' || (github.event_name == 'repository_dispatch' && 'sharepoint-event' || github.actor) }}
           EVENT_NAME: ${{ github.event_name }}
           PLANNING_REQUIRE_READINESS: "1"
+          # Tự duyệt stockout_risk khi mọi SKU thiếu đều do hết công suất
+          # (quyết định của chủ hệ thống); ghi chú tự sinh vào publish decision.
+          PLANNING_AUTO_APPROVE_CAPACITY_SHORTFALL: "1"
         run: |
           EXTRA_FLAGS=""
           if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
