@@ -77,13 +77,14 @@ def main(argv=None) -> int:
             print(json.dumps({
                 "verified": False,
                 "error": str(exc),
-            }, ensure_ascii=False, indent=2))
+            }, ensure_ascii=True, indent=2))
         else:
             print(f"[RELEASE_VERIFY] FAIL: {exc}", file=sys.stderr)
         return 1
 
     if args.json_output:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        # ASCII escapes preserve Unicode values on Windows legacy code pages.
+        print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0
 
     print(

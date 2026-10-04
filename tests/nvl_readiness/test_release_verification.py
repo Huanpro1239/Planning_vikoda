@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -357,6 +358,7 @@ class NVLReleaseVerificationTests(unittest.TestCase):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env={**os.environ, "PYTHONIOENCODING": "cp1252"},
                 check=False,
             )
 

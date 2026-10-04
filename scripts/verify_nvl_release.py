@@ -101,7 +101,7 @@ def main(argv=None) -> int:
                         "verified": False,
                         "error": str(exc),
                     },
-                    ensure_ascii=False,
+                    ensure_ascii=True,
                     indent=2,
                 )
             )
@@ -116,7 +116,7 @@ def main(argv=None) -> int:
         print(
             json.dumps(
                 result,
-                ensure_ascii=False,
+                ensure_ascii=True,
                 indent=2,
             )
         )
