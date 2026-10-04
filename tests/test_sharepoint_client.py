@@ -30,6 +30,26 @@ class FakeGraph:
 
 
 class SharePointClientTests(unittest.TestCase):
+    def test_list_folder_children_reads_all_pages(self):
+        graph = FakeGraph([
+            {"value": [{"id": "a"}], "@odata.nextLink": "https://graph.microsoft.com/v1.0/page2?skiptoken=abc"},
+            {"value": [], "@odata.nextLink": "https://graph.microsoft.com/v1.0/page3?skiptoken=def"},
+            {"value": [{"id": "b"}]},
+        ])
+        result = GraphClient.list_folder_children(graph, "drive-1", "Planning files")
+        self.assertEqual(result, [{"id": "a"}, {"id": "b"}])
+        self.assertIn("Planning%20files", graph.urls[0][0])
+        self.assertEqual(graph.urls[1], ("https://graph.microsoft.com/v1.0/page2?skiptoken=abc", None))
+        self.assertEqual(graph.urls[2], ("https://graph.microsoft.com/v1.0/page3?skiptoken=def", None))
+
+    def test_list_folder_children_does_not_hide_later_page_failure(self):
+        graph = FakeGraph([
+            {"value": [{"id": "a"}], "@odata.nextLink": "https://graph.microsoft.com/v1.0/page2"},
+            GraphRequestError("unavailable", status_code=503),
+        ])
+        with self.assertRaises(GraphRequestError):
+            GraphClient.list_folder_children(graph, "drive-1")
+
     def test_sharepoint_client_is_single_graph_client_class(self):
         self.assertIs(SharePointClient, GraphClient)
 

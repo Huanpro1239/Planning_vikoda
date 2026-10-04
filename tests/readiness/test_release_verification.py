@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -233,6 +234,7 @@ class ReleaseVerificationTests(unittest.TestCase):
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
+                env={**os.environ, "PYTHONIOENCODING": "cp1252"},
                 check=False,
             )
 

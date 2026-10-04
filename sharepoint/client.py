@@ -127,7 +127,12 @@ class GraphClient:
             url,
             {"$select": "id,name,eTag,size,lastModifiedDateTime,folder,file"},
         )
-        return res.get("value", [])
+        children = list(res.get("value", []))
+        while res.get("@odata.nextLink"):
+            # The continuation URL already contains the original query options.
+            res = self.get_json(res["@odata.nextLink"])
+            children.extend(res.get("value", []))
+        return children
 
     def download_file(self, drive_id, item_id):
         url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
