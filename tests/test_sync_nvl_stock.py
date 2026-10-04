@@ -370,6 +370,89 @@ class SyncNVLStockTests(unittest.TestCase):
         self.assertIn("customXml/item2.xml", part_names)
         self.assertIn("docProps/core.xml", part_names)
 
+    def _verify_item_props_change(self, item_xml, props_before, props_after):
+        """Workbook có customXml/item3.xml + itemProps3.xml; server chỉ đổi itemProps3."""
+        cfg = make_mock_config()
+        rows = [("VT001", 50)]
+        base = BytesIO()
+        with zipfile.ZipFile(BytesIO(make_mock_target_bytes(rows)), "r") as z_in, zipfile.ZipFile(base, "w") as z_out:
+            for item in z_in.infolist():
+                z_out.writestr(item, z_in.read(item.filename))
+            z_out.writestr("customXml/item3.xml", item_xml)
+            z_out.writestr("customXml/itemProps3.xml", props_before)
+        target_bytes = base.getvalue()
+
+        rec = reconcile_nvl_target(target_bytes, {"VT001": 100}, cfg)
+        patched_bytes = patch_nvl_destination_workbook(target_bytes, rec, cfg)
+        server = BytesIO()
+        with zipfile.ZipFile(BytesIO(patched_bytes), "r") as z_in, zipfile.ZipFile(server, "w") as z_out:
+            for item in z_in.infolist():
+                data = props_after if item.filename == "customXml/itemProps3.xml" else z_in.read(item.filename)
+                z_out.writestr(item, data)
+        return verify_nvl_patched_workbook(
+            target_bytes, server.getvalue(), rec, cfg, is_server_comparison=True
+        )
+
+    @staticmethod
+    def _props(item_id, refs=""):
+        return (
+            "<?xml version='1.0' encoding='UTF-8' standalone='no'?>"
+            "<ds:datastoreItem ds:itemID='{%s}' "
+            "xmlns:ds='http://schemas.openxmlformats.org/officeDocument/2006/customXml'>"
+            "<ds:schemaRefs>%s</ds:schemaRefs></ds:datastoreItem>" % (item_id, refs)
+        ).encode()
+
+    def test_server_comparison_allows_item_props_with_empty_schema_refs(self):
+        """SharePoint đổi itemID của itemProps3 (schemaRefs rỗng) cho item customXsn."""
+        item = b"<customXsn xmlns='http://schemas.microsoft.com/office/2006/metadata/customXsn'><xsnLocation/></customXsn>"
+        res = self._verify_item_props_change(
+            item,
+            self._props("11111111-AAAA-4AAA-8AAA-111111111111"),
+            self._props("22222222-BBBB-4BBB-8BBB-222222222222"),
+        )
+        self.assertTrue(res["ok"])
+        self.assertIn("customXml/itemProps3.xml", [ep["part"] for ep in res["exempted_parts"]])
+
+    def test_server_comparison_allows_item_props_with_guid_only_schema_ref(self):
+        """schemaRef chỉ là GUID cột thư viện; item3 là p:properties của SharePoint."""
+        item = (
+            b"<p:properties xmlns:p='http://schemas.microsoft.com/office/2006/metadata/properties'>"
+            b"<documentManagement/></p:properties>"
+        )
+        ref = "<ds:schemaRef ds:uri='3f1b2c4d-0000-4000-8000-1234567890ab'/>"
+        res = self._verify_item_props_change(
+            item,
+            self._props("11111111-AAAA-4AAA-8AAA-111111111111", ref),
+            self._props("22222222-BBBB-4BBB-8BBB-222222222222", ref),
+        )
+        self.assertTrue(res["ok"])
+
+    def test_server_comparison_blocks_item_props_carrying_data(self):
+        """itemProps chứa phần tử/dữ liệu ngoài schemaRefs thì không được miễn trừ."""
+        item = b"<customXsn xmlns='http://schemas.microsoft.com/office/2006/metadata/customXsn'/>"
+        tampered = self._props("22222222-BBBB-4BBB-8BBB-222222222222").replace(
+            b"</ds:datastoreItem>", b"<ds:payload>VT001=999</ds:payload></ds:datastoreItem>"
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            self._verify_item_props_change(
+                item, self._props("11111111-AAAA-4AAA-8AAA-111111111111"), tampered
+            )
+        self.assertIn("customXml/itemProps3.xml", str(ctx.exception))
+
+    def test_server_comparison_blocks_item_props_for_non_sharepoint_item(self):
+        """schemaRefs rỗng nhưng item3 không phải metadata SharePoint thì vẫn chặn, kèm chi tiết."""
+        item = b"<userPayload xmlns='http://mycorp.com/schema'><data>100</data></userPayload>"
+        with self.assertRaises(RuntimeError) as ctx:
+            self._verify_item_props_change(
+                item,
+                self._props("11111111-AAAA-4AAA-8AAA-111111111111"),
+                self._props("22222222-BBBB-4BBB-8BBB-222222222222"),
+            )
+        message = str(ctx.exception)
+        self.assertIn("Phần tử không liên quan 'customXml/itemProps3.xml'", message)
+        self.assertIn("[trước:", message)
+        self.assertIn("22222222-BBBB", message)
+
     def test_server_comparison_blocks_unrelated_customxml_tampering(self):
         """Dù is_server_comparison=True, nếu customXml không phải SharePoint metadata (VD: dữ liệu ứng dụng riêng) bị sửa thì phải chặn."""
         cfg = make_mock_config()

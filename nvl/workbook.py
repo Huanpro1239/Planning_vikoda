@@ -130,7 +130,70 @@ SHAREPOINT_METADATA_NAMESPACES = (
     "http://schemas.microsoft.com/office/2006/metadata/properties/metaAttributes",
     "http://schemas.microsoft.com/sharepoint/v3/contenttype/forms",
     "http://schemas.microsoft.com/sharepoint/",
+    "http://schemas.microsoft.com/office/2006/metadata/customXsn",
+    "http://schemas.microsoft.com/office/2006/metadata/longProperties",
+    "http://schemas.microsoft.com/office/infopath/2007/PartnerControls",
 )
+
+
+def _metadata_diff_detail(name: str, orig_raw: bytes, patch_raw: bytes) -> str:
+    """Nội dung rút gọn của part metadata (customXml/docProps) để chẩn đoán trong log."""
+    lowered = name.strip("/").lower()
+    if not (lowered.startswith("customxml/") or lowered.startswith("docprops/")):
+        return ""
+
+    def _short(raw: bytes) -> str:
+        text = raw.decode("utf-8", errors="replace").replace("\n", " ")
+        return text[:600] + ("…" if len(text) > 600 else "")
+
+    return f" [trước: {_short(orig_raw)}] [sau: {_short(patch_raw)}]"
+
+
+def _is_pure_datastore_item(root, ds_ns: str) -> bool:
+    """ds:datastoreItem chỉ gồm ds:schemaRefs/ds:schemaRef rỗng, không text dữ liệu."""
+    allowed_attrs = {f"{{{ds_ns}}}itemID", "itemID", f"{{{ds_ns}}}uri", "uri"}
+    for el in root.iter():
+        if not isinstance(el.tag, str):
+            continue  # comment / processing instruction
+        if el is not root and el.tag not in (
+            f"{{{ds_ns}}}schemaRefs",
+            f"{{{ds_ns}}}schemaRef",
+        ):
+            return False
+        if (el.text or "").strip() or (el is not root and (el.tail or "").strip()):
+            return False
+        if any(attr not in allowed_attrs for attr in el.attrib):
+            return False
+    return True
+
+
+def _sibling_item_sharepoint_namespace(name: str, z_orig, z_patch) -> str | None:
+    """Namespace SharePoint của customXml/itemN.xml đi cùng customXml/itemPropsN.xml."""
+    match = re.fullmatch(r"customxml/itemprops(\d+)\.xml", name.strip("/").lower())
+    if not match:
+        return None
+    item_name = f"customXml/item{match.group(1)}.xml"
+    for z in (z_orig, z_patch):
+        names = {n.lower(): n for n in z.namelist()}
+        real = names.get(item_name.lower())
+        if real is None:
+            return None
+        try:
+            root = etree.fromstring(z.read(real))
+        except Exception:
+            return None
+        candidates = [root.tag, *(str(v) for v in root.nsmap.values())]
+        found = next(
+            (
+                sp_ns
+                for sp_ns in SHAREPOINT_METADATA_NAMESPACES
+                if any(sp_ns in c for c in candidates)
+            ),
+            None,
+        )
+        if found is None:
+            return None
+    return found
 
 
 def identify_sharepoint_metadata_exemption(
@@ -186,13 +249,26 @@ def identify_sharepoint_metadata_exemption(
         # 2a. Trường hợp itemProps*.xml (ds:datastoreItem)
         ds_ns = "http://schemas.openxmlformats.org/officeDocument/2006/customXml"
         if root_orig.tag == f"{{{ds_ns}}}datastoreItem" and root_patch.tag == f"{{{ds_ns}}}datastoreItem":
-            schema_refs = root_orig.findall(f".//{{{ds_ns}}}schemaRef")
+            # itemProps chỉ là con trỏ (itemID + danh sách schemaRef), không thể chứa dữ liệu.
+            # Bắt buộc cả hai phiên bản đúng cấu trúc thuần đó mới xét miễn trừ.
+            if not (
+                _is_pure_datastore_item(root_orig, ds_ns)
+                and _is_pure_datastore_item(root_patch, ds_ns)
+            ):
+                return None
             matched_ns = None
-            for sref in schema_refs:
-                uri = sref.get(f"{{{ds_ns}}}uri") or sref.get("uri") or ""
-                if any(sp_ns in uri for sp_ns in SHAREPOINT_METADATA_NAMESPACES):
-                    matched_ns = uri
+            for root in (root_orig, root_patch):
+                for sref in root.findall(f".//{{{ds_ns}}}schemaRef"):
+                    uri = sref.get(f"{{{ds_ns}}}uri") or sref.get("uri") or ""
+                    if any(sp_ns in uri for sp_ns in SHAREPOINT_METADATA_NAMESPACES):
+                        matched_ns = uri
+                        break
+                if matched_ns:
                     break
+            if not matched_ns:
+                # SharePoint có thể ghi itemProps với schemaRefs rỗng hoặc chỉ GUID của cột
+                # thư viện; khi đó xác thực qua customXml/itemN.xml cùng số thứ tự.
+                matched_ns = _sibling_item_sharepoint_namespace(name, z_orig, z_patch)
             if matched_ns:
                 return {
                     "part": name,
@@ -358,6 +434,7 @@ def verify_nvl_patched_workbook(
                             continue
                     raise RuntimeError(
                         f"Phần tử không liên quan '{name}' trong file ZIP bị thay đổi ngoài ý muốn!"
+                        + _metadata_diff_detail(name, orig_raw, patch_raw)
                     )
 
         # Kiểm tra không có phần tử lạ xuất hiện trong z_patch ngoài các metadata hợp lệ
