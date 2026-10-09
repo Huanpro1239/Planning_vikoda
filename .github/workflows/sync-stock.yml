@@ -149,3 +149,12 @@ jobs:
           git commit -m "chore: record planning release ${RELEASE_ID}"
           git pull --rebase origin runtime-state
           git push origin HEAD:runtime-state
+
+      # GITHUB_TOKEN-dispatched Planning workflow_run cannot reliably
+      # trigger another workflow_run. Explicit dispatch is the bridge.
+      # Only send after successful publish AND immutable state persist.
+      - name: Dispatch paired NVL for SharePoint event Planning
+        if: ${{ success() && github.event_name == 'repository_dispatch' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -X utf8 scripts/dispatch_planning_nvl.py
