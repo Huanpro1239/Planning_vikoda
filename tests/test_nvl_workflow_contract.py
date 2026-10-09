@@ -27,7 +27,10 @@ class NVLWorkflowContractTests(unittest.TestCase):
             "github.event.workflow_run.event == 'schedule'",
             self.text,
         )
-        self.assertIn(
+        # SharePoint-origin Planning uses an explicit dispatch, not a
+        # second workflow_run (suppressed when sourced from GITHUB_TOKEN).
+        self.assertIn("planning_nvl_published", self.text)
+        self.assertNotIn(
             "github.event.workflow_run.event == 'repository_dispatch'",
             self.text,
         )

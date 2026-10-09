@@ -49,12 +49,17 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
             "github.event.workflow_run.event == 'schedule'",
             workflow,
         )
-        self.assertIn(
+        self.assertIn("planning_nvl_published", workflow)
+        self.assertNotIn(
             "github.event.workflow_run.event == 'repository_dispatch'",
             workflow,
         )
         self.assertIn(
-            "github.event.workflow_run.head_sha || github.sha",
+            "github.event.workflow_run.head_sha ||",
+            workflow,
+        )
+        self.assertIn(
+            "github.event.client_payload.planning_head_sha",
             workflow,
         )
 
@@ -90,26 +95,19 @@ class NVLReadinessGateWiringTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "sync-nvl-stock.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn(
-            "NVL_RELEASE_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}",
-            workflow,
-        )
-        self.assertIn(
-            "NVL_UPSTREAM_PLANNING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}",
-            workflow,
-        )
-        self.assertIn(
-            "NVL_UPSTREAM_PLANNING_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}",
-            workflow,
-        )
-        self.assertIn(
-            "NVL_UPSTREAM_PLANNING_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}",
-            workflow,
-        )
-        self.assertIn(
-            "NVL_UPSTREAM_PLANNING_WORKFLOW: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}",
-            workflow,
-        )
+        for field in (
+            "NVL_RELEASE_COMMIT_SHA:",
+            "NVL_UPSTREAM_PLANNING_RUN_ID:",
+            "NVL_UPSTREAM_PLANNING_HEAD_SHA:",
+            "NVL_UPSTREAM_PLANNING_EVENT:",
+            "NVL_UPSTREAM_PLANNING_WORKFLOW:",
+            "NVL_UPSTREAM_PLANNING_RELEASE_ID:",
+        ):
+            self.assertIn(field, workflow)
+        self.assertIn("github.event.client_payload.planning_run_id", workflow)
+        self.assertIn("github.event.client_payload.planning_head_sha", workflow)
+        self.assertIn("github.event.client_payload.planning_event", workflow)
+        self.assertIn("scripts/verify_planning_dispatch.py", workflow)
 
     def test_release_manifest_is_recorded_after_publish_and_persisted_state_only(self):
         workflow = (
