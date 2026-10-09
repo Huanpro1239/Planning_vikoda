@@ -6,6 +6,9 @@ on:
       - Sync SharePoint NVL Stock
     types:
       - completed
+  repository_dispatch:
+    types:
+      - planning_nvl_completed
   schedule:
     # 06:45 AM VN (UTC+7) = 23:45 UTC ngày trước.
     - cron: "45 23 * * *"
