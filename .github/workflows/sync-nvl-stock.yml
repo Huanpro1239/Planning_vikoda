@@ -1,5 +1,5 @@
 name: Sync SharePoint NVL Stock
-run-name: ${{ github.event_name == 'workflow_run' && format('NVL paired planning={0} sha={1} event={2}', github.event.workflow_run.id, github.event.workflow_run.head_sha, github.event.workflow_run.event) || format('NVL direct event={0} sha={1}', github.event_name, github.sha) }}
+run-name: ${{ github.event_name == 'workflow_run' && format('NVL paired planning={0} sha={1} event={2}', github.event.workflow_run.id, github.event.workflow_run.head_sha, github.event.workflow_run.event) || (github.event_name == 'repository_dispatch' && github.event.action == 'planning_nvl_published' && format('NVL paired planning={0} sha={1} event={2}', github.event.client_payload.planning_run_id, github.event.client_payload.planning_head_sha, github.event.client_payload.planning_event)) || format('NVL direct event={0} sha={1}', github.event_name, github.sha) }}
 
 on:
   workflow_run:
@@ -26,6 +26,7 @@ on:
         default: false
   repository_dispatch:
     types:
+      - planning_nvl_published
       - sharepoint_nvl_updated
       - nvl_stock_updated
       - nvl_open_po_updated
@@ -46,8 +47,7 @@ jobs:
         (
           github.event.workflow_run.conclusion == 'success' &&
           (
-            github.event.workflow_run.event == 'schedule' ||
-            github.event.workflow_run.event == 'repository_dispatch'
+            github.event.workflow_run.event == 'schedule'
           )
         )
       }}
@@ -58,17 +58,18 @@ jobs:
       MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
       MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
       MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
-      NVL_RELEASE_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-      NVL_UPSTREAM_PLANNING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
-      NVL_UPSTREAM_PLANNING_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
-      NVL_UPSTREAM_PLANNING_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || '' }}
-      NVL_UPSTREAM_PLANNING_WORKFLOW: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}
+      NVL_RELEASE_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || (github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_head_sha) || github.sha }}
+      NVL_UPSTREAM_PLANNING_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || (github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_run_id) || '' }}
+      NVL_UPSTREAM_PLANNING_HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || (github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_head_sha) || '' }}
+      NVL_UPSTREAM_PLANNING_EVENT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event || (github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_event) || '' }}
+      NVL_UPSTREAM_PLANNING_WORKFLOW: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || (github.event.action == 'planning_nvl_published' && 'Sync SharePoint Stock') || '' }}
+      NVL_UPSTREAM_PLANNING_RELEASE_ID: ${{ github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_release_id || '' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || (github.event.action == 'planning_nvl_published' && github.event.client_payload.planning_head_sha) || github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -92,6 +93,12 @@ jobs:
           ref: runtime-state
           path: .runtime-state
 
+      - name: Verify upstream published Planning identity
+        if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'planning_nvl_published' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -X utf8 scripts/verify_planning_dispatch.py
+
       - name: Clean test artifacts from workspace
         run: |
           rm -f nvl_stock_proposal.xlsx nvl_stock_report.json nvl_release_manifest.json nvl_release_index.json nvl_release_index.csv nvl_operational_summary.json audit_summary.json staging_copy_info.json official_backup_* official_target_backup_info.json nvl_open_po_proposal.xlsx nvl_open_po_report.json
@@ -107,8 +114,8 @@ jobs:
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.ensure_staging_copy) }}
         shell: bash
         env:
-          # workflow_run chỉ được job-level guard cho phép khi Planning schedule/
-          # repository_dispatch đã PASS; repository_dispatch là production tự động.
+          # workflow_run cho Planning schedule đã PASS;
+          # Planning repository_dispatch dùng explicit planning_nvl_published.
           # workflow_dispatch vẫn mặc định proposal-only trừ khi người dùng bật publish=true.
           REQUEST_PUBLISH: ${{ (github.event_name == 'workflow_run' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'true' || 'false' }}
           CONFIG_FILE: ${{ (github.event_name == 'workflow_dispatch' && inputs.config_file) || 'nvl_stock_config.json' }}
@@ -204,3 +211,41 @@ jobs:
             official_target_backup_info.json
           if-no-files-found: warn
           retention-days: 14
+
+      # GITHUB_TOKEN-origin NVL may not produce transitive workflow_run.
+      # Explicit health dispatch preserves event-driven monitoring.
+      - name: Notify paired-run health after NVL dispatch
+        if: ${{ always() && github.event_name == 'repository_dispatch' && github.event.action == 'planning_nvl_published' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          UPSTREAM_RUN_ID: ${{ github.event.client_payload.planning_run_id }}
+          NVL_RUN_ID: ${{ github.run_id }}
+          NVL_JOB_STATUS: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          payload = {
+              "event_type": "planning_nvl_completed",
+              "client_payload": {
+                  "planning_run_id": os.environ["UPSTREAM_RUN_ID"],
+                  "nvl_run_id": os.environ["NVL_RUN_ID"],
+                  "nvl_job_status": os.environ["NVL_JOB_STATUS"],
+              },
+          }
+          r = requests.post(
+              f"https://api.github.com/repos/{os.environ['GH_REPOSITORY']}/dispatches",
+              json=payload,
+              headers={
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+              timeout=30,
+          )
+          if r.status_code != 204:
+              raise RuntimeError(f"Health dispatch HTTP {r.status_code}: {r.text[:300]}")
+          print("[NVL] Paired health dispatched for NVL run=" + os.environ["NVL_RUN_ID"])
+          PY
