@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from pathlib import Path
 
 import requests
@@ -10,6 +12,8 @@ import requests
 
 def validate_release(manifest, *, planning_run_id, head_sha, event, release_id):
     commit = manifest.get("commit") or {}
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,200}", release_id):
+        raise ValueError("Invalid Planning release_id")
     if not str(planning_run_id).isdigit():
         raise ValueError("Invalid Planning run_id")
     if len(head_sha) != 40 or any(c not in "0123456789abcdef" for c in head_sha.lower()):
@@ -50,24 +54,32 @@ def main():
         event=event,
         release_id=release_id,
     )
-    response = requests.get(
-        f"https://api.github.com/repos/{repo}/actions/runs/{run_id}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    run = response.json()
-    if (
-        run.get("name") != "Sync SharePoint Stock"
-        or run.get("status") != "completed"
-        or run.get("conclusion") != "success"
-        or run.get("event") != event
-        or run.get("head_sha") != sha
-    ):
-        raise ValueError("Upstream Planning run identity/status does not match release")
+    # Dispatch is emitted at the end of the Planning job, before post-job
+    # cleanup; GitHub may not yet mark the workflow run completed.
+    for attempt in range(12):
+        response = requests.get(
+            f"https://api.github.com/repos/{repo}/actions/runs/{run_id}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        run = response.json()
+        if (
+            run.get("name") != "Sync SharePoint Stock"
+            or run.get("event") != event
+            or run.get("head_sha") != sha
+        ):
+            raise ValueError("Upstream Planning run identity does not match release")
+        if run.get("status") == "completed":
+            if run.get("conclusion") != "success":
+                raise ValueError("Upstream Planning workflow did not succeed")
+            break
+        if attempt == 11:
+            raise RuntimeError("Upstream Planning has not completed after grace")
+        time.sleep(10)
     print(f"[NVL-PAIR] Verified Planning run={run_id} sha={sha} event={event}")
 
 
