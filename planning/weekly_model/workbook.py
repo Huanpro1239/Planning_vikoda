@@ -8,6 +8,7 @@ from datetime import date
 from io import BytesIO
 
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font
 
 from .inputs import EPS, PLANNING_SHEET, START_COLUMN
 from .schedule import (
@@ -16,6 +17,44 @@ from .schedule import (
     committed_qty,
     scheduled_by_code,
 )
+
+
+def _write_shortfall_notes(workbook, analysis, committed):
+    name = "Ghi_chu_Planning"
+    if name in workbook.sheetnames:
+        del workbook[name]
+    notes = workbook.create_sheet(name)
+    notes.append(["Kỳ kế hoạch", "Mã sản phẩm", "Tên sản phẩm", "ĐVT",
+                  "Mục tiêu SX", "Đã xếp SX", "Thiếu bán hàng/nợ",
+                  "Thiếu tồn an toàn", "Ghi chú"])
+    for calc in analysis.calculated:
+        done = committed_qty(calc, committed)
+        service_missing = max(0.0, calc.service_qty - done)
+        buffer_missing = max(0.0, calc.buffer_qty - max(0.0, done - calc.service_qty))
+        if service_missing <= 1e-5 and buffer_missing <= 1e-5:
+            continue
+        parts = []
+        if service_missing > 1e-5:
+            parts.append(f"Thiếu bán hàng/nợ: {service_missing:,.2f} {calc.input.don_vi_tinh}")
+        if buffer_missing > 1e-5:
+            parts.append(f"Thiếu tồn an toàn: {buffer_missing:,.2f} {calc.input.don_vi_tinh}")
+        notes.append([f"{analysis.period_year}-{analysis.period_month:02d}",
+                      str(calc.input.ma_sp), calc.input.ten_sp, calc.input.don_vi_tinh,
+                      calc.schedulable_qty, done, service_missing, buffer_missing,
+                      "; ".join(parts) + ". Vẫn chạy theo lịch đã xếp; phần thiếu chưa được xếp SX."])
+    notes.freeze_panes = "A2"
+    notes.auto_filter.ref = notes.dimensions
+    for cell in notes[1]:
+        cell.font = Font(bold=True)
+    for column in "ABCDEFGH":
+        notes.column_dimensions[column].width = 22
+    notes.column_dimensions["C"].width = 42
+    notes.column_dimensions["I"].width = 85
+    for cells in notes.iter_rows(min_row=2):
+        cells[8].alignment = Alignment(wrap_text=True, vertical="top")
+        notes.row_dimensions[cells[0].row].height = 45
+        for cell in cells[4:8]:
+            cell.number_format = "#,##0.00"
 
 
 def patch_weekly_workbook(
@@ -95,6 +134,7 @@ def patch_weekly_workbook(
                     else None
                 )
 
+        _write_shortfall_notes(workbook, analysis, committed)
         output = BytesIO()
         workbook.save(output)
         return output.getvalue()
