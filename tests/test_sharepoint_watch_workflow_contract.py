@@ -36,6 +36,17 @@ class SharePointWatchWorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("planning.publish --publish", self.watch)
 
+    def test_planning_runs_on_input_change_not_fixed_time(self):
+        # Planning chạy khi input SharePoint đổi, không chạy theo giờ cố định.
+        self.assertNotIn("schedule:", self.planning)
+        self.assertNotIn("cron:", self.planning)
+        self.assertIn("repository_dispatch:", self.planning)
+        self.assertIn("workflow_dispatch:", self.planning)
+
+    def test_skipped_unchanged_event_does_not_fail_state_save(self):
+        self.assertIn('d.get("state") == "skipped_unchanged"', self.planning)
+        self.assertIn("test -f planning_release_manifest.json", self.planning)
+
     def test_planning_listener_keeps_skip_if_unchanged(self):
         self.assertIn("sharepoint_stock_updated", self.planning)
         self.assertIn('EXTRA_FLAGS="--skip-if-unchanged"', self.planning)
