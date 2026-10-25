@@ -5,7 +5,7 @@
     "ref": "refs/heads/main",
     "repository": "Huanpro1239/Planning_vikoda",
     "run_attempt": "1",
-    "run_id": "40048678870",
+    "run_id": "40147345231",
     "sha": "4d21ea54fd55977ec3e26c2a83c521c7cb876a8a",
     "workflow": "Sync SharePoint Stock"
   },
@@ -49,11 +49,11 @@
       }
     },
     "target": {
-      "etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},184\"",
+      "etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},185\"",
       "item_id": "01EX3DDZGDKHPGY5HLMJAJKFWC3IVMHDEL",
-      "last_modified": "2026-10-23T01:04:10Z",
+      "last_modified": "2026-10-24T01:13:10Z",
       "path": "Tinh san xuat Mua hang 2027/Sắp kế hoạch.xlsx",
-      "sha256": "b499c25d8e8a5468e28378d7ca80a39d925fbd976a4dc491200b0a8dee0d2b19"
+      "sha256": "bf88bb7a5d115e3acdc2cffd26147c0ee5e62cd06a9aa1767eebe348aff5358f"
     }
   },
   "pipeline_fingerprints": {
@@ -65,33 +65,33 @@
   },
   "plan_month": "2026-10",
   "proposal": {
-    "output_sha256": "5eab83bdf433a972227b2b2ca8bdc2bd70cc69e8f7e001d12986ba4f8cfe7cc7",
-    "proposal_id": "a5e6ee780fe1c8dd920c3503f23966912438c21fb0c990337617a828e1e8f746",
+    "output_sha256": "abeb0cee866b970fd34be4a84f45ebbfbae17eacfb211f638cad3dfa635f0a52",
+    "proposal_id": "6ec25043345eb7a7450acfa50ce748cc415a859461b8001c43ffa157022936c0",
     "stable_output_sha256": "43910e730cc931139c8b4d97f2d6c3bc9db2ef62c88dfe4405bee503a0b2e44a"
   },
   "publish_decision": {
     "basis": "review_approval",
-    "proposal_id": "a5e6ee780fe1c8dd920c3503f23966912438c21fb0c990337617a828e1e8f746",
+    "proposal_id": "6ec25043345eb7a7450acfa50ce748cc415a859461b8001c43ffa157022936c0",
     "publish_status": "review_required",
     "publisher": "daily-schedule",
     "review_approval": {
       "approved_by": "auto-policy:capacity-shortfall",
       "auto": true,
-      "proposal_id": "a5e6ee780fe1c8dd920c3503f23966912438c21fb0c990337617a828e1e8f746",
+      "proposal_id": "6ec25043345eb7a7450acfa50ce748cc415a859461b8001c43ffa157022936c0",
       "reason": "[Tự động] Kế hoạch 2026-10: đã dùng hết công suất máy nhưng vẫn thiếu hàng phục vụ bán: 130100011 thiếu 21.600 Thùng; 130100017 thiếu 12.000 Thùng; 130100110 thiếu 56.333 Thùng. Publish sản lượng tối đa có thể; phần thiếu cần xử lý (tăng ca/công suất, điều chỉnh FC hoặc chuyển sang tháng sau)."
     },
     "state": "published",
-    "target_etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},184\""
+    "target_etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},185\""
   },
-  "published_at": "2026-10-24T01:13:10.964008+00:00",
+  "published_at": "2026-10-25T00:37:37.166259+00:00",
   "readiness": {
     "gate_version": "production_readiness_v1",
     "git_sha": "4d21ea54fd55977ec3e26c2a83c521c7cb876a8a",
-    "report_sha256": "af479af73dd80c8d29cdfe5c426276d058560e930d09299906d06ff9b2ea29d6",
+    "report_sha256": "357356f2851a2b8c62999004b5158cfb49185fb2513f4c290d39a6ca8a587de7",
     "status": "passed"
   },
-  "release_id": "2026-10-a5e6ee780fe1-gh-40048678870-1",
-  "release_version": "planning_release_manifest_v1.proposal-a5e6ee780fe1.run-40048678870.1",
+  "release_id": "2026-10-6ec25043345e-gh-40147345231-1",
+  "release_version": "planning_release_manifest_v1.proposal-6ec25043345e.run-40147345231.1",
   "schema": "planning_release_manifest_v1",
   "schema_version": 1
 }
