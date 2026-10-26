@@ -10,15 +10,15 @@
     }
   },
   "chain": {
-    "previous_manifest_sha256": "cc7e9fccfc75013353a5468d04ec46f8d12f89f9372f8fb22fdb185950827e03",
-    "previous_release_id": "nvl-a64ce9d187afbd83-gh-40048794188-1"
+    "previous_manifest_sha256": "73a9d26ad0585c7f289aa1921791eae82020a9e705e66568e3432de411585688",
+    "previous_release_id": "nvl-a64ce9d187afbd83-gh-40147434248-1"
   },
   "commit": {
     "actor": "Huanpro1239",
     "ref": "refs/heads/main",
     "repository": "Huanpro1239/Planning_vikoda",
     "run_attempt": "1",
-    "run_id": "40147434248",
+    "run_id": "40251079308",
     "sha": "4d21ea54fd55977ec3e26c2a83c521c7cb876a8a",
     "workflow": "Sync SharePoint NVL Stock"
   },
@@ -50,7 +50,7 @@
       "upload_result": null
     }
   },
-  "published_at": "2026-10-25T00:38:44.335744+00:00",
+  "published_at": "2026-10-26T00:48:39.509714+00:00",
   "published_workbook": {
     "post_upload_verified": true,
     "proposal_sha256": "5e3aa5e9942723f73efbfd15300eea46e70ab2d81f9d20a4c4a0ec423d8ebfae",
@@ -60,17 +60,17 @@
   "readiness": {
     "gate_version": "nvl_production_readiness_v1",
     "git_sha": "4d21ea54fd55977ec3e26c2a83c521c7cb876a8a",
-    "report_sha256": "f6d233e223daf9b80b1706380126d5fcdc74f06148c50ab4f86cc5d52352a761",
+    "report_sha256": "abb18ddc196f4880860b7151ab379fdfe8d8340ee54d66c94047058df3579ec8",
     "status": "passed"
   },
-  "release_id": "nvl-a64ce9d187afbd83-gh-40147434248-1",
-  "release_version": "nvl_release_manifest_v1.workbook-a64ce9d187afbd83.run-40147434248.1",
+  "release_id": "nvl-a64ce9d187afbd83-gh-40251079308-1",
+  "release_version": "nvl_release_manifest_v1.workbook-a64ce9d187afbd83.run-40251079308.1",
   "schema": "nvl_release_manifest_v1",
   "schema_version": 1,
   "upstream_planning": {
     "event": "schedule",
     "head_sha": "4d21ea54fd55977ec3e26c2a83c521c7cb876a8a",
-    "run_id": "40147345231",
+    "run_id": "40250997952",
     "workflow": "Sync SharePoint Stock"
   }
 }
