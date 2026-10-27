@@ -36,16 +36,83 @@ from .constants import (
 )
 
 
+def _parse_report_date(value):
+    """Parse explicit report-period dates, never incidental schedule headings.
+
+    Real warehouse reports use text such as '23-24/10/2026' in I2.
+    The *ending* day is the observation date; do not use today's date.
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    # The first day shares the same month/year as the closing day.
+    period = re.fullmatch(
+        r"(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[/.-]\s*"
+        r"(\d{1,2})\s*[/.-]\s*(\d{4})",
+        text,
+    )
+    if period:
+        start_day, end_day, month, year = map(int, period.groups())
+        try:
+            start = date(year, month, start_day)
+            end = date(year, month, end_day)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Kỳ báo cáo tồn thực tế không hợp lệ: {text!r}."
+            ) from exc
+        if start > end:
+            raise RuntimeError(
+                f"Khoảng ngày báo cáo ngược thứ tự: {text!r}."
+            )
+        return end
+
+    single = re.fullmatch(
+        r"(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})",
+        text,
+    )
+    if single:
+        day, month, year = map(int, single.groups())
+        try:
+            return date(year, month, day)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Ngày báo cáo tồn thực tế không hợp lệ: {text!r}."
+            ) from exc
+    return None
+
+
 def find_report_date(worksheet):
+    # The real warehouse source stores its reporting period in I2.
+    # Prefer this over a later "KẾ HOẠCH XUẤT KHO dd/mm/yyyy" heading.
+    preferred = worksheet["I2"].value
+    parsed = _parse_report_date(preferred)
+    if parsed is not None:
+        return parsed
+
+    # Compatibility with older templates that used a native Excel date
+    # elsewhere in the top six rows, or a standalone header date string.
     for row in range(1, min(worksheet.max_row, 6) + 1):
         for column in range(1, min(worksheet.max_column, 20) + 1):
+            if row == 2 and column == 9:
+                continue
             value = worksheet.cell(row=row, column=column).value
-            if isinstance(value, datetime):
-                return value.date()
-            if isinstance(value, date):
-                return value
+            if isinstance(value, (datetime, date)) or (
+                row <= 2 and isinstance(value, str)
+            ):
+                parsed = _parse_report_date(value)
+                if parsed is not None:
+                    return parsed
 
-    raise RuntimeError("Không tìm thấy ngày báo cáo trong file tồn thực tế.")
+    raise RuntimeError(
+        "Không tìm thấy ngày báo cáo trong file tồn thực tế "
+        f"(ô I2={preferred!r}; mong đợi ngày Excel hoặc "
+        "'dd/mm/yyyy', 'dd-mm-yyyy', 'dd-dd/mm/yyyy')."
+    )
 
 
 def read_actual_inputs(source_bytes):
