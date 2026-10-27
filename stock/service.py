@@ -152,8 +152,9 @@ def main():
         source_name="XNT_ketoan_VKD.xlsm",
         sheet_name="Sheet1",
         code_column=2,
-        value_column=13,
-        value_column_letter="M",
+        # VKD export: K = ending stock, L = converted qty, M = warehouse name.
+        value_column=11,
+        value_column_letter="K",
         vkd_to_vikoda=True,
     )
 
