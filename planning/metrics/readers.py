@@ -52,8 +52,8 @@ def _parse_report_date(value):
     text = value.strip()
     # The first day shares the same month/year as the closing day.
     period = re.fullmatch(
-        r"(\\d{1,2})\\s*[-–—]\\s*(\\d{1,2})\\s*[/.-]\\s*"
-        r"(\\d{1,2})\\s*[/.-]\\s*(\\d{4})",
+        r"(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[/.-]\s*"
+        r"(\d{1,2})\s*[/.-]\s*(\d{4})",
         text,
     )
     if period:
@@ -72,7 +72,7 @@ def _parse_report_date(value):
         return end
 
     single = re.fullmatch(
-        r"(\\d{1,2})\\s*[/.-]\\s*(\\d{1,2})\\s*[/.-]\\s*(\\d{4})",
+        r"(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{4})",
         text,
     )
     if single:
