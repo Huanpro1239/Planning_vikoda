@@ -5,105 +5,52 @@
       "stable_sha256": "4ca8998b5a70875c18ce819077e9622f70bc9af36bd54f6bd0bc1be78d9a0f06"
     },
     "stock_proposal": {
-      "sha256": "f7c601c25c7dbd8ab703b206ee46bd3b5662c4e209bf28322c81a8fbd7279fad",
-      "stable_sha256": "cf0e8cc40919f2afe4d1e7ca642ac2bc933df1154a5cdf52883ba5ba1a3148bd"
+      "sha256": "ab206599085db23ab75dc989c21a3ad5fd9ffc4fd3b9bf845dfe308557605fc8",
+      "stable_sha256": "4ca8998b5a70875c18ce819077e9622f70bc9af36bd54f6bd0bc1be78d9a0f06"
     }
   },
   "chain": {
-    "previous_manifest_sha256": "53b2eec644c6085e45d8a14aebcf2e41ec46ee0da00eb5aeb965752095941c1f",
-    "previous_release_id": "nvl-a64ce9d187afbd83-gh-40251079308-1"
+    "previous_manifest_sha256": "0feb4109e2c0229c5bff93034c5aa09e0eeda8b1188f44e87ec422c8fde086d4",
+    "previous_release_id": "nvl-4ca8998b5a70875c-gh-40470147412-1"
   },
   "commit": {
-    "actor": "github-actions[bot]",
+    "actor": "Huanpro1239",
     "ref": "refs/heads/main",
     "repository": "Huanpro1239/Planning_vikoda",
     "run_attempt": "1",
-    "run_id": "40470147412",
+    "run_id": "40617504685",
     "sha": "fc6f86d346bf8fdf1a9b21b74a10a7ecd96135f4",
     "workflow": "Sync SharePoint NVL Stock"
   },
   "input_revision": {
     "open_po_source_etag": "\"{1836226D-FB9D-4F8A-B6D5-3508A975936C},4\"",
     "open_po_target_etag_after": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
-    "open_po_target_etag_before": "\"{89D1BA7B-006E-4527-B879-ABF120309214},92\"",
+    "open_po_target_etag_before": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
     "stock_source_etag": "\"{23D52CF2-F11D-46CE-B01F-F3A15E2C9C4D},13\"",
-    "stock_target_etag_after": "\"{89D1BA7B-006E-4527-B879-ABF120309214},92\"",
-    "stock_target_etag_before": "\"{89D1BA7B-006E-4527-B879-ABF120309214},91\""
+    "stock_target_etag_after": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
+    "stock_target_etag_before": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\""
   },
   "publish_evidence": {
     "open_po": {
-      "changed_cells": 42,
+      "changed_cells": 0,
       "evidence": {
-        "expected_etag": "\"{89D1BA7B-006E-4527-B879-ABF120309214},92\"",
+        "expected_etag": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
         "post_upload_verified": true,
         "server_sha256": "ab206599085db23ab75dc989c21a3ad5fd9ffc4fd3b9bf845dfe308557605fc8",
         "target_revision_after": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
-        "upload_etag": "\"{89D1BA7B-006E-4527-B879-ABF120309214},93\"",
-        "upload_skipped": false
+        "upload_etag": null,
+        "upload_skipped": true
       },
       "published": true
     },
     "stock": {
-      "changed_count": 89,
+      "changed_count": 0,
       "post_upload_verified": true,
-      "status": "published_with_warnings",
-      "upload_result": {
-        "@microsoft.graph.downloadUrl": "https://vikodacomvn.sharepoint.com/sites/Planning/_layouts/15/download.aspx?UniqueId=89d1ba7b-006e-4527-b879-abf120309214&Translate=false&tempauth=v1.eyJzaXRlaWQiOiIxMDY4YWZkOC0xZDJmLTQ2YjEtYmEwNi1hYjhmYmMzYzg3ZGYiLCJhcHBfZGlzcGxheW5hbWUiOiJQbGFubmluZ192aWtvZGEiLCJuYW1laWQiOiI5YjI5MGQyOS00MWQ3LTQwNzUtYmE0My01MDhiYTVmMjc2NTZAMDc3NWQzM2UtOGI5Mi00NjYyLTkyYjctZGRmMjhhMjAwYTg0IiwiYXVkIjoiMDAwMDAwMDMtMDAwMC0wZmYxLWNlMDAtMDAwMDAwMDAwMDAwL3Zpa29kYWNvbXZuLnNoYXJlcG9pbnQuY29tQDA3NzVkMzNlLThiOTItNDY2Mi05MmI3LWRkZjI4YTIwMGE4NCIsImV4cCI6IjE3OTMwOTE0MjkifQ.CkQKDGVudHJhX2NsYWltcxI0Q0tDd2dkY0dFQUFhRmt4S1FWbHNMV1pXV2tWUGJXNWhXRnBDV21OT1FVRXFBREFBUUFJPQoyCgphY3RvcmFwcGlkEiQwMDAwMDAwMy0wMDAwLTAwMDAtYzAwMC0wMDAwMDAwMDAwMDAKCgoEc25pZBICNjQSCwjul7LwvYLaPxAFGg4yMC4xOTAuMTkwLjIyNCosRllBcmF1Y1R2aDFkaG9wNzRQclhpQmRKK0g1ejZ2UE1uM3VsT3hXNXl3Yz0wiQE4AUIQokjonJSwAIDuqB6OgWaq0UoQaGFzaGVkcHJvb2Z0b2tlbnoBMboBG3NlbGVjdGVkc2l0ZXMgYWxsZmlsZXMucmVhZMgBAQ.LRqjBCpDGWZzAv0Tl7v84uOD9rHrD47HR08OZp-06qQ&ApiVersion=2.0",
-        "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#drives('b%212K9oEC8dsUa6BquPvDyH35k3WNCRWItKlw8AJ2EKa5VahAhoPyTCQLc0Qsq_5UdO')/items/$entity",
-        "cTag": "\"c:{89D1BA7B-006E-4527-B879-ABF120309214},122\"",
-        "createdBy": {
-          "application": {
-            "displayName": "OneDrive SyncEngine",
-            "id": "ab9b8c07-8f02-4f72-87fa-80105867a763"
-          },
-          "user": {
-            "displayName": "Nguyễn Sĩ Huấn",
-            "email": "huan.ns@vikoda.com.vn",
-            "id": "bf9bb035-08da-4092-a64b-b4edb4dd8710"
-          }
-        },
-        "createdDateTime": "2026-09-08T07:47:14Z",
-        "eTag": "\"{89D1BA7B-006E-4527-B879-ABF120309214},92\"",
-        "file": {
-          "hashes": {
-            "quickXorHash": "qp+VyU7dgyUNvPT1TFL/zrfyk3s="
-          },
-          "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        },
-        "fileSystemInfo": {
-          "createdDateTime": "2026-09-08T07:47:14Z",
-          "lastModifiedDateTime": "2026-10-27T07:57:08Z"
-        },
-        "id": "01EX3DDZD3XLIYS3QAE5C3Q6NL6EQDBEQU",
-        "isAuthoritative": false,
-        "lastModifiedBy": {
-          "application": {
-            "displayName": "Planning_vikoda",
-            "id": "9b290d29-41d7-4075-ba43-508ba5f27656"
-          },
-          "user": {
-            "displayName": "Ứng dụng SharePoint"
-          }
-        },
-        "lastModifiedDateTime": "2026-10-27T07:57:08Z",
-        "name": "Kế hoạch mua hàng.xlsx",
-        "parentReference": {
-          "driveId": "b!2K9oEC8dsUa6BquPvDyH35k3WNCRWItKlw8AJ2EKa5VahAhoPyTCQLc0Qsq_5UdO",
-          "driveType": "documentLibrary",
-          "id": "01EX3DDZG5KKKFEOUPAZHLS4CG75VO2CBE",
-          "name": "Tinh san xuat Mua hang 2027",
-          "path": "/drives/b!2K9oEC8dsUa6BquPvDyH35k3WNCRWItKlw8AJ2EKa5VahAhoPyTCQLc0Qsq_5UdO/root:/Tinh san xuat Mua hang 2027",
-          "siteId": "1068afd8-1d2f-46b1-ba06-ab8fbc3c87df"
-        },
-        "shared": {
-          "scope": "users"
-        },
-        "size": 56441,
-        "webUrl": "https://vikodacomvn.sharepoint.com/sites/Planning/_layouts/15/Doc.aspx?sourcedoc=%7B89D1BA7B-006E-4527-B879-ABF120309214%7D&file=K%E1%BA%BF%20ho%E1%BA%A1ch%20mua%20h%C3%A0ng.xlsx&action=default&mobileredirect=true"
-      }
+      "status": "unchanged",
+      "upload_result": null
     }
   },
-  "published_at": "2026-10-27T07:57:22.436400+00:00",
+  "published_at": "2026-10-28T01:52:23.014873+00:00",
   "published_workbook": {
     "post_upload_verified": true,
     "proposal_sha256": "ab206599085db23ab75dc989c21a3ad5fd9ffc4fd3b9bf845dfe308557605fc8",
@@ -113,17 +60,17 @@
   "readiness": {
     "gate_version": "nvl_production_readiness_v1",
     "git_sha": "fc6f86d346bf8fdf1a9b21b74a10a7ecd96135f4",
-    "report_sha256": "bbe0e2822aea4998156ac32863f59cfecd1a51cbafd693736e2ebfd95d0ba804",
+    "report_sha256": "34f82238d7ec4cafdf3d81dadd6c816ca8fe067b3e8a5d99b39834d149dd3b60",
     "status": "passed"
   },
-  "release_id": "nvl-4ca8998b5a70875c-gh-40470147412-1",
-  "release_version": "nvl_release_manifest_v1.workbook-4ca8998b5a70875c.run-40470147412.1",
+  "release_id": "nvl-4ca8998b5a70875c-gh-40617504685-1",
+  "release_version": "nvl_release_manifest_v1.workbook-4ca8998b5a70875c.run-40617504685.1",
   "schema": "nvl_release_manifest_v1",
   "schema_version": 1,
   "upstream_planning": {
-    "event": "repository_dispatch",
+    "event": "schedule",
     "head_sha": "fc6f86d346bf8fdf1a9b21b74a10a7ecd96135f4",
-    "run_id": "40470003412",
+    "run_id": "40617363830",
     "workflow": "Sync SharePoint Stock"
   }
 }
