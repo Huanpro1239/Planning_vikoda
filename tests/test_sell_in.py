@@ -4,6 +4,7 @@ import unittest
 from openpyxl import Workbook, load_workbook
 
 from sell_in import build_workbook, doc_danh_muc, tong_hop_nhieu_file
+from sell_in.core import doc_fingerprint
 
 HEADER = ["Vung", "KhuVuc", "TinhThanh", "QuanHuyen", "LoaiHoaDon", "SoHoaDon", "NgayHoaDon",
           "DienGiaiHD", "Kho", "MaKhachHangCu", "MaKhachHangMoi", "TenKhachHang", "TrinhDuocVien",
@@ -64,6 +65,26 @@ class SellInTests(unittest.TestCase):
         self.assertEqual(rows[0][:2], ("MaVikoda", "MaVKD"))
         self.assertEqual(rows[1][0:2], ("130100110", "230100110"))
         self.assertEqual(rows[1][-2:], (30, 30))
+
+    def test_fingerprint_roundtrip_and_hidden_meta(self):
+        content, _, _ = build_workbook([], [], "abc123")
+        self.assertEqual(doc_fingerprint(io.BytesIO(content)), "abc123")
+        wb = load_workbook(io.BytesIO(content))
+        self.assertEqual(wb["Meta"].sheet_state, "hidden")
+
+    def test_vikoda_code_derived_when_formula_has_no_cache(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "DanhMucSanPham"
+        ws.append(["MaSanPhamMoi_Vikoda", "MaSanPhamMoi_VKD", "TenSanPham", "Tên viết tắt", "Quy cách",
+                   "ĐVT", "Brand", "SKUs Group"])
+        ws.append([None, 230100064, "Mega 500ml", "Kiềm Mega", 24, "Thùng", "Vikoda", "Pet Vikoda"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        dm = doc_danh_muc(buf)
+        self.assertIn("130100064", dm["Vikoda"])
+        self.assertEqual(dm["VKD"]["230100064"]["QuyCach"], 24)
 
 
 if __name__ == "__main__":
