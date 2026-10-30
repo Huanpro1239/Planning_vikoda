@@ -1,0 +1,52 @@
+name: Sync Sell In Tong Hop
+
+# Dựng lại "Planning App/Clean Data/Data ban hang/Tong_Hop_Ban_Hang.xlsx"
+# từ toàn bộ file "Planning App/Bao cao ban hang/Sell In" + Danh mục.
+# Power Automate flow "Sell In - tổng hợp bán hàng tự động" phát
+# repository_dispatch sharepoint_sell_in_updated khi có file Sell In mới/sửa.
+
+on:
+  repository_dispatch:
+    types:
+      - sharepoint_sell_in_updated
+  schedule:
+    # Chạy dự phòng 07:10 sáng VN (00:10 UTC) hàng ngày
+    - cron: "10 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: sharepoint-sell-in
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Rebuild Tong_Hop_Ban_Hang.xlsx
+        run: python -X utf8 -m sell_in
