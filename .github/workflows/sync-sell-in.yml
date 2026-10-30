@@ -4,14 +4,15 @@ name: Sync Sell In Tong Hop
 # từ toàn bộ file "Planning App/Bao cao ban hang/Sell In" + Danh mục.
 # Power Automate flow "Sell In - tổng hợp bán hàng tự động" phát
 # repository_dispatch sharepoint_sell_in_updated khi có file Sell In mới/sửa.
+# Lịch 15 phút là đường dự phòng, không cần Power Automate vẫn tự cập nhật.
 
 on:
   repository_dispatch:
     types:
       - sharepoint_sell_in_updated
   schedule:
-    # Chạy dự phòng 07:10 sáng VN (00:10 UTC) hàng ngày
-    - cron: "10 0 * * *"
+    # Kiểm tra mỗi 15 phút; chỉ dựng lại khi Sell In / Danh mục thay đổi
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -49,4 +50,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Rebuild Tong_Hop_Ban_Hang.xlsx
-        run: python -X utf8 -m sell_in
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            python -X utf8 -m sell_in --if-changed
+          else
+            python -X utf8 -m sell_in
+          fi
