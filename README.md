@@ -1,4 +1,4 @@
-# Planning_vikoda – Tổng hợp Sell In & Xuất kho
+# Planning_vikoda – Tổng hợp Sell In, Xuất kho & NXT kế toán
 
 Dựng lại `Planning App/Clean Data/Data ban hang/Tong_Hop_Ban_Hang.xlsx` trên SharePoint Planning
 từ toàn bộ file `Planning App/Bao cao ban hang/Sell In` và `Planning App/Danh muc/Danh Muc San Pham.xlsx`.
@@ -42,4 +42,22 @@ Dựng lại `Planning App/Clean Data/Data Xuat kho/Tong_Hop_Xuat_Kho.xlsx` từ
 
 ```bash
 python -X utf8 -m xuat_kho --dry-run
+```
+
+## NXT kế toán + tồn ký gửi (`nxt_ke_toan/`)
+
+Dựng lại `Planning App/Clean Data/Data NXT ke toan/Tong_Hop_NXT_Ke_Toan.xlsx` từ
+`Planning App/Bao cao ton kho/Ton ke toan/<Vikoda|VKD>/Thang N.xlsm` + `Bao cao xuat kho` + Danh mục,
+workflow `Sync NXT Ke Toan Tong Hop` (`.github/workflows/sync-nxt-ke-toan.yml`), kiểm tra mỗi 15 phút.
+
+- Thành phẩm (Vikoda, mã `1…`) / Hàng hóa (VKD, mã `2…`) quy đổi Thùng/Két/Bình, gộp 2 công ty theo đuôi mã; bỏ `130100014` / `230100014`.
+- Kế toán ghi "Chuyển qua kho ký gửi" là xuất → **Tồn thực = Tồn kế toán + Tồn ký gửi**;
+  Tồn ký gửi = đầu kỳ + chuyển vào ký gửi − xuất từ KHO KÝ GỬI (từ báo cáo Xuất kho).
+  Đầu kỳ ký gửi hiện là *ước tính tối thiểu* (mức nhỏ nhất để không âm).
+- Tồn kho thông minh: xuất thực BQ/ngày 3 tháng; nhu cầu = xuất thực VKD; trạng thái theo số ngày tồn thực
+  (Thiếu < 7, Thấp 7–15, An toàn 15–30, Cao 30–60, Dư > 60, Không luân chuyển).
+- Sheet: Ton thong minh, Pivot Ton thuc, Pivot Ton ky gui, Pivot So ngay ton, Ky gui, Data, Kiem tra, Log, Huong dan.
+
+```bash
+python -X utf8 -m nxt_ke_toan --dry-run
 ```
