@@ -1,0 +1,78 @@
+name: Auto Sync SharePoint (15 phut)
+
+# Lịch "schedule" của GitHub trên repo này rất thất thường (có khi vài giờ mới chạy một lần),
+# nên dùng 1 job "trực": cứ 15 phút kiểm tra Sell In, Xuất kho và NXT kế toán
+# (--if-changed: chỉ dựng lại file nào có nguồn thay đổi). Job chạy ~5h40', hết giờ thì tự gọi
+# lại chính nó để nối ca. Lịch mỗi giờ chỉ là dự phòng để khởi động lại nếu chuỗi bị đứt.
+# Muốn tạm dừng: Actions -> workflow này -> "..." -> Disable workflow.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
+
+concurrency:
+  group: sharepoint-auto-sync
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+      CHU_KY_PHUT: "15"
+      THOI_GIAN_CA_PHUT: "340"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Kiem tra moi 15 phut
+        run: |
+          het_ca=$(( SECONDS + THOI_GIAN_CA_PHUT * 60 ))
+          vong=0
+          while [ "$SECONDS" -lt "$het_ca" ]; do
+            vong=$(( vong + 1 ))
+            bat_dau=$SECONDS
+            echo "::group::Vòng $vong - $(TZ=Asia/Ho_Chi_Minh date '+%d/%m/%Y %H:%M')"
+            for mod in sell_in xuat_kho nxt_ke_toan; do
+              echo "== $mod"
+              if ! python -X utf8 -m "$mod" --if-changed; then
+                echo "::warning::$mod lỗi ở vòng $vong (sẽ thử lại vòng sau)"
+              fi
+            done
+            echo "::endgroup::"
+            ngu=$(( CHU_KY_PHUT * 60 - (SECONDS - bat_dau) ))
+            if [ "$ngu" -gt 0 ] && [ $(( SECONDS + ngu )) -lt "$het_ca" ]; then
+              sleep "$ngu"
+            else
+              break
+            fi
+          done
+
+      - name: Noi ca (tu goi lai chinh no)
+        if: (success() || failure()) && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run auto-sync.yml --repo "${{ github.repository }}" --ref main
