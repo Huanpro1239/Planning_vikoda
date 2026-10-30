@@ -8,6 +8,7 @@ Quy tắc:
   - Vikoda: chỉ lấy MaSanPhamMoi bắt đầu bằng "1" và MaKhachHangMoi khác "VKD3".
   - SanLuongQuyDoi = tổng SoLuong / Quy cách (Danh mục của đúng công ty).
   - Pivot gộp Vikoda + VKD theo phần đuôi mã (1xxxxxxxx = 2xxxxxxxx).
+  - Bỏ các mã trong MA_LOAI_TRU (130100014 / 230100014 - Nước khoáng bán thành phẩm).
 """
 import datetime as dt
 import io
@@ -23,6 +24,9 @@ DATA_COLS = ["CongTy", "Nam", "Thang", "KyBaoCao", "MaSanPham", "TenSanPham", "T
              "Brand", "SKUsGroup", "DVTQuyDoi", "QuyCach", "SoLuong", "SanLuongQuyDoi"]
 LOG_COLS = ["SourceFile", "CongTy", "Nam", "Thang", "TongDongNguon", "SoDongLay",
             "SoSanPham", "MaThieuQuyCach", "CapNhatLuc"]
+# Mã không đưa vào tổng hợp (theo yêu cầu): Nước khoáng bán thành phẩm
+MA_LOAI_TRU = {"130100014", "230100014"}
+
 # Pivot gộp 2 công ty: mã Vikoda (1xxxxxxxx) và mã VKD (2xxxxxxxx) cùng phần đuôi là 1 sản phẩm
 PIVOT_FIXED = ["MaVikoda", "MaVKD", "TenSanPham", "TenVietTat", "Brand", "SKUsGroup", "DVTQuyDoi", "QuyCach"]
 
@@ -145,7 +149,7 @@ def tong_hop_file(src, dm, source_name):
         if ma == "" and (kh in (None, "")):
             continue
         n_nguon += 1
-        if not ma.startswith(dau):
+        if not ma.startswith(dau) or ma in MA_LOAI_TRU:
             continue
         if cty == "Vikoda" and norm(kh) == "VKD3":
             continue
