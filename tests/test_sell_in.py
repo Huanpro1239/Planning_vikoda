@@ -56,6 +56,7 @@ class SellInTests(unittest.TestCase):
         vkd = _sell_in("Tên DN: CÔNG TY CỔ PHẦN ĐẦU TƯ VÀ THƯƠNG MẠI VKD", "Từ ngày : 01-10-2026", [
             ("B-HCMC-2", "230100110", 240),     # lấy: 10 thùng
             ("B-HCMC-2", "", 0),                # chiết khấu -> bỏ
+            ("B-HCMC-2", "230100014", 999),     # bán thành phẩm -> bỏ
         ])
         data, log = tong_hop_nhieu_file([("THANG 10 2026.xlsm", vikoda), ("THANG 10 2026 VKD.xlsm", vkd)], dm)
         self.assertEqual(len(log), 2)
