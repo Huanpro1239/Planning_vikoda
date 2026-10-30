@@ -1,0 +1,56 @@
+name: Sync Xuat Kho Tong Hop
+
+# Dựng lại "Planning App/Clean Data/Data Xuat kho/Tong_Hop_Xuat_Kho.xlsx"
+# từ toàn bộ file "Planning App/Bao cao xuat kho/<Vikoda|VKD>" + Danh mục.
+# Lịch 15 phút (lệch 7 phút so với Sell In), chỉ dựng lại khi nguồn thay đổi.
+
+on:
+  repository_dispatch:
+    types:
+      - sharepoint_xuat_kho_updated
+  schedule:
+    # Kiểm tra mỗi 15 phút; chỉ dựng lại khi Xuất kho / Danh mục thay đổi
+    - cron: "7-59/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: sharepoint-xuat-kho
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+      MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+      MS_AUTH_MODE: ${{ vars.MS_AUTH_MODE || 'oidc' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Rebuild Tong_Hop_Xuat_Kho.xlsx
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            python -X utf8 -m xuat_kho --if-changed
+          else
+            python -X utf8 -m xuat_kho
+          fi
