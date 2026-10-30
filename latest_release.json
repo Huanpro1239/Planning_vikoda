@@ -5,7 +5,7 @@
     "ref": "refs/heads/main",
     "repository": "Huanpro1239/Planning_vikoda",
     "run_attempt": "1",
-    "run_id": "40803578051",
+    "run_id": "40990214341",
     "sha": "fc6f86d346bf8fdf1a9b21b74a10a7ecd96135f4",
     "workflow": "Sync SharePoint Stock"
   },
@@ -49,11 +49,11 @@
       }
     },
     "target": {
-      "etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},189\"",
+      "etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},190\"",
       "item_id": "01EX3DDZGDKHPGY5HLMJAJKFWC3IVMHDEL",
-      "last_modified": "2026-10-28T01:51:13Z",
+      "last_modified": "2026-10-29T01:59:17Z",
       "path": "Tinh san xuat Mua hang 2027/Sắp kế hoạch.xlsx",
-      "sha256": "ecd9de493a0b2e2cd2b723b2c0aef2d268836309f75277036788e4381bef0ee1"
+      "sha256": "f6261f35fe319b6ddc6c55dd641bb2a98ff0a73094a4ec400198ec683161a991"
     }
   },
   "pipeline_fingerprints": {
@@ -65,28 +65,28 @@
   },
   "plan_month": "2026-10",
   "proposal": {
-    "output_sha256": "12988da2a989f4948c732fc284616d028977928a030c2b816e109ba7849e24f2",
-    "proposal_id": "56e0d80483c5541b2dca552f97cd2f99f37b92ca3052108e60a1e05e535674a8",
+    "output_sha256": "30cce0e7ca480d6e570f966840ce4c045e21387558d50101a2752de16cef380c",
+    "proposal_id": "7874df93f70353ed53696b30d9f516122157cc01d4b2f4b2208dfed79f07dfc7",
     "stable_output_sha256": "12a6ef786d2fdecdbca88d8287f76c066d2f41a9e65cbc62613f447d3b5fd027"
   },
   "publish_decision": {
     "basis": "publish_status",
-    "proposal_id": "56e0d80483c5541b2dca552f97cd2f99f37b92ca3052108e60a1e05e535674a8",
+    "proposal_id": "7874df93f70353ed53696b30d9f516122157cc01d4b2f4b2208dfed79f07dfc7",
     "publish_status": "ready_for_publish",
     "publisher": "daily-schedule",
     "review_approval": null,
     "state": "published",
-    "target_etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},189\""
+    "target_etag": "\"{6CDE51C3-EB74-4062-9516-C2DA2AC38C8B},190\""
   },
-  "published_at": "2026-10-29T01:59:18.061070+00:00",
+  "published_at": "2026-10-30T02:12:16.686251+00:00",
   "readiness": {
     "gate_version": "production_readiness_v1",
     "git_sha": "fc6f86d346bf8fdf1a9b21b74a10a7ecd96135f4",
-    "report_sha256": "dd251b78a26287e4b029e2dce9d7b8cd6a0eed42a0f399db64fa76424d73e04e",
+    "report_sha256": "59dde1f1e8d89b3edbbc357a63315c9de3c4bc2cc5f765ab2dcdbf563cb32704",
     "status": "passed"
   },
-  "release_id": "2026-10-56e0d80483c5-gh-40803578051-1",
-  "release_version": "planning_release_manifest_v1.proposal-56e0d80483c5.run-40803578051.1",
+  "release_id": "2026-10-7874df93f703-gh-40990214341-1",
+  "release_version": "planning_release_manifest_v1.proposal-7874df93f703.run-40990214341.1",
   "schema": "planning_release_manifest_v1",
   "schema_version": 1
 }
