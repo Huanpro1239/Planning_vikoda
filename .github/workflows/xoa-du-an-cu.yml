@@ -1,0 +1,32 @@
+name: Xoa du an cu (chay 1 lan)
+
+on:
+  push:
+    branches:
+      - feat/sell-in-tong-hop
+    paths:
+      - .github/workflows/xoa-du-an-cu.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/sell-in-tong-hop
+      - name: Xoa code cu, chi giu sell_in + sharepoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -r -q --ignore-unmatch docs domain excel nvl ops planning scripts stock \
+            nvl_open_po_config.json nvl_stock_config.json nvl_stock_staging_config.json \
+            planning_runtime.json run_offline.py state.json
+          keep='^tests/(__init__\.py|test_sell_in\.py|test_sharepoint_auth\.py|test_sharepoint_client\.py|test_graph_retry\.py|test_graph_retry_followup\.py)$'
+          git ls-files tests | grep -Ev "$keep" | xargs -r git rm -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: xóa các dự án cũ (planning, stock, nvl, ops...), chỉ giữ tổng hợp Sell In"
+          git push origin HEAD:feat/sell-in-tong-hop
