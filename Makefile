@@ -1,4 +1,4 @@
-.PHONY: install test sell-in sell-in-dry clean
+.PHONY: install test sell-in sell-in-dry xuat-kho xuat-kho-dry clean
 
 PYTHON ?= python3
 
@@ -16,6 +16,12 @@ sell-in:
 
 sell-in-dry:
 	$(PYTHON) -X utf8 -m sell_in --dry-run
+
+xuat-kho:
+	$(PYTHON) -X utf8 -m xuat_kho
+
+xuat-kho-dry:
+	$(PYTHON) -X utf8 -m xuat_kho --dry-run
 
 clean:
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
