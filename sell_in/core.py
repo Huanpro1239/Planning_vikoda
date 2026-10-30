@@ -76,10 +76,14 @@ def doc_danh_muc(src):
             "SKUsGroup": (r[i_sku] or ""), "DVTQuyDoi": (r[i_dvt] or ""),
             "QuyCach": qc if qc and qc > 0 else None,
         }
-        if ma_sp(r[i_vik]):
-            dm["Vikoda"][ma_sp(r[i_vik])] = info
-        if ma_sp(r[i_vkd]):
-            dm["VKD"][ma_sp(r[i_vkd])] = info
+        ma_vik, ma_vkd = ma_sp(r[i_vik]), ma_sp(r[i_vkd])
+        # Cột mã Vikoda có thể là công thức ="1"&đuôi mã VKD chưa có giá trị cache -> tự suy ra
+        if not ma_vik and ma_vkd.startswith("2"):
+            ma_vik = "1" + ma_vkd[1:]
+        if ma_vik:
+            dm["Vikoda"][ma_vik] = info
+        if ma_vkd:
+            dm["VKD"][ma_vkd] = info
     wb.close()
     return dm
 
@@ -173,8 +177,8 @@ def _cung_ky(r, cty, nam, thang):
     return r[0] == cty and int(r[1] or 0) == nam and int(r[2] or 0) == thang
 
 
-def build_workbook(data, log):
-    """Trả về (bytes .xlsx, số sản phẩm Pivot, số tháng)."""
+def build_workbook(data, log, fingerprint=""):
+    """Trả về (bytes .xlsx, số sản phẩm Pivot, số tháng). fingerprint lưu ở sheet ẩn Meta."""
     thu_tu = {"Vikoda": 0, "VKD": 1}
     data = sorted(data, key=lambda r: (int(r[1]), int(r[2]), thu_tu.get(r[0], 9), str(r[4])))
     log = sorted(log, key=lambda r: (int(r[2]), int(r[3]), thu_tu.get(r[1], 9)))
@@ -229,9 +233,27 @@ def build_workbook(data, log):
     for j, w in enumerate([30, 8, 6, 6, 14, 11, 10, 22, 17], start=1):
         wl.column_dimensions[get_column_letter(j)].width = w
 
+    wm = wb.create_sheet("Meta")
+    wm["A1"], wm["B1"] = "fingerprint", fingerprint
+    wm.sheet_state = "hidden"
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue(), len(p_rows), len(ky_list)
+
+
+def doc_fingerprint(src):
+    """Đọc fingerprint đã lưu trong sheet Meta của file tổng ("" nếu chưa có)."""
+    wb = load_workbook(src, read_only=True, data_only=True)
+    try:
+        if "Meta" not in wb.sheetnames:
+            return ""
+        for row in wb["Meta"].iter_rows(values_only=True):
+            if row and row[0] == "fingerprint":
+                return str(row[1] or "")
+        return ""
+    finally:
+        wb.close()
 
 
 def _ghi_bang(ws, name, head, rows, style):
