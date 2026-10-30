@@ -11,7 +11,7 @@ import io
 import sys
 import time
 
-from sharepoint.client import GraphClient, GraphRequestError, get_access_token
+from sharepoint.client import GraphClient, GraphRequestError, get_access_token, retry_graph_read
 
 from .core import build_workbook, doc_danh_muc, doc_fingerprint, tong_hop_nhieu_file
 
@@ -21,10 +21,15 @@ DANH_MUC_PATH = f"{ROOT}/Danh muc/Danh Muc San Pham.xlsx"
 OUTPUT_PATH = f"{ROOT}/Clean Data/Data ban hang/Tong_Hop_Ban_Hang.xlsx"
 
 
+def _doc(label, op):
+    """Đọc Graph có thử lại khi SharePoint lỗi tạm thời (429/5xx, mạng)."""
+    return retry_graph_read(label, op, attempts=6, max_delay_seconds=30)
+
+
 def _liet_ke(graph, drive_id, folder):
     """Liệt kê đệ quy file .xlsm/.xlsx trong thư mục (bỏ file tạm ~$)."""
     out = []
-    for item in graph.list_folder_children(drive_id, folder):
+    for item in _doc(f"list {folder}", lambda: graph.list_folder_children(drive_id, folder)):
         path = f"{folder}/{item['name']}"
         if item.get("folder") is not None:
             out.extend(_liet_ke(graph, drive_id, path))
@@ -66,11 +71,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     graph = GraphClient(get_access_token())
-    site_id = graph.get_site_id()
-    drive_id = graph.get_default_drive_id(site_id)
+    site_id = _doc("site", graph.get_site_id)
+    drive_id = _doc("drive", lambda: graph.get_default_drive_id(site_id))
     print("Đã kết nối SharePoint Planning.")
 
-    dm_item = graph.get_item_by_path(drive_id, DANH_MUC_PATH)
+    dm_item = _doc("Danh mục", lambda: graph.get_item_by_path(drive_id, DANH_MUC_PATH))
     files = _liet_ke(graph, drive_id, SELL_IN_DIR)
     if not files:
         raise RuntimeError("Không tìm thấy file Sell In nào trong " + SELL_IN_DIR)
@@ -79,8 +84,8 @@ def main(argv=None):
     if args.if_changed:
         cu = ""
         try:
-            out_item = graph.get_item_by_path(drive_id, OUTPUT_PATH)
-            cu = doc_fingerprint(io.BytesIO(graph.download_file(drive_id, out_item["id"])))
+            out_item = _doc("file tổng", lambda: graph.get_item_by_path(drive_id, OUTPUT_PATH))
+            cu = doc_fingerprint(io.BytesIO(_doc("tải file tổng", lambda: graph.download_file(drive_id, out_item["id"]))))
         except GraphRequestError as exc:
             if exc.status_code != 404:
                 raise
@@ -89,11 +94,12 @@ def main(argv=None):
             return 0
         print("Phát hiện thay đổi -> dựng lại file tổng.")
 
-    dm = doc_danh_muc(io.BytesIO(graph.download_file(drive_id, dm_item["id"])))
+    dm = doc_danh_muc(io.BytesIO(_doc("tải Danh mục", lambda: graph.download_file(drive_id, dm_item["id"]))))
     print(f"Danh mục: {len(dm['Vikoda'])} mã Vikoda, {len(dm['VKD'])} mã VKD")
     sources = []
     for path, item in files:
-        sources.append((item["name"], io.BytesIO(graph.download_file(drive_id, item["id"]))))
+        data_bytes = _doc(f"tải {path}", lambda item=item: graph.download_file(drive_id, item["id"]))
+        sources.append((item["name"], io.BytesIO(data_bytes)))
     data, log = tong_hop_nhieu_file(sources, dm)
     for r in log:
         thieu = f" | thiếu quy cách: {r[7]}" if r[7] else ""
