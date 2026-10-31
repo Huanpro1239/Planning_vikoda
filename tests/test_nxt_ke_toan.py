@@ -70,7 +70,7 @@ class NxtKeToanTests(unittest.TestCase):
         r = list(wb["Ton thong minh"].iter_rows(values_only=True))
         h = r[0]
         row = dict(zip(h, r[1]))
-        self.assertEqual(row["TongTonThuc"], 80)             # 50 + 30 gộp 1 sản phẩm
+        self.assertEqual(row["TongTonKhaDung"], 80)          # 50 + 30 gộp 1 sản phẩm
         self.assertEqual(row["NhuCauNgayHeThong"], 1)        # xuất VKD 720/24 = 30 thùng / 30 ngày
 
     def test_ton_ky_gui(self):
@@ -103,10 +103,57 @@ class NxtKeToanTests(unittest.TestCase):
         content, *_ = build_workbook(data, log, "fp", kg, nguon)
         r = list(load_workbook(io.BytesIO(content))["Ton thong minh"].iter_rows(values_only=True))
         row = dict(zip(r[0], r[1]))
-        self.assertEqual(row["TongTonKeToan"], 60)
-        self.assertEqual(row["TongTonKyGui"], 0)
-        # xuất thực = 960 - 480 + 720 = 1200 chai = 50 thùng / 30 ngày
-        self.assertAlmostEqual(row["NhuCauNgayHeThong"], 1.67, places=2)
+        self.assertEqual(row["TongTonKhaDung"], 60)
+        self.assertEqual(row["TonKyGuiChoGiao"], 0)
+        self.assertEqual(row["TongTonVatLy"], 60)
+        # nhu cầu = xuất kế toán (bán ra) 960 chai = 40 thùng / 30 ngày
+        self.assertAlmostEqual(row["NhuCauNgayHeThong"], 1.33, places=2)
+        self.assertEqual(row["SoNgayTonKhaDung"], 45)
+
+    def test_ton_nha_may(self):
+        import datetime as dt
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "THÁNG 10"
+        ws.append(["BÁO CÁO KHO THÀNH PHẨM"])
+        ws.append([None] * 7 + ["Ngày:", dt.datetime(2026, 10, 28)])
+        ws.append(["STT", "BRAND", "MÃ SP VIKODA", "MÃ SP VKD", "TÊN SẢN PHẨM", "ĐVT", "SỐ LƯỢNG SẢN XUẤT", None,
+                   "SỐ LƯỢNG XUẤT KHO", None, None, None, "TỒN KHO THỰC TẾ", None, "SL CHƯA NHẬP KHO (CHỜ KQ QA/QC)",
+                   "KẾ HOẠCH XUẤT KHO 29/10/2026", "SL HÀNG ĐÃ BÁN (GỬI KHO)", "TỒN KHO DỰ KIẾN CUỐI NGÀY 29/10/2026"])
+        ws.append([None] * 6 + ["TỔNG NHẬP T10/26", "NHẬP TRONG NGÀY", "KẾ HOẠCH", "THỰC TẾ", "% KẾ HOẠCH",
+                                "TỔNG XUẤT T10/26", "ĐẦU NGÀY", "CUỐI NGÀY"])
+        ws.append([1, "Vikoda", 130100110, 230100110, "Kiềm 500ml", "Thùng", 1000, 50, 30, 20, 0.6, 800, 170, 200,
+                   10, 40, 60, 100])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        npp = io.BytesIO()
+        w2 = Workbook()
+        w2.active.append(["BÁO CÁO TỒN KHO THÁNG 10/2026"])
+        w2.save(npp)
+        npp.seek(0)
+        from nxt_ke_toan import tong_hop_nha_may
+        nm, bo_qua = tong_hop_nha_may([("Thang 10.xlsx", buf), ("Thang 1.xlsx", npp)])
+        self.assertEqual(bo_qua, ["Thang 1.xlsx"])
+        bc = nm[(2026, 10)]
+        self.assertEqual(bc["ngay"], dt.date(2026, 10, 28))
+        d = bc["rows"][0]
+        self.assertEqual((d["ma_vik"], d["cuoi_ngay"], d["cho_qc"], d["kh_xuat"], d["da_ban"], d["du_kien"],
+                          d["nhap_thang"], d["xuat_thang"]), ("130100110", 200, 10, 40, 60, 100, 1000, 800))
+
+        dm = doc_danh_muc(_danh_muc())
+        ky = "Từ ngày 01-10-2026 đến ngày 29-10-2026"
+        data, log = tong_hop_nhieu_file([("VKD/Thang 10.xlsm", _nxt(VKD, ky, [("230100110", "Hàng hóa", 0, 2400, 960)]))],
+                                        dm)
+        content, *_ = build_workbook(data, log, "fp", nha_may=nm, nm_bo_qua=bo_qua)
+        wbo = load_workbook(io.BytesIO(content))
+        r = list(wbo["Ton thong minh"].iter_rows(values_only=True))
+        row = dict(zip(r[0], r[1]))
+        self.assertEqual((row["NM_TonThucTe"], row["NM_DaBanGuiKho"], row["NM_TonDuKien"]), (200, 60, 100))
+        self.assertIn("Ton nha may", wbo.sheetnames)
+        self.assertEqual(list(wbo["Pivot Ton nha may"].iter_rows(values_only=True))[1][4], 200)
+        kt = [x for x in wbo["Kiem tra"].iter_rows(values_only=True) if x[3] == "Thang 1.xlsx"]
+        self.assertEqual(len(kt), 1)
 
 
 if __name__ == "__main__":
