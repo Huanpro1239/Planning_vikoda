@@ -1,5 +1,5 @@
 """Chạy trên GitHub Actions: đọc NXT kế toán + Xuất kho + Danh mục từ SharePoint,
-dựng lại Clean Data/Data NXT ke toan/Tong_Hop_NXT_Ke_Toan.xlsx và ghi đè lên SharePoint.
++ Tồn thực tế nhà máy, dựng lại Clean Data/Data NXT ke toan/Tong_Hop_NXT_Ke_Toan.xlsx và ghi đè lên SharePoint.
 
     python -X utf8 -m nxt_ke_toan               # chạy thật
     python -X utf8 -m nxt_ke_toan --if-changed  # chỉ chạy khi nguồn thay đổi
@@ -17,9 +17,11 @@ from sharepoint.client import GraphClient, GraphRequestError, get_access_token
 
 from .core import build_workbook, tong_hop_nhieu_file
 from .ky_gui import doc_luong_ky_gui, ton_ky_gui
+from .nha_may import tong_hop_nha_may
 
 NXT_DIR = f"{ROOT}/Bao cao ton kho/Ton ke toan"
 XUAT_KHO_DIR = f"{ROOT}/Bao cao xuat kho"
+NHA_MAY_DIR = f"{ROOT}/Bao cao ton kho/Ton thuc te"
 OUTPUT_PATH = f"{ROOT}/Clean Data/Data NXT ke toan/Tong_Hop_NXT_Ke_Toan.xlsx"
 
 
@@ -54,7 +56,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--if-changed", action="store_true",
-                    help="Bỏ qua nếu NXT kế toán, Xuất kho và Danh mục không đổi so với lần ghi trước")
+                    help="Bỏ qua nếu NXT kế toán, Xuất kho, Tồn nhà máy và Danh mục không đổi so với lần ghi trước")
     args = ap.parse_args(argv)
 
     graph = GraphClient(get_access_token())
@@ -65,9 +67,15 @@ def main(argv=None):
     dm_item = _doc("Danh mục", lambda: graph.get_item_by_path(drive_id, DANH_MUC_PATH))
     nxt_files = _liet_ke(graph, drive_id, NXT_DIR)
     xk_files = _liet_ke(graph, drive_id, XUAT_KHO_DIR)
+    try:
+        nm_files = _liet_ke(graph, drive_id, NHA_MAY_DIR)
+    except GraphRequestError as exc:
+        if exc.status_code != 404:
+            raise
+        nm_files = []
     if not nxt_files:
         raise RuntimeError("Không tìm thấy file NXT kế toán nào trong " + NXT_DIR)
-    fingerprint = _fingerprint(dm_item, nxt_files + xk_files)
+    fingerprint = _fingerprint(dm_item, nxt_files + xk_files + nm_files)
 
     if args.if_changed:
         cu = ""
@@ -94,7 +102,13 @@ def main(argv=None):
     kg, nguon = ton_ky_gui(flows)
     print(f"Tồn ký gửi: {len(flows)} file Xuất kho, nguồn đầu kỳ: {nguon}")
 
-    content, n_sp, n_thang, n_canh_bao = build_workbook(data, log, fingerprint, kg, nguon)
+    nha_may, nm_bo_qua = tong_hop_nha_may(
+        [(p[len(NHA_MAY_DIR) + 1:], _tai(graph, drive_id, p, it)) for p, it in nm_files])
+    print(f"Tồn nhà máy: {len(nha_may)} báo cáo "
+          f"({', '.join(nha_may[k]['ngay'].strftime('%d/%m/%Y') for k in sorted(nha_may))}), "
+          f"bỏ qua {len(nm_bo_qua)} file không đúng mẫu")
+
+    content, n_sp, n_thang, n_canh_bao = build_workbook(data, log, fingerprint, kg, nguon, nha_may, nm_bo_qua)
     print(f"Tổng hợp: {len(nxt_files)} file NXT, {n_sp} sản phẩm (tồn thông minh) x {n_thang} tháng, "
           f"{n_canh_bao} cảnh báo")
     if args.dry_run:
