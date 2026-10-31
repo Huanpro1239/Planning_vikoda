@@ -10,7 +10,8 @@ Nguồn: "Bao cao ton kho/Ton ke toan/<Vikoda|VKD>/Thang N.xlsm", Sheet1:
   - Data: mọi vật tư mọi tháng (số lượng gốc + thành tiền); thành phẩm/hàng hóa có thêm cột quy đổi Thùng/Két/Bình.
   - Ton thong minh: ảnh chụp tháng mới nhất cho thành phẩm/hàng hóa (gộp mã 1xxx/2xxx):
       tồn cuối từng công ty, xuất bình quân/ngày 3 tháng gần nhất, số ngày tồn, trạng thái, gợi ý.
-  - Pivot Ton cuoi / Pivot So ngay ton: sản phẩm x tháng (gộp 2 công ty, đơn vị quy đổi).
+  - Pivot Ton kha dung / Ton ky gui / So ngay ton / Ton nha may: sản phẩm x tháng (gộp 2 công ty).
+  - Ton nha may: báo cáo kho thành phẩm nhà máy (Ton thuc te) theo ngày báo cáo.
   - Kiem tra: cân đối Đầu + Nhập - Xuất = Cuối, Cuối tháng trước = Đầu tháng sau, mã thiếu quy cách.
 """
 import datetime as dt
@@ -175,21 +176,14 @@ def _qd(kg, cty, k, ma, qc, i):
     return (v[i] / qc) if (v is not None and qc) else 0
 
 
-def _xuat_thuc(r, kg, k, key):
-    """Xuất thực (quy đổi) = Xuất kế toán − Chuyển vào ký gửi + Xuất từ ký gửi."""
-    cty, qc = r[0], r[18]
-    ma = ("2" if cty == "VKD" else "1") + key
-    return (r[22] or 0) - _qd(kg, cty, k, ma, qc, 1) + _qd(kg, cty, k, ma, qc, 2)
-
-
-def _xuat_ngay(sp_k, cty, ky_list, den, kg, key):
-    """Xuất thực (quy đổi) bình quân/ngày của công ty trong SO_THANG_BQ tháng tính tới kỳ `den`."""
+def _xuat_ngay(sp_k, cty, ky_list, den):
+    """Xuất kế toán (= bán ra, quy đổi) bình quân/ngày của công ty trong SO_THANG_BQ tháng tính tới kỳ `den`."""
     ds = [k for k in ky_list if k <= den][-SO_THANG_BQ:]
     xuat = ngay = 0
     for k in ds:
         r = sp_k.get((cty, k))
         if r is not None:
-            xuat += _xuat_thuc(r, kg, k, key)
+            xuat += r[22] or 0
             ngay += r[4]
         else:
             ngay += 30
@@ -197,20 +191,31 @@ def _xuat_ngay(sp_k, cty, ky_list, den, kg, key):
 
 
 HEAD_TTM = ["MaVikoda", "MaVKD", "TenSanPham", "DVTQuyDoi", "QuyCach",
-            "TonKhoVikoda", "TonKyGuiVikoda", "TonKhoVKD", "TonKyGuiVKD",
-            "TongTonKeToan", "TongTonKyGui", "TongTonThuc",
-            "XuatThucBQNgayVikoda", "XuatThucBQNgayVKD", "NhuCauNgayHeThong",
-            "SoNgayTonKeToan", "SoNgayTonThuc", "TrangThai", "GoiY", "Ky", "NguonTonKyGui"]
-I_TT, I_NGAY = 17, 16
+            "TonKhaDungVikoda", "TonKhaDungVKD", "TongTonKhaDung", "TonKyGuiChoGiao", "TongTonVatLy",
+            "XuatBanBQNgayVikoda", "XuatBanBQNgayVKD", "NhuCauNgayHeThong",
+            "SoNgayTonKhaDung", "TrangThai", "GoiY",
+            "NM_NgayBaoCao", "NM_TonThucTe", "NM_ChoQC", "NM_KeHoachXuat", "NM_DaBanGuiKho", "NM_TonDuKien",
+            "Ky", "NguonTonKyGui"]
+I_NGAY, I_TT = 13, 14
+NM_KEYS = ["cuoi_ngay", "cho_qc", "kh_xuat", "da_ban", "du_kien"]
 
 
-def phan_tich(data, kg=None, nguon_kg=""):
-    """Bảng tồn kho thông minh tháng mới nhất (theo TỒN THỰC = kế toán + ký gửi) + dữ liệu pivot."""
+def phan_tich(data, kg=None, nguon_kg="", nha_may=None):
+    """Bảng tồn kho thông minh tháng mới nhất + dữ liệu pivot.
+
+    Trạng thái theo TỒN KHẢ DỤNG = tồn kế toán (hàng đã bán chờ giao ở kho ký gửi đã bị trừ),
+    so với nhu cầu = xuất kế toán (bán ra) BQ/ngày. Tồn ký gửi & tồn vật lý chỉ để tham khảo.
+    nha_may: {(nam, thang): báo cáo} từ nha_may.tong_hop_nha_may.
+    """
+    from .nha_may import theo_duoi_ma
+
     ky_list = sorted({(r[1], r[2]) for r in data})
     sp, nhan = _sp_tp(data)
     if not ky_list:
         return HEAD_TTM, [], ky_list, {}, {}, {}
     cuoi = ky_list[-1]
+    nm_moi = theo_duoi_ma(nha_may[max(nha_may)]) if nha_may else {}
+    ngay_nm = nha_may[max(nha_may)]["ngay"] if nha_may else None
     rows, p_ton, p_ngay, p_kg = [], {}, {}, {}
     for key, d in sp.items():
         qc = nhan[key][2]
@@ -219,36 +224,34 @@ def phan_tich(data, kg=None, nguon_kg=""):
             r = d.get((cty, k))
             return (r[23] or 0) if r is not None else 0
 
-        def ky_gui(cty, k):
-            return _qd(kg, cty, k, ("2" if cty == "VKD" else "1") + key, qc, 3)
+        def ky_gui(k):
+            return sum(_qd(kg, c, k, p + key, qc, 3) for c, p in (("Vikoda", "1"), ("VKD", "2")))
 
         def he_thong(k):
             tv, tk = ton("Vikoda", k), ton("VKD", k)
-            gv, gk = ky_gui("Vikoda", k), ky_gui("VKD", k)
-            xv = _xuat_ngay(d, "Vikoda", ky_list, k, kg, key)
-            xk = _xuat_ngay(d, "VKD", ky_list, k, kg, key)
-            # VKD là kênh bán ra thị trường; Vikoda chủ yếu xuất cho VKD -> nhu cầu hệ thống = xuất thực VKD,
-            # mã chỉ có ở Vikoda thì dùng xuất thực Vikoda.
-            nhu_cau = xk if xk > 0 else xv
-            return tv, gv, tk, gk, xv, xk, nhu_cau
+            xv, xk = _xuat_ngay(d, "Vikoda", ky_list, k), _xuat_ngay(d, "VKD", ky_list, k)
+            # VKD là kênh bán ra thị trường; Vikoda chủ yếu xuất cho VKD -> nhu cầu hệ thống = xuất bán VKD,
+            # mã chỉ có ở Vikoda thì dùng xuất Vikoda.
+            return tv, tk, ky_gui(k), xv, xk, (xk if xk > 0 else xv)
 
         for k in ky_list:
             if any((c, k) in d for c in ("Vikoda", "VKD")):
-                tv, gv, tk, gk, xv, xk, nc = he_thong(k)
-                p_ton.setdefault(key, {})[k] = tv + tk + gv + gk
-                p_kg.setdefault(key, {})[k] = gv + gk
-                p_ngay.setdefault(key, {})[k] = (tv + tk + gv + gk) / nc if nc > 0 else None
+                tv, tk, g, xv, xk, nc = he_thong(k)
+                p_ton.setdefault(key, {})[k] = tv + tk
+                p_kg.setdefault(key, {})[k] = g
+                p_ngay.setdefault(key, {})[k] = (tv + tk) / nc if nc > 0 else None
         if not any((c, cuoi) in d for c in ("Vikoda", "VKD")):
             continue
-        tv, gv, tk, gk, xv, xk, nc = he_thong(cuoi)
-        thuc = tv + tk + gv + gk
-        tt, ngay = trang_thai(thuc, nc)
-        if tt == TT_KHONG:
+        tv, tk, g, xv, xk, nc = he_thong(cuoi)
+        tt, ngay = trang_thai(tv + tk, nc)
+        nm = nm_moi.get(key)
+        if tt == TT_KHONG and not (nm and nm.get("cuoi_ngay")):
             continue
         rows.append(["1" + key, "2" + key, nhan[key][0], nhan[key][1], qc,
-                     _r(tv), _r(gv), _r(tk), _r(gk), _r(tv + tk), _r(gv + gk), _r(thuc),
-                     _r(xv), _r(xk), _r(nc), _r((tv + tk) / nc) if nc > 0 else None, _r(ngay),
-                     tt, GOI_Y[tt], "T%02d/%d" % (cuoi[1], cuoi[0]), nguon_kg if (gv or gk) else ""])
+                     _r(tv), _r(tk), _r(tv + tk), _r(g), _r(tv + tk + g),
+                     _r(xv), _r(xk), _r(nc), _r(ngay), tt, GOI_Y[tt],
+                     ngay_nm if nm else None] + [(_r(nm[k]) if nm else None) for k in NM_KEYS] +
+                    ["T%02d/%d" % (cuoi[1], cuoi[0]), nguon_kg if g else ""])
     rows.sort(key=lambda r: (UU_TIEN[r[I_TT]], r[I_NGAY] if r[I_NGAY] is not None else 1e9, r[2]))
     return HEAD_TTM, rows, ky_list, p_ton, p_ngay, p_kg
 
@@ -277,11 +280,11 @@ def kiem_tra(data, log):
 
 
 # ---------------------------------------------------------------- ghi file
-def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
+def build_workbook(data, log, fingerprint="", kg=None, nguon_kg="", nha_may=None, nm_bo_qua=()):
     thu_tu = {"Vikoda": 0, "VKD": 1}
     data = sorted(data, key=lambda r: (r[1], r[2], thu_tu.get(r[0], 9), r[7], r[5]))
     log = sorted(log, key=lambda r: (r[2], r[3], thu_tu.get(r[1], 9)))
-    head, rows, ky_list, p_ton, p_ngay, p_kg = phan_tich(data, kg, nguon_kg)
+    head, rows, ky_list, p_ton, p_ngay, p_kg = phan_tich(data, kg, nguon_kg, nha_may)
     _, nhan = _sp_tp(data)
 
     wb = Workbook()
@@ -289,18 +292,19 @@ def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
     ws.title = "Ton thong minh"
     _ghi_bang(ws, "tblTonThongMinh", head, rows, "TableStyleMedium2")
     for i in range(2, len(rows) + 2):
-        for j in range(6, I_TT + 1):
+        for j in list(range(6, I_TT + 1)) + list(range(18, 23)):
             ws.cell(i, j).number_format = "#,##0.0"
+        ws.cell(i, 17).number_format = "dd/mm/yyyy"
         fill = MAU.get(ws.cell(i, I_TT + 1).value)
         if fill:
             ws.cell(i, I_TT + 1).fill = PatternFill("solid", fgColor=fill)
-    for j, w in enumerate([11, 11, 44, 9, 8] + [12] * 12 + [16, 26, 9, 18], start=1):
+    for j, w in enumerate([11, 11, 44, 9, 8] + [12] * 9 + [16, 26] + [12] * 6 + [9, 18], start=1):
         ws.column_dimensions[get_column_letter(j)].width = w
     ws.freeze_panes = "D2"
 
     keys = sorted(p_ton, key=lambda k: (str(nhan[k][0]), k))
     ky_head = ["T%02d/%d" % (t, n) for n, t in ky_list]
-    for title, tbl, src, fmt in (("Pivot Ton thuc", "tblPivotTon", p_ton, "#,##0.0"),
+    for title, tbl, src, fmt in (("Pivot Ton kha dung", "tblPivotTon", p_ton, "#,##0.0"),
                                  ("Pivot Ton ky gui", "tblPivotKyGui", p_kg, "#,##0.0"),
                                  ("Pivot So ngay ton", "tblPivotNgayTon", p_ngay, "#,##0.0")):
         wp = wb.create_sheet(title)
@@ -321,6 +325,8 @@ def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
                                                           fill=PatternFill("solid", fgColor=MAU["Thiếu hàng"])))
             wp.conditional_formatting.add(rng, CellIsRule(operator="greaterThan", formula=["60"],
                                                           fill=PatternFill("solid", fgColor=MAU[TT_DU])))
+
+    _ghi_nha_may(wb, nha_may or {})
 
     wkg = wb.create_sheet("Ky gui")
     ten = {}
@@ -354,6 +360,8 @@ def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
     wd.freeze_panes = "A2"
 
     kh, kr = kiem_tra(data, log)
+    kr += [["", "", "", name, "File trong 'Ton thuc te' không đúng mẫu BÁO CÁO KHO THÀNH PHẨM -> bỏ qua", None, None]
+           for name in nm_bo_qua]
     wk = wb.create_sheet("Kiem tra")
     _ghi_bang(wk, "tblKiemTra", kh, kr, "TableStyleLight9")
     for j, w in enumerate([8, 9, 11, 40, 32, 14, 14], start=1):
@@ -371,14 +379,14 @@ def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
     for line in [
         ["Tồn kho thông minh – cách tính"],
         ["Đơn vị: số lượng ÷ Quy cách (Danh mục) → Thùng/Két/Bình. Chỉ áp dụng Thành phẩm (Vikoda) / Hàng hóa (VKD)."],
-        ["Kế toán ghi 'Chuyển qua kho ký gửi' là xuất (đã trừ tồn) nhưng hàng chỉ thực bán khi xuất từ KHO KÝ GỬI."],
-        ["Tồn ký gửi = Đầu kỳ + Chuyển vào ký gửi − Xuất từ ký gửi (lấy từ báo cáo Xuất kho bán hàng)."],
-        ["Tồn thực = Tồn kế toán + Tồn ký gửi. Xuất thực = Xuất kế toán − Chuyển vào ký gửi + Xuất từ ký gửi."],
-        ["Tồn ký gửi đầu kỳ: lấy từ báo cáo tồn kho ký gửi nếu có; chưa có thì ƯỚC TÍNH TỐI THIỂU "
-         "(mức nhỏ nhất để tồn ký gửi không âm) → tồn thực có thể còn thấp hơn thực tế."],
-        [f"Xuất thực BQ/ngày = tổng xuất thực {SO_THANG_BQ} tháng gần nhất ÷ tổng số ngày của các kỳ đó."],
-        ["Nhu cầu hệ thống = Xuất thực BQ/ngày của VKD (kênh bán ra thị trường); mã chỉ có ở Vikoda thì dùng xuất Vikoda."],
-        ["Số ngày tồn thực = Tồn thực (Vikoda + VKD, gồm ký gửi) ÷ Nhu cầu hệ thống/ngày; trạng thái theo số này."],
+        ["Tồn khả dụng = Tồn kế toán (Vikoda + VKD). Kế toán ghi 'Chuyển qua kho ký gửi' là xuất = hàng ĐÃ BÁN, "
+         "nằm ở kho ký gửi chờ giao -> không còn khả dụng (giống nhà máy trừ 'SL hàng đã bán (gửi kho)')."],
+        ["Tồn ký gửi chờ giao = Đầu kỳ + Chuyển vào ký gửi − Xuất từ KHO KÝ GỬI (báo cáo Xuất kho); đầu kỳ là ƯỚC TÍNH "
+         "TỐI THIỂU. Tồn vật lý = Tồn khả dụng + Tồn ký gửi (tham khảo)."],
+        [f"Nhu cầu = Xuất kế toán (bán ra) BQ/ngày {SO_THANG_BQ} tháng gần nhất của VKD; mã chỉ có ở Vikoda dùng xuất Vikoda."],
+        ["Số ngày tồn khả dụng = Tồn khả dụng ÷ Nhu cầu/ngày; trạng thái theo số này."],
+        ["Cột NM_*: báo cáo kho thành phẩm nhà máy mới nhất (thư mục Ton thuc te): tồn thực tế cuối ngày, chờ QA/QC, "
+         "kế hoạch xuất, đã bán gửi kho, tồn dự kiến = thực tế − kế hoạch xuất − đã bán."],
         ["Trạng thái: Hết hàng (tồn ≤ 0) | Thiếu hàng < 7 ngày | Thấp 7–15 | An toàn 15–30 | Cao 30–60 | Dư tồn > 60 | "
          "Không luân chuyển (còn tồn nhưng không xuất)."],
         ["Lưu ý: tháng đang mở (chưa tính giá) có Thành tiền tồn cuối = 0 → dùng số lượng, không dùng giá trị của tháng đó."],
@@ -393,3 +401,44 @@ def build_workbook(data, log, fingerprint="", kg=None, nguon_kg=""):
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue(), len(rows), len(ky_list), len(kr)
+
+
+NM_HEAD = ["MaVikoda", "MaVKD", "TenSanPham", "DVT", "NgayBaoCao", "NhapTrongThang", "XuatTrongThang",
+           "TonDauNgay", "TonThucTe", "ChoQC", "KeHoachXuat", "DaBanGuiKho", "TonDuKien", "SourceFile"]
+NM_KEY = ["nhap_thang", "xuat_thang", "dau_ngay", "cuoi_ngay", "cho_qc", "kh_xuat", "da_ban", "du_kien"]
+
+
+def _ghi_nha_may(wb, nha_may):
+    """Sheet 'Ton nha may' (mọi báo cáo theo tháng, mới nhất trước) + 'Pivot Ton nha may' (tồn thực tế cuối ngày)."""
+    ws = wb.create_sheet("Ton nha may")
+    rows = []
+    for k in sorted(nha_may, reverse=True):
+        bc = nha_may[k]
+        for d in bc["rows"]:
+            rows.append([d["ma_vik"], d["ma_vkd"], d["ten"], d["dvt"], bc["ngay"]] +
+                        [d[x] for x in NM_KEY] + [bc["source"]])
+    _ghi_bang(ws, "tblTonNhaMay", NM_HEAD, rows, "TableStyleMedium2")
+    for i in range(2, len(rows) + 2):
+        ws.cell(i, 5).number_format = "dd/mm/yyyy"
+        for j in range(6, 14):
+            ws.cell(i, j).number_format = "#,##0"
+    for j, w in enumerate([11, 11, 44, 7, 11] + [12] * 8 + [18], start=1):
+        ws.column_dimensions[get_column_letter(j)].width = w
+    ws.freeze_panes = "D2"
+
+    wp = wb.create_sheet("Pivot Ton nha may")
+    ky = sorted(nha_may)
+    sp = {}
+    for k in ky:
+        for d in nha_may[k]["rows"]:
+            ma = d["ma_vik"] or d["ma_vkd"]
+            sp.setdefault(ma[1:], {"nhan": [d["ma_vik"], d["ma_vkd"], d["ten"], d["dvt"]]})[k] = d["cuoi_ngay"]
+    head = ["MaVikoda", "MaVKD", "TenSanPham", "DVT"] + [nha_may[k]["ngay"].strftime("%d/%m/%Y") for k in ky]
+    prow = [v["nhan"] + [v.get(k) for k in ky] for _, v in sorted(sp.items(), key=lambda x: (x[1]["nhan"][2], x[0]))]
+    _ghi_bang(wp, "tblPivotNhaMay", head, prow, "TableStyleMedium2")
+    for i in range(2, len(prow) + 2):
+        for j in range(5, 5 + len(ky)):
+            wp.cell(i, j).number_format = "#,##0"
+    for j, w in enumerate([11, 11, 44, 7] + [12] * len(ky), start=1):
+        wp.column_dimensions[get_column_letter(j)].width = w
+    wp.freeze_panes = "D2"
