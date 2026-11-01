@@ -61,36 +61,3 @@ workflow `Sync NXT Ke Toan Tong Hop` (`.github/workflows/sync-nxt-ke-toan.yml`),
 ```bash
 python -X utf8 -m nxt_ke_toan --dry-run
 ```
-
-## FIT – ĐH Bán trong kỳ NPP → SharePoint, lệnh Telegram `/banhang` (`fit_ban_hang/`)
-
-Worker Cloudflare `erp-nhan-hang` (thư mục `Nhan hang\erp_cloud`) giữ phiên FIT, tự gia hạn 15 phút/lần và nhắc
-CAPTCHA qua Telegram khi hết hạn (`/dangnhap`). Vì vậy GitHub **không đăng nhập FIT, không cần mật khẩu FIT**.
-
-Luồng: Telegram `/banhang [kỳ]` → Worker gửi `repository_dispatch` `fit_ban_hang` → workflow `FIT Ban Hang NPP`
-(`.github/workflows/fit-ban-hang.yml`) gọi `GET /api/integrations/ban-hang-npp/file?start=&end=&muc=` của Worker
-(service token Cloudflare Access) → ghi đè lên SharePoint Planning và gửi 2 file vào Telegram.
-
-| Mức lấy | File SharePoint |
-|---|---|
-| Đơn hàng | `BCDonHangBanTrongKyNPP.xlsm` |
-| Hóa Đơn | `Lay So Hoa don.xlsm` |
-
-Bộ lọc FIT: Từ/Đến ngày, Xem thời gian = Ngày hóa đơn, Không pivot = bật, Lấy chi nhánh = tắt, các ô khác All.
-Thư mục mặc định `Planning App/Bao cao ban hang/DH Ban trong ky NPP` (biến `FIT_SP_FOLDER`).
-Workflow còn chạy theo lịch 07:05 sáng (đầu tháng→hôm nay) và chạy tay được (ô `ky`).
-
-```text
-/banhang                         đầu tháng -> hôm nay
-/banhang thangtruoc              cả tháng trước
-/banhang 10/2026                 cả tháng
-/banhang 01/10/2026 15/10/2026   khoảng ngày
-```
-
-Secrets GitHub cần có: `FIT_CF_ACCESS_CLIENT_ID`, `FIT_CF_ACCESS_CLIENT_SECRET` (cùng service token đang dùng cho
-Nhận hàng ở repo mobiwork-sharepoint-sync), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (+ `MS_TENANT_ID`, `MS_CLIENT_ID` sẵn có).
-GitHub **chỉ gửi** tin Telegram, không đọc (Worker đang đọc bằng getUpdates; hai nơi cùng đọc sẽ lỗi 409).
-
-```bash
-python -X utf8 -m fit_ban_hang --ky 10/2026 --dry-run   # thử, không ghi SharePoint
-```
