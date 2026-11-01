@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 *.zip
+captcha_fit.png
+.fit_ban_hang_state.json
+*.xlsm
