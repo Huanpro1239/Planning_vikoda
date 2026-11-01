@@ -62,58 +62,35 @@ workflow `Sync NXT Ke Toan Tong Hop` (`.github/workflows/sync-nxt-ke-toan.yml`),
 python -X utf8 -m nxt_ke_toan --dry-run
 ```
 
-## FIT – ĐH Bán trong kỳ NPP → SharePoint, điều khiển qua Telegram (`fit_ban_hang/`)
+## FIT – ĐH Bán trong kỳ NPP → SharePoint, lệnh Telegram `/banhang` (`fit_ban_hang/`)
 
-Đăng nhập FIT (`https://103.68.251.239:8888/FIT/`), mở **Báo cáo kế toán › Báo cáo khác › ĐH Bán trong kỳ NPP**,
-đặt Từ ngày/Đến ngày, Xem thời gian = *Ngày hóa đơn*, **Không pivot** = bật, Lấy chi nhánh = tắt, các ô khác để mặc định,
-rồi bấm **Tạo báo cáo** hai lần và ghi đè 2 file lên SharePoint Planning:
+Worker Cloudflare `erp-nhan-hang` (thư mục `Nhan hang\erp_cloud`) giữ phiên FIT, tự gia hạn 15 phút/lần và nhắc
+CAPTCHA qua Telegram khi hết hạn (`/dangnhap`). Vì vậy GitHub **không đăng nhập FIT, không cần mật khẩu FIT**.
+
+Luồng: Telegram `/banhang [kỳ]` → Worker gửi `repository_dispatch` `fit_ban_hang` → workflow `FIT Ban Hang NPP`
+(`.github/workflows/fit-ban-hang.yml`) gọi `GET /api/integrations/ban-hang-npp/file?start=&end=&muc=` của Worker
+(service token Cloudflare Access) → ghi đè lên SharePoint Planning và gửi 2 file vào Telegram.
 
 | Mức lấy | File SharePoint |
 |---|---|
 | Đơn hàng | `BCDonHangBanTrongKyNPP.xlsm` |
 | Hóa Đơn | `Lay So Hoa don.xlsm` |
 
-Thư mục mặc định `Planning App/Bao cao ban hang/DH Ban trong ky NPP` (đổi bằng biến `FIT_SP_FOLDER`).
-Đuôi file giữ theo file FIT trả về (FIT xuất `.xlsm`); nếu FIT trả `.xlsx/.xls` thì tên giữ nguyên, đuôi theo file thật.
-
-**CAPTCHA:** FIT bắt nhập CAPTCHA mỗi lần đăng nhập, không tự giải. Bot gửi ảnh CAPTCHA vào Telegram, bạn trả lời
-ảnh bằng mã (chờ tối đa 5 phút, `/huy` để dừng). Sai mã được nhập lại 1 lần. Xong việc bot **đăng xuất FIT**.
-Nếu FIT báo tài khoản đang đăng nhập nơi khác, hãy Đăng xuất FIT trên trình duyệt của bạn rồi gửi lại lệnh.
-
-**Telegram** (chat riêng, chỉ ID trong `TELEGRAM_ALLOWED_USER_IDS`):
+Bộ lọc FIT: Từ/Đến ngày, Xem thời gian = Ngày hóa đơn, Không pivot = bật, Lấy chi nhánh = tắt, các ô khác All.
+Thư mục mặc định `Planning App/Bao cao ban hang/DH Ban trong ky NPP` (biến `FIT_SP_FOLDER`).
+Workflow còn chạy theo lịch 07:05 sáng (đầu tháng→hôm nay) và chạy tay được (ô `ky`).
 
 ```text
 /banhang                         đầu tháng -> hôm nay
 /banhang thangtruoc              cả tháng trước
 /banhang 10/2026                 cả tháng
 /banhang 01/10/2026 15/10/2026   khoảng ngày
-/huy  /help  /id
 ```
 
-Lệnh được nghe bởi job `Auto Sync SharePoint (15 phut)` trong thời gian nghỉ giữa các vòng (phản hồi gần như ngay).
-Bot gửi lại 2 file vào chat và link SharePoint; lỗi sẽ kèm ảnh màn hình FIT (chỉ khi đã đăng nhập).
-**Không chạy bot `erp_bot` trên máy bằng cùng token** — hai nơi cùng đọc tin nhắn sẽ tranh nhau (lỗi 409).
-
-Cấu hình (Settings → Secrets and variables → Actions):
-
-| Loại | Tên | Giá trị |
-|---|---|---|
-| Secret | `FIT_USERNAME` | tài khoản FIT |
-| Secret | `FIT_PASSWORD` | mật khẩu FIT |
-| Secret | `TELEGRAM_BOT_TOKEN` | token bot từ @BotFather |
-| Secret | `TELEGRAM_ALLOWED_USER_IDS` | ID Telegram, ngăn cách dấu phẩy (gõ `/id` cho bot để xem) |
-| Variable | `FIT_AUTO_GIO` | (tùy chọn) `07:30` = mỗi sáng tự gửi CAPTCHA lấy kỳ đầu tháng→hôm nay; bỏ qua nếu hôm nay đã có file |
-| Variable | `FIT_SP_FOLDER` | (tùy chọn) thư mục SharePoint đích |
-| Variable | `FIT_IGNORE_HTTPS_ERRORS` | (tùy chọn) `true` nếu FIT dùng chứng chỉ tự ký |
-| Variable | `FIT_REPORT_URL` | (tùy chọn) URL trực tiếp của form báo cáo, thay cho bấm menu |
-| Variable | `FIT_DATE_FORMAT` | (tùy chọn) mặc định `%d/%m/%Y` |
-
-Repo đang **public**: tuyệt đối không ghi tài khoản/mật khẩu/token vào mã nguồn; log chỉ in số dòng/kích thước file.
-
-Chạy thử trên máy (nhập CAPTCHA ở terminal, lưu file tại thư mục hiện tại, không ghi SharePoint):
+Secrets GitHub cần có: `FIT_CF_ACCESS_CLIENT_ID`, `FIT_CF_ACCESS_CLIENT_SECRET` (cùng service token đang dùng cho
+Nhận hàng ở repo mobiwork-sharepoint-sync), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (+ `MS_TENANT_ID`, `MS_CLIENT_ID` sẵn có).
+GitHub **chỉ gửi** tin Telegram, không đọc (Worker đang đọc bằng getUpdates; hai nơi cùng đọc sẽ lỗi 409).
 
 ```bash
-FIT_USERNAME=... FIT_PASSWORD=... python -X utf8 -m fit_ban_hang run --ky 10/2026 --dry-run --no-telegram
+python -X utf8 -m fit_ban_hang --ky 10/2026 --dry-run   # thử, không ghi SharePoint
 ```
-
-Kiểm thử offline dùng FIT mô phỏng (menu trái, form trong iframe, nút Tạo báo cáo tải `.xlsm`): `make test`.
