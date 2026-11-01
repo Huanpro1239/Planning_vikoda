@@ -1,10 +1,11 @@
-.PHONY: install test sell-in sell-in-dry xuat-kho xuat-kho-dry nxt-ke-toan nxt-ke-toan-dry clean
+.PHONY: install test fit-ban-hang fit-ban-hang-dry sell-in sell-in-dry xuat-kho xuat-kho-dry nxt-ke-toan nxt-ke-toan-dry clean
 
 PYTHON ?= python3
 
 install:
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m playwright install chromium
 
 # Test offline, không cần SharePoint.
 test:
@@ -28,6 +29,13 @@ nxt-ke-toan:
 
 nxt-ke-toan-dry:
 	$(PYTHON) -X utf8 -m nxt_ke_toan --dry-run
+
+# FIT ĐH Bán trong kỳ NPP: cần FIT_USERNAME, FIT_PASSWORD (+ TELEGRAM_* để nhập CAPTCHA qua Telegram).
+fit-ban-hang:
+	$(PYTHON) -X utf8 -m fit_ban_hang run
+
+fit-ban-hang-dry:
+	$(PYTHON) -X utf8 -m fit_ban_hang run --dry-run --no-telegram
 
 clean:
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
